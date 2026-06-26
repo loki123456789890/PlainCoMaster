@@ -4,9 +4,9 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function NotificationsScreen({ navigation }) {
@@ -47,10 +47,7 @@ export default function NotificationsScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
+  container: { flex: 1, backgroundColor: '#fff' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -60,15 +57,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  content: {
-    flex: 1,
-    paddingVertical: 10,
-  },
+  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#000' },
+  content: { flex: 1, paddingVertical: 10 },
   notificationCard: {
     flexDirection: 'row',
     paddingHorizontal: 20,
@@ -76,25 +66,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
-  iconContainer: {
-    marginRight: 15,
-  },
-  notificationContent: {
-    flex: 1,
-  },
-  notificationTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  notificationMessage: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 5,
-  },
-  notificationTime: {
-    fontSize: 12,
-    color: '#999',
-    marginTop: 5,
-  },
+  iconContainer: { marginRight: 15 },
+  notificationContent: { flex: 1 },
+  notificationTitle: { fontSize: 16, fontWeight: 'bold', color: '#000' },
+  notificationMessage: { fontSize: 14, color: '#666', marginTop: 5 },
+  notificationTime: { fontSize: 12, color: '#999', marginTop: 5 },
 });

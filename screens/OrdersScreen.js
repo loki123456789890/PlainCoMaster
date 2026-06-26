@@ -4,11 +4,11 @@ View,
 Text,
 StyleSheet,
 TouchableOpacity,
-SafeAreaView,
 Platform,
 ScrollView,
 Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';  // <- Changed import
 import { Ionicons } from '@expo/vector-icons';
 
 // Sample orders data
@@ -96,7 +96,7 @@ export default function OrdersScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Status Bar */}
+      {/* Status Bar - Now handled by SafeAreaView */}
       <View style={styles.statusBar}>
         <Text style={styles.time}>8:34</Text>
         <View style={styles.statusIcons}>
@@ -166,7 +166,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
+    paddingTop: 10,  // Reduced significantly since SafeAreaView handles the safe area
     paddingBottom: 10,
   },
   time: {

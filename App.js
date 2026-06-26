@@ -1,5 +1,7 @@
 // App.js - MAIN FILE
+
 import React from 'react';
+import { LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -34,6 +36,8 @@ import AdminAddProductScreen from './screens/admin/AdminAddProductScreen';
 import AdminEditProductScreen from './screens/admin/AdminEditProductScreen';
 import AdminOrdersScreen from './screens/admin/AdminOrdersScreen';
 import AdminUsersScreen from './screens/admin/AdminUsersScreen';
+
+LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
 
 const Stack = createNativeStackNavigator();
 

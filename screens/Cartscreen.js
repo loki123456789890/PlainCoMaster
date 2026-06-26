@@ -4,16 +4,15 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   ScrollView,
   Platform,
   Image,
   ActivityIndicator,
   FlatList
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
-// --- FIREBASE IMPORTS ---
 import { auth, db } from '../firebaseConfig'; 
 import { collection, query, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
 
@@ -21,7 +20,6 @@ export default function CartScreen({ navigation }) {
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 1. Listen to Firestore for Cart Items
   useEffect(() => {
     if (!auth.currentUser) return;
 
@@ -40,7 +38,6 @@ export default function CartScreen({ navigation }) {
     return () => unsubscribe();
   }, []);
 
-  // 2. Function to remove item from cart
   const removeItem = async (itemId) => {
     try {
       await deleteDoc(doc(db, "users", auth.currentUser.uid, "cart", itemId));
@@ -49,10 +46,8 @@ export default function CartScreen({ navigation }) {
     }
   };
 
-  // 3. Calculate Total Price
   const calculateTotal = () => {
     return cartItems.reduce((total, item) => {
-      // Strips '$' and converts to float
       const price = parseFloat(item.price.replace('$', ''));
       return total + (price * item.quantity);
     }, 0).toFixed(2);
@@ -74,7 +69,6 @@ export default function CartScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Status Bar */}
       <View style={styles.statusBar}>
         <Text style={styles.time}>8:34</Text>
         <View style={styles.statusIcons}>
@@ -84,7 +78,6 @@ export default function CartScreen({ navigation }) {
         </View>
       </View>
 
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#000" />
@@ -116,8 +109,6 @@ export default function CartScreen({ navigation }) {
             keyExtractor={item => item.id}
             contentContainerStyle={styles.listContent}
           />
-          
-          {/* Summary and Checkout */}
           <View style={styles.footer}>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total</Text>
@@ -165,14 +156,8 @@ const styles = StyleSheet.create({
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
   listContent: { padding: 20 },
   cartItemCard: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 15,
-    borderWidth: 1,
-    borderColor: '#eee',
-    alignItems: 'center'
+    flexDirection: 'row', backgroundColor: '#fff', borderRadius: 12, padding: 12,
+    marginBottom: 15, borderWidth: 1, borderColor: '#eee', alignItems: 'center'
   },
   itemImage: { width: 70, height: 70, borderRadius: 8, backgroundColor: '#f9f9f9' },
   itemDetails: { flex: 1, marginLeft: 15 },
@@ -180,18 +165,8 @@ const styles = StyleSheet.create({
   itemSpecs: { fontSize: 12, color: '#666', marginTop: 4 },
   itemPrice: { fontSize: 14, fontWeight: '600', color: '#8B6F47', marginTop: 4 },
   deleteButton: { padding: 5 },
-  footer: {
-    padding: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    backgroundColor: '#fff'
-  },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 15,
-    alignItems: 'center'
-  },
+  footer: { padding: 20, borderTopWidth: 1, borderTopColor: '#eee', backgroundColor: '#fff' },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, alignItems: 'center' },
   totalLabel: { fontSize: 18, color: '#666' },
   totalPrice: { fontSize: 22, fontWeight: 'bold', color: '#000' },
   continueButton: { backgroundColor: '#8B6F47', paddingVertical: 16, borderRadius: 10, alignItems: 'center' },

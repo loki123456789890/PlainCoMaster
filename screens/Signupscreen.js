@@ -5,13 +5,13 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  SafeAreaView,
   ScrollView,
   Platform,
   KeyboardAvoidingView,
   Alert,
   ActivityIndicator
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 // --- FIREBASE IMPORTS ---
@@ -29,11 +29,9 @@ export default function SignupScreen({ navigation }) {
 
   const [loading, setLoading] = useState(false);
 
-  // --- REGISTRATION FUNCTION ---
   const handleSignup = async () => {
     const { name, email, password, confirmPassword } = form;
 
-    // 1. Client-side Validation
     if (!name.trim() || !email.trim() || !password || !confirmPassword) {
       Alert.alert("Error", "Please fill in all fields");
       return;
@@ -52,16 +50,11 @@ export default function SignupScreen({ navigation }) {
     setLoading(true);
 
     try {
-      // 2. Create User in Firebase Authentication
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       
-      // 3. Update Profile displayName in Auth
-      await updateProfile(user, {
-        displayName: name
-      });
+      await updateProfile(user, { displayName: name });
 
-      // 4. Save Additional Details to Firestore Database
       await setDoc(doc(db, "users", user.uid), {
         uid: user.uid,
         name: name,
@@ -198,13 +191,8 @@ export default function SignupScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  keyboardView: {
-    flex: 1,
-  },
+  container: { flex: 1, backgroundColor: '#fff' },
+  keyboardView: { flex: 1 },
   statusBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -213,35 +201,11 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 50 : 30,
     paddingBottom: 10,
   },
-  time: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
-  },
-  statusIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  signal: { 
-    width: 18, 
-    height: 12, 
-    backgroundColor: '#000', 
-    borderRadius: 2,
-    marginRight: 4,
-  },
-  wifi: { 
-    width: 16, 
-    height: 12, 
-    backgroundColor: '#000', 
-    borderRadius: 2,
-    marginRight: 4,
-  },
-  battery: { 
-    width: 24, 
-    height: 12, 
-    backgroundColor: '#000', 
-    borderRadius: 3,
-  },
+  time: { fontSize: 17, fontWeight: '600', color: '#000' },
+  statusIcons: { flexDirection: 'row', alignItems: 'center' },
+  signal: { width: 18, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
+  wifi: { width: 16, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
+  battery: { width: 24, height: 12, backgroundColor: '#000', borderRadius: 3 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -249,35 +213,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
-  },
-  headerPlaceholder: {
-    width: 40,
-  },
-  content: {
-    paddingHorizontal: 32,
-    paddingTop: 20,
-  },
-  form: {
-    marginTop: 20,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 8,
-  },
+  backButton: { width: 40, height: 40, justifyContent: 'center' },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: '#000' },
+  headerPlaceholder: { width: 40 },
+  content: { paddingHorizontal: 32, paddingTop: 20 },
+  form: { marginTop: 20 },
+  inputGroup: { marginBottom: 20 },
+  label: { fontSize: 16, fontWeight: '600', color: '#000', marginBottom: 8 },
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
@@ -293,21 +235,10 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     alignItems: 'center',
     marginTop: 20,
-    height: 56, 
+    height: 56,
     justifyContent: 'center',
   },
-  signupText: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  loginButton: {
-    alignItems: 'center',
-    marginTop: 24,
-    paddingVertical: 12,
-  },
-  loginText: {
-    fontSize: 16,
-    color: '#8B6F47',
-  },
+  signupText: { fontSize: 17, fontWeight: '600', color: '#fff' },
+  loginButton: { alignItems: 'center', marginTop: 24, paddingVertical: 12 },
+  loginText: { fontSize: 16, color: '#8B6F47' },
 });

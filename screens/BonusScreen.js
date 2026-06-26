@@ -5,13 +5,13 @@ Text,
 StyleSheet,
 ScrollView,
 TouchableOpacity,
-SafeAreaView,
 Platform,
 Dimensions,
 Modal,
 Alert,
 Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';  // <- Changed import
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -526,7 +526,6 @@ paddingHorizontal: 20,
 paddingVertical: 16,
 borderBottomWidth: 1,
 borderBottomColor: '#F2F2F7',
-marginTop: Platform.OS === 'ios' ? 0 : 30,
 },
 backButton: {
 width: 40,

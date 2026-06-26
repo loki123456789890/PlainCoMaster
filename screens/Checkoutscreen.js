@@ -4,9 +4,9 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function CheckoutScreen({ navigation }) {
@@ -50,10 +50,7 @@ export default function CheckoutScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
+  container: { flex: 1, backgroundColor: '#fff' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -63,57 +60,16 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 15,
-  },
-  section: {
-    borderWidth: 1,
-    borderColor: '#eee',
-    borderRadius: 8,
-    padding: 15,
-  },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-  },
-  totalRow: {
-    borderTopWidth: 1,
-    borderTopColor: '#eee',
-    marginTop: 10,
-  },
-  label: {
-    fontSize: 14,
-    color: '#666',
-  },
-  value: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#000',
-  },
-  totalLabel: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  totalValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#00BFFF',
-  },
+  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#000' },
+  content: { flex: 1, paddingHorizontal: 20, paddingVertical: 20 },
+  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#000', marginBottom: 15 },
+  section: { borderWidth: 1, borderColor: '#eee', borderRadius: 8, padding: 15 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10 },
+  totalRow: { borderTopWidth: 1, borderTopColor: '#eee', marginTop: 10 },
+  label: { fontSize: 14, color: '#666' },
+  value: { fontSize: 14, fontWeight: '600', color: '#000' },
+  totalLabel: { fontSize: 16, fontWeight: 'bold', color: '#000' },
+  totalValue: { fontSize: 16, fontWeight: 'bold', color: '#00BFFF' },
   placeButton: {
     backgroundColor: '#8B6F47',
     paddingVertical: 14,
@@ -122,9 +78,5 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
-  placeButtonText: {
-    color: '#000',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
+  placeButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 });

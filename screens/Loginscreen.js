@@ -6,13 +6,13 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  SafeAreaView,
   ScrollView,
   Platform,
   KeyboardAvoidingView,
   Alert,
   ActivityIndicator
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 // --- FIREBASE IMPORTS ---
@@ -24,7 +24,6 @@ export default function LoginScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // --- LOGIN FUNCTION ---
   const handleLogin = async () => {
     if (!email.trim() || !password) {
       Alert.alert("Error", "Please enter both email and password.");
@@ -73,10 +72,7 @@ export default function LoginScreen({ navigation }) {
 
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity
-              onPress={() => navigation.goBack()}
-              style={styles.backButton}
-            >
+            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
               <Ionicons name="arrow-back" size={24} color="#8B6F47" />
             </TouchableOpacity>
           </View>
@@ -147,13 +143,8 @@ export default function LoginScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  keyboardView: {
-    flex: 1,
-  },
+  container: { flex: 1, backgroundColor: '#fff' },
+  keyboardView: { flex: 1 },
   statusBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -162,71 +153,19 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === 'ios' ? 50 : 30,
     paddingBottom: 10,
   },
-  time: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
-  },
-  statusIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  signal: {
-    width: 18,
-    height: 12,
-    backgroundColor: '#000',
-    borderRadius: 2,
-    marginRight: 4,
-  },
-  wifi: {
-    width: 16,
-    height: 12,
-    backgroundColor: '#000',
-    borderRadius: 2,
-    marginRight: 4,
-  },
-  battery: {
-    width: 24,
-    height: 12,
-    backgroundColor: '#000',
-    borderRadius: 3,
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-  },
-  content: {
-    paddingHorizontal: 32,
-    paddingTop: 40,
-  },
-  welcomeTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#000',
-    marginBottom: 8,
-  },
-  welcomeSubtitle: {
-    fontSize: 17,
-    color: '#666',
-    marginBottom: 40,
-  },
-  form: {
-    marginTop: 20,
-  },
-  inputGroup: {
-    marginBottom: 24,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#000',
-    marginBottom: 8,
-  },
+  time: { fontSize: 17, fontWeight: '600', color: '#000' },
+  statusIcons: { flexDirection: 'row', alignItems: 'center' },
+  signal: { width: 18, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
+  wifi: { width: 16, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
+  battery: { width: 24, height: 12, backgroundColor: '#000', borderRadius: 3 },
+  header: { paddingHorizontal: 20, paddingVertical: 16 },
+  backButton: { width: 40, height: 40, justifyContent: 'center' },
+  content: { paddingHorizontal: 32, paddingTop: 40 },
+  welcomeTitle: { fontSize: 28, fontWeight: '700', color: '#000', marginBottom: 8 },
+  welcomeSubtitle: { fontSize: 17, color: '#666', marginBottom: 40 },
+  form: { marginTop: 20 },
+  inputGroup: { marginBottom: 24 },
+  label: { fontSize: 16, fontWeight: '600', color: '#000', marginBottom: 8 },
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
@@ -245,27 +184,9 @@ const styles = StyleSheet.create({
     height: 56,
     justifyContent: 'center',
   },
-  signInText: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  forgotButton: {
-    alignItems: 'center',
-    marginTop: 24,
-    paddingVertical: 12,
-  },
-  forgotText: {
-    fontSize: 16,
-    color: '#8B6F47',
-  },
-  signupButton: {
-    alignItems: 'center',
-    marginTop: 16,
-    paddingVertical: 12,
-  },
-  signupText: {
-    fontSize: 16,
-    color: '#8B6F47',
-  },
+  signInText: { fontSize: 17, fontWeight: '600', color: '#fff' },
+  forgotButton: { alignItems: 'center', marginTop: 24, paddingVertical: 12 },
+  forgotText: { fontSize: 16, color: '#8B6F47' },
+  signupButton: { alignItems: 'center', marginTop: 16, paddingVertical: 12 },
+  signupText: { fontSize: 16, color: '#8B6F47' },
 });

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   Platform,
   Alert,
@@ -14,6 +13,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';  // <- Changed import
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 
@@ -638,7 +638,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#F2F2F7',
-    marginTop: Platform.OS === 'ios' ? 0 : 30,
+    // REMOVED: marginTop: Platform.OS === 'ios' ? 0 : 30,
   },
   backButton: {
     width: 40,
