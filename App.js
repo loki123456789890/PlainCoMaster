@@ -1,4 +1,4 @@
-// App.js - MAIN FILE
+// App.js - MAIN FILE (UPDATED)
 
 import React from 'react';
 import { LogBox } from 'react-native';
@@ -7,13 +7,14 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdminProvider } from './context/AdminContext';
 import { ProductProvider } from './context/ProductContext';
-import { FavoritesProvider } from './context/FavoritesContext'; // Add this
+import { FavoritesProvider } from './context/FavoritesContext';
 
 // Import all screens
 import LandingScreen from './screens/LandingScreen';
 import HomeScreen from './screens/Homescreen';
 import LoginScreen from './screens/Loginscreen';
 import SignupScreen from './screens/Signupscreen';
+import ForgotPasswordScreen from './screens/ForgotPasswordScreen'; // <-- NEW IMPORT
 import ShopScreen from './screens/Shopscreen';
 import ProductScreen from './screens/Productscreen';
 import CartScreen from './screens/Cartscreen';
@@ -45,7 +46,7 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <ProductProvider>
-        <FavoritesProvider> {/* Add FavoritesProvider here */}
+        <FavoritesProvider>
           <NavigationContainer>
             <Stack.Navigator
               initialRouteName="Landing"
@@ -65,6 +66,9 @@ export default function App() {
               
               {/* iPhone 16 Pro Max - 6 */}
               <Stack.Screen name="Signup" component={SignupScreen} />
+
+              {/* New Forgot Password Screen */}
+              <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
               
               {/* iPhone 16 Pro Max - 14 */}
               <Stack.Screen name="Shop" component={ShopScreen} />
