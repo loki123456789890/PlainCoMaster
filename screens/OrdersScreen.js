@@ -1,65 +1,93 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-View,
-Text,
-StyleSheet,
-TouchableOpacity,
-Platform,
-ScrollView,
-Image,
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Platform,
+  ScrollView,
+  Image,
+  ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';  // <- Changed import
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
-// Sample orders data
-const sampleOrders = [
-  {
-    id: '1',
-    orderNumber: 'ORD-12345',
-    date: '2024-07-15',
-    total: 43.99,
-    status: 'Delivered',
-    items: 2,
-    image: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=100&q=80',
-  },
-  {
-    id: '2',
-    orderNumber: 'ORD-12346',
-    date: '2024-07-10',
-    total: 6.99,
-    status: 'Processing',
-    items: 1,
-    image: 'https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=100&q=80',
-  },
-  {
-    id: '3',
-    orderNumber: 'ORD-12347',
-    date: '2024-07-05',
-    total: 45.99,
-    status: 'Shipped',
-    items: 3,
-    image: 'https://plus.unsplash.com/premium_photo-1676234844384-82e1830af724?w=100&q=80',
-  },
-];
+import { auth, db } from '../firebaseConfig';
+import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 
 export default function OrdersScreen({ navigation }) {
-  const [orders, setOrders] = useState(sampleOrders);
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('all'); // all, processing, shipped, delivered
 
+  useEffect(() => {
+    if (!auth.currentUser) {
+      // Orders is account-tied data, same as Cart/Profile — a guest
+      // shouldn't see a hollow "No orders found" screen that implies
+      // they have an account with zero orders. Redirect to Login instead,
+      // matching how Cart/Profile handle the same guest-access case.
+      setLoading(false);
+      navigation.replace('Login');
+      return;
+    }
+
+    const ordersRef = collection(db, "users", auth.currentUser.uid, "orders");
+    const q = query(ordersRef, orderBy("createdAt", "desc"));
+
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const fetchedOrders = querySnapshot.docs.map((doc) => {
+        const data = doc.data();
+        const items = data.items || [];
+        const firstItem = items[0] || {};
+
+        // Build a readable title: single item shows its name,
+        // multiple items shows the first item name + a "+N more" suffix
+        const displayName =
+          items.length > 1
+            ? `${firstItem.name || 'Item'} +${items.length - 1} more`
+            : firstItem.name || 'Order';
+
+        return {
+          id: doc.id,
+          displayName,
+          date: data.createdAt?.toDate
+            ? data.createdAt.toDate().toLocaleDateString()
+            : '',
+          total: data.total || 0,
+          subtotal: data.subtotal || 0,
+          shipping: data.shipping || 0,
+          status: data.status || 'processing',
+          itemCount: items.length,
+          items: items,
+          image: firstItem.image || firstItem.imageUrl || null,
+        };
+      });
+      setOrders(fetchedOrders);
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching orders: ", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   const getStatusColor = (status) => {
-    switch (status) {
-      case 'Delivered': return '#34C759';
-      case 'Processing': return '#FF9500';
-      case 'Shipped': return '#007AFF';
+    switch (status.toLowerCase()) {
+      case 'delivered': return '#34C759';
+      case 'processing':
+      case 'pending': return '#FF9500';
+      case 'shipped': return '#007AFF';
       default: return '#666';
     }
   };
 
   const getStatusIcon = (status) => {
-    switch (status) {
-      case 'Delivered': return 'checkmark-circle-outline';
-      case 'Processing': return 'time-outline';
-      case 'Shipped': return 'car-outline';
+    switch (status.toLowerCase()) {
+      case 'delivered': return 'checkmark-circle-outline';
+      case 'processing':
+      case 'pending': return 'time-outline';
+      case 'shipped': return 'car-outline';
       default: return 'ellipse-outline';
     }
   };
@@ -70,23 +98,29 @@ export default function OrdersScreen({ navigation }) {
   });
 
   const renderOrderCard = (order) => (
-    <TouchableOpacity 
-      key={order.id} 
+    <TouchableOpacity
+      key={order.id}
       style={styles.orderCard}
       onPress={() => navigation.navigate('OrderDetails', { order })}
     >
-      <Image source={{ uri: order.image }} style={styles.orderImage} />
+      {order.image ? (
+        <Image source={{ uri: order.image }} style={styles.orderImage} />
+      ) : (
+        <View style={[styles.orderImage, styles.orderImagePlaceholder]}>
+          <Ionicons name="shirt-outline" size={28} color="#ccc" />
+        </View>
+      )}
       <View style={styles.orderInfo}>
-        <Text style={styles.orderNumber}>{order.orderNumber}</Text>
+        <Text style={styles.orderNumber} numberOfLines={1}>{order.displayName}</Text>
         <Text style={styles.orderDate}>{order.date}</Text>
-        <Text style={styles.orderItems}>{order.items} item(s)</Text>
-        <Text style={styles.orderTotal}>₱{order.total.toFixed(2)}</Text>
+        <Text style={styles.orderItems}>{order.itemCount} item(s)</Text>
+        <Text style={styles.orderTotal}>₱{Number(order.total).toFixed(2)}</Text>
       </View>
       <View style={styles.orderStatusContainer}>
         <View style={[styles.orderStatus, { backgroundColor: getStatusColor(order.status) + '20' }]}>
           <Ionicons name={getStatusIcon(order.status)} size={14} color={getStatusColor(order.status)} />
           <Text style={[styles.orderStatusText, { color: getStatusColor(order.status) }]}>
-            {order.status}
+            {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
           </Text>
         </View>
         <Ionicons name="chevron-forward" size={20} color="#999" />
@@ -96,22 +130,9 @@ export default function OrdersScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Status Bar - Now handled by SafeAreaView */}
-      <View style={styles.statusBar}>
-        <Text style={styles.time}>8:34</Text>
-        <View style={styles.statusIcons}>
-          <View style={styles.signal} />
-          <View style={styles.wifi} />
-          <View style={styles.battery} />
-        </View>
-      </View>
-
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-        >
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>My Orders</Text>
@@ -128,7 +149,11 @@ export default function OrdersScreen({ navigation }) {
             style={[styles.tab, activeTab === tab && styles.activeTab]}
             onPress={() => setActiveTab(tab)}
           >
-            <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
+            <Text
+              style={[styles.tabText, activeTab === tab && styles.activeTabText]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
             </Text>
           </TouchableOpacity>
@@ -136,22 +161,28 @@ export default function OrdersScreen({ navigation }) {
       </View>
 
       {/* Orders List */}
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.ordersContainer}>
-        {filteredOrders.length > 0 ? (
-          filteredOrders.map(order => renderOrderCard(order))
-        ) : (
-          <View style={styles.emptyContainer}>
-            <Ionicons name="cart-outline" size={80} color="#ccc" />
-            <Text style={styles.emptyText}>No orders found</Text>
-            <TouchableOpacity 
-              style={styles.shopButton}
-              onPress={() => navigation.navigate('Shop')}
-            >
-              <Text style={styles.shopButtonText}>Start Shopping</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </ScrollView>
+      {loading ? (
+        <View style={styles.emptyContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+        </View>
+      ) : (
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.ordersContainer}>
+          {filteredOrders.length > 0 ? (
+            filteredOrders.map(order => renderOrderCard(order))
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="cart-outline" size={80} color="#ccc" />
+              <Text style={styles.emptyText}>No orders found</Text>
+              <TouchableOpacity
+                style={styles.shopButton}
+                onPress={() => navigation.navigate('Shop')}
+              >
+                <Text style={styles.shopButtonText}>Start Shopping</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
@@ -160,42 +191,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
-  },
-  statusBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 10,  // Reduced significantly since SafeAreaView handles the safe area
-    paddingBottom: 10,
-  },
-  time: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#000',
-  },
-  statusIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  signal: {
-    width: 18,
-    height: 12,
-    backgroundColor: '#000',
-    borderRadius: 2,
-  },
-  wifi: {
-    width: 16,
-    height: 12,
-    backgroundColor: '#000',
-    borderRadius: 2,
-  },
-  battery: {
-    width: 24,
-    height: 12,
-    backgroundColor: '#000',
-    borderRadius: 3,
   },
   header: {
     flexDirection: 'row',
@@ -218,7 +213,7 @@ const styles = StyleSheet.create({
   },
   tabsContainer: {
     flexDirection: 'row',
-    paddingHorizontal: 20,
+    paddingHorizontal: 12,
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F2F2F7',
@@ -226,6 +221,7 @@ const styles = StyleSheet.create({
   tab: {
     flex: 1,
     paddingVertical: 8,
+    paddingHorizontal: 2,
     alignItems: 'center',
   },
   activeTab: {
@@ -233,9 +229,10 @@ const styles = StyleSheet.create({
     borderBottomColor: '#007AFF',
   },
   tabText: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666',
     fontWeight: '500',
+    textAlign: 'center',
   },
   activeTabText: {
     color: '#007AFF',
@@ -258,6 +255,10 @@ const styles = StyleSheet.create({
     height: 70,
     borderRadius: 8,
     backgroundColor: '#F2F2F7',
+  },
+  orderImagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   orderInfo: {
     flex: 1,
@@ -296,7 +297,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 12,
     gap: 4,
-    marginBottom: 8,
   },
   orderStatusText: {
     fontSize: 10,

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,9 +11,32 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';  // <- Changed import
 import { Ionicons } from '@expo/vector-icons';
 import { useFavorites } from '../context/FavoritesContext';
+import { auth } from '../firebaseConfig';
+
+// Handles price as "₱450.00", "450", or a plain number 450 — same helper
+// used in ProductScreen/CartScreen/CheckoutScreen, kept consistent here
+// so a formatted-string price can't silently render as "₱NaN".
+const parsePrice = (price) => {
+  if (typeof price === 'number') return price;
+  if (typeof price === 'string') {
+    const cleaned = price.replace(/[^0-9.]/g, '');
+    return parseFloat(cleaned) || 0;
+  }
+  return 0;
+};
 
 export default function FavoritesScreen({ navigation }) {
   const { favorites, loading, toggleFavorite } = useFavorites();
+
+  useEffect(() => {
+    // Favorites is now real per-account Firestore data (migrated off
+    // AsyncStorage), same category as Cart/Profile/Orders — a guest
+    // shouldn't land on a "No favorites yet" screen that implies they
+    // have an account with none. Redirect to Login instead.
+    if (!auth.currentUser) {
+      navigation.replace('Login');
+    }
+  }, []);
 
   const renderProduct = ({ item }) => (
     <TouchableOpacity
@@ -33,7 +56,7 @@ export default function FavoritesScreen({ navigation }) {
         </TouchableOpacity>
       </View>
       <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
-      <Text style={styles.productPrice}>${parseFloat(item.price).toFixed(2)}</Text>
+      <Text style={styles.productPrice}>₱{parsePrice(item.price).toFixed(2)}</Text>
     </TouchableOpacity>
   );
 

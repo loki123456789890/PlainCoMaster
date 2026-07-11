@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,10 @@ import {
   KeyboardAvoidingView,
   ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';  // <- Changed import
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { db, auth } from '../firebaseConfig';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 // FAQ Data
 const faqCategories = [
@@ -28,22 +30,22 @@ const faqCategories = [
       {
         id: 'o1',
         question: 'How do I track my order?',
-        answer: 'You can track your order by going to "My Orders" in your profile. Click on the specific order to see real-time tracking information including shipping status and estimated delivery date.',
+        answer: 'You can track your order by going to "My Orders" in your profile. Click on the specific order to see its current status (Processing, Shipped, or Delivered).',
       },
       {
         id: 'o2',
         question: 'Can I cancel or modify my order?',
-        answer: 'Orders can be cancelled within 1 hour of placement. To cancel, go to "My Orders", select the order, and click "Cancel Order". For modifications, please contact our support team immediately.',
+        answer: 'Orders can\'t be cancelled or modified directly in the app yet. If you need to cancel or change an order, please contact our support team as soon as possible after placing it and we\'ll do our best to help before it ships.',
       },
       {
         id: 'o3',
         question: 'What payment methods do you accept?',
-        answer: 'We accept Credit/Debit Cards (Visa, Mastercard), GCash, PayMaya, and Cash on Delivery (COD). All payments are secure and encrypted.',
+        answer: 'At checkout you can select GCash, Maya, Card, or Cash on Delivery (COD). Online payment processing for GCash, Maya, and Card is still being integrated, so for now COD is the most reliable option — you pay in person when your order arrives.',
       },
       {
         id: 'o4',
-        question: 'How do I apply a voucher code?',
-        answer: 'During checkout, you\'ll see a "Apply Voucher" field. Enter your voucher code there and click apply. The discount will be reflected in your total amount.',
+        question: 'Do you have voucher or promo codes?',
+        answer: 'We don\'t have a voucher or promo code system in the app yet. Keep an eye on our announcements for upcoming deals!',
       },
     ],
   },
@@ -61,7 +63,7 @@ const faqCategories = [
       {
         id: 's2',
         question: 'How much is the shipping fee?',
-        answer: 'Shipping fees are calculated based on your location and order weight. Metro Manila: ₱50-100, Provincial: ₱100-200. Free shipping on orders over ₱1,000.',
+        answer: 'Shipping is currently free on all orders, with no minimum spend required.',
       },
       {
         id: 's3',
@@ -89,7 +91,7 @@ const faqCategories = [
       {
         id: 'r2',
         question: 'How do I request a return?',
-        answer: 'Go to "My Orders", select the order, and click "Request Return". Fill out the reason and upload photos if applicable. We\'ll process your request within 2-3 business days.',
+        answer: 'There\'s no automatic return request feature in the app yet. Please contact our support team within 7 days of delivery and we\'ll walk you through the process manually.',
       },
       {
         id: 'r3',
@@ -99,7 +101,7 @@ const faqCategories = [
       {
         id: 'r4',
         question: 'Can I exchange an item?',
-        answer: 'Yes, we offer exchanges for size or color variations. Request an exchange through "My Orders" and we\'ll guide you through the process.',
+        answer: 'Exchanges aren\'t handled automatically in the app yet. Contact our support team and we\'ll help arrange a size or color exchange manually.',
       },
     ],
   },
@@ -112,7 +114,7 @@ const faqCategories = [
       {
         id: 'a1',
         question: 'How do I change my password?',
-        answer: 'Go to Profile > Settings > Change Password. Enter your current password and new password to update. Make sure to use a strong password for security.',
+        answer: 'There\'s no in-app "change password" option yet. To reset your password, log out and tap "Forgot Password?" on the sign-in screen — we\'ll email you a secure link to set a new one.',
       },
       {
         id: 'a2',
@@ -122,12 +124,12 @@ const faqCategories = [
       {
         id: 'a3',
         question: 'Is my payment information secure?',
-        answer: 'Yes, we use industry-standard encryption and never store your full payment details. All transactions are processed through secure payment gateways.',
+        answer: 'We never ask for or store card numbers, CVV, or e-wallet credentials in the app. Online payment processing is still being integrated, so Cash on Delivery is currently the safest and most reliable way to pay.',
       },
       {
         id: 'a4',
         question: 'How do I update my profile?',
-        answer: 'Go to Profile and tap "Edit Profile". You can update your name, email, phone number, and profile picture there.',
+        answer: 'Profile editing isn\'t available in the app yet — your name and email are set when you sign up. If you need to update this information, please contact our support team.',
       },
     ],
   },
@@ -205,16 +207,20 @@ export default function HelpScreen({ navigation }) {
   const [supportMessage, setSupportMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Refs for scroll-to-section behavior (replaces the web-only document.getElementById approach)
+  const scrollViewRef = useRef(null);
+  const contactFormY = useRef(0);
+
   // Filter FAQs based on search
   const filteredFAQs = () => {
     if (!searchQuery.trim()) return faqCategories;
-    
+
     const query = searchQuery.toLowerCase();
     return faqCategories
       .map(category => ({
         ...category,
-        questions: category.questions.filter(q => 
-          q.question.toLowerCase().includes(query) || 
+        questions: category.questions.filter(q =>
+          q.question.toLowerCase().includes(query) ||
           q.answer.toLowerCase().includes(query)
         ),
       }))
@@ -250,36 +256,64 @@ export default function HelpScreen({ navigation }) {
     }
   };
 
-  const handleSubmitSupport = () => {
+  const handleSubmitSupport = async () => {
     if (!supportMessage.trim()) {
       Alert.alert('Error', 'Please enter your message');
       return;
     }
 
+    if (!auth.currentUser) {
+      Alert.alert(
+        'Log In Required',
+        'Please log in so our support team can follow up with you about this request.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Log In', onPress: () => navigation.navigate('Login') },
+        ]
+      );
+      return;
+    }
+
     setIsSubmitting(true);
-    // Simulate API call
-    setTimeout(() => {
-      setIsSubmitting(false);
+    try {
+      // Writes the request to Firestore so it's durable and admin-reviewable.
+      // There's no email/push pipeline yet (would need Cloud Functions + a
+      // mail provider) — this is the real, persisted equivalent of "sent".
+      await addDoc(collection(db, 'supportRequests'), {
+        message: supportMessage.trim(),
+        userId: auth.currentUser?.uid || null,
+        userEmail: auth.currentUser?.email || null,
+        status: 'open',
+        createdAt: serverTimestamp(),
+      });
       Alert.alert(
         'Message Sent!',
         'Thank you for reaching out. Our support team will respond within 24 hours.',
         [{ text: 'OK', onPress: () => setSupportMessage('') }]
       );
-    }, 1500);
+    } catch (error) {
+      console.error('Error submitting support request:', error);
+      Alert.alert(
+        'Error',
+        'Could not send your message. Please try again, or use one of the contact methods above.'
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCommonIssue = (issue) => {
     setSupportMessage(`Hello, I need help with: ${issue.title}. ${issue.description}`);
-    // Scroll to contact form
+    // React Native has no DOM, so we scroll using the ScrollView ref
+    // and the y-position captured by the contact form's onLayout below.
     setTimeout(() => {
-      const contactForm = document.getElementById('contact-form');
-      if (contactForm) contactForm.scrollIntoView({ behavior: 'smooth' });
+      scrollViewRef.current?.scrollTo({ y: contactFormY.current, animated: true });
     }, 100);
   };
 
   const renderFAQItem = (question, categoryColor) => {
     const isExpanded = selectedQuestion?.id === question.id;
-    
+
     return (
       <TouchableOpacity
         key={question.id}
@@ -294,10 +328,10 @@ export default function HelpScreen({ navigation }) {
       >
         <View style={styles.faqHeader}>
           <Text style={styles.faqQuestion}>{question.question}</Text>
-          <Ionicons 
-            name={isExpanded ? 'chevron-up' : 'chevron-down'} 
-            size={20} 
-            color="#666" 
+          <Ionicons
+            name={isExpanded ? 'chevron-up' : 'chevron-down'}
+            size={20}
+            color="#666"
           />
         </View>
         {isExpanded && (
@@ -325,7 +359,7 @@ export default function HelpScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false}>
         {/* Search Bar */}
         <View style={styles.searchContainer}>
           <Ionicons name="search-outline" size={20} color="#999" style={styles.searchIcon} />
@@ -374,8 +408,8 @@ export default function HelpScreen({ navigation }) {
         {/* Common Issues */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Common Issues</Text>
-          <ScrollView 
-            horizontal 
+          <ScrollView
+            horizontal
             showsHorizontalScrollIndicator={false}
             style={styles.issuesScroll}
           >
@@ -423,13 +457,18 @@ export default function HelpScreen({ navigation }) {
         </View>
 
         {/* Contact Support Form */}
-        <View style={styles.section} id="contact-form">
+        <View
+          style={styles.section}
+          onLayout={(event) => {
+            contactFormY.current = event.nativeEvent.layout.y;
+          }}
+        >
           <Text style={styles.sectionTitle}>Contact Support</Text>
           <View style={styles.contactCard}>
             <Text style={styles.contactSubtitle}>
               Can&apos;t find what you&apos;re looking for? Send us a message and we&apos;ll help you out!
             </Text>
-            
+
             <View style={styles.contactMethods}>
               {contactMethods.map((method) => (
                 <TouchableOpacity
@@ -467,7 +506,7 @@ export default function HelpScreen({ navigation }) {
                 numberOfLines={5}
                 textAlignVertical="top"
               />
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.submitButton}
                 onPress={handleSubmitSupport}
                 disabled={isSubmitting}
@@ -501,7 +540,7 @@ export default function HelpScreen({ navigation }) {
 
         {/* Footer */}
         <View style={styles.footer}>
-          <Text style={styles.footerText}>© 2024 PlainCo. All rights reserved.</Text>
+          <Text style={styles.footerText}>© 2026 PlainCo. All rights reserved.</Text>
           <Text style={styles.footerVersion}>Version 1.0.0</Text>
         </View>
       </ScrollView>

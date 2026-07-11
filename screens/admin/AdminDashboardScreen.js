@@ -7,21 +7,56 @@ import {
   SafeAreaView,
   Platform,
   ScrollView,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { signOut } from 'firebase/auth';
+import { auth } from '../../firebaseConfig';
+import { useAdmin } from '../../context/AdminContext';
 
 export default function AdminDashboardScreen({ navigation }) {
+  const { logoutAsAdmin } = useAdmin();
+
   const menuItems = [
     { title: 'Products', icon: 'cube-outline', color: '#007AFF', screen: 'AdminProducts' },
     { title: 'Orders', icon: 'cart-outline', color: '#34C759', screen: 'AdminOrders' },
     { title: 'Users', icon: 'people-outline', color: '#FF9500', screen: 'AdminUsers' },
   ];
 
+  const handleLogout = () => {
+    Alert.alert(
+      'Log Out',
+      'Are you sure you want to log out of the admin panel?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await signOut(auth);
+              logoutAsAdmin();
+              // Reset the nav stack so "back" can't return to admin screens
+              // after the session is gone.
+              navigation.reset({
+                index: 0,
+                routes: [{ name: 'AdminLogin' }],
+              });
+            } catch (error) {
+              console.error('Error signing out:', error);
+              Alert.alert('Error', 'Could not log out. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Admin Dashboard</Text>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={handleLogout}>
           <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
         </TouchableOpacity>
       </View>

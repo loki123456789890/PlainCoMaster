@@ -13,89 +13,90 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-// import { useAdmin } from '../../context/AdminContext';
-
-// Sample users data - replace with your actual data from Firebase
-const sampleUsers = [
-  {
-    id: '1',
-    name: 'John Doe',
-    email: 'john@example.com',
-    phone: '+63 912 345 6789',
-    role: 'customer',
-    status: 'active',
-    joinDate: '2024-01-15',
-    totalOrders: 5,
-    totalSpent: 245.99,
-  },
-  {
-    id: '2',
-    name: 'Jane Smith',
-    email: 'jane@example.com',
-    phone: '+63 923 456 7890',
-    role: 'customer',
-    status: 'active',
-    joinDate: '2024-02-20',
-    totalOrders: 3,
-    totalSpent: 129.50,
-  },
-  {
-    id: '3',
-    name: 'Mike Johnson',
-    email: 'mike@example.com',
-    phone: '+63 934 567 8901',
-    role: 'admin',
-    status: 'active',
-    joinDate: '2024-01-01',
-    totalOrders: 0,
-    totalSpent: 0,
-  },
-  {
-    id: '4',
-    name: 'Sarah Williams',
-    email: 'sarah@example.com',
-    phone: '+63 945 678 9012',
-    role: 'customer',
-    status: 'inactive',
-    joinDate: '2024-03-10',
-    totalOrders: 1,
-    totalSpent: 43.99,
-  },
-];
+import { db, auth } from '../../firebaseConfig';
+import {
+  collection,
+  onSnapshot,
+  doc,
+  updateDoc,
+  getDocs,
+} from 'firebase/firestore';
 
 export default function AdminUsersScreen({ navigation }) {
-  const [users, setUsers] = useState(sampleUsers);
-  const [loading, setLoading] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
   const [showUserModal, setShowUserModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFormData, setEditFormData] = useState({
     name: '',
-    email: '',
-    phone: '',
     role: 'customer',
-    status: 'active',
   });
 
-  // Fetch users - uncomment when using Firebase
-  // useEffect(() => {
-  //   fetchUsers();
-  // }, []);
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, 'users'),
+      async (snapshot) => {
+        // Base profile fields come straight from each users/{uid} doc.
+        // role and isActive don't exist on most existing docs (only
+        // manually-set admin accounts have "role"), so missing values
+        // are defaulted here rather than left undefined.
+        const baseUsers = snapshot.docs.map((docSnap) => {
+          const data = docSnap.data();
+          return {
+            id: docSnap.id,
+            name: data.name || 'Unnamed User',
+            email: data.email || '—',
+            role: data.role || 'customer',
+            isActive: data.isActive !== false,
+            createdAt: data.createdAt || null,
+            totalOrders: 0,
+            totalSpent: 0,
+          };
+        });
 
-  // const fetchUsers = async () => {
-  //   setLoading(true);
-  //   const result = await fetchUsers();
-  //   if (result.success) {
-  //     setUsers(result.users);
-  //   }
-  //   setLoading(false);
-  // };
+        setUsers(baseUsers);
+        setLoading(false);
 
-  const filteredUsers = users.filter(user =>
-    user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.phone.includes(searchQuery)
+        // Order stats live in each user's orders subcollection, not on
+        // the user doc itself, so they're fetched separately as a
+        // one-time read per user rather than part of the live listener.
+        const withStats = await Promise.all(
+          baseUsers.map(async (u) => {
+            try {
+              const ordersSnap = await getDocs(collection(db, 'users', u.id, 'orders'));
+              let totalSpent = 0;
+              ordersSnap.forEach((orderDoc) => {
+                const order = orderDoc.data();
+                if (order.status !== 'cancelled') {
+                  totalSpent += Number(order.total || 0);
+                }
+              });
+              return { ...u, totalOrders: ordersSnap.size, totalSpent };
+            } catch (err) {
+              console.error(`Error fetching orders for user ${u.id}:`, err);
+              return u;
+            }
+          })
+        );
+
+        setUsers(withStats);
+      },
+      (error) => {
+        console.error('Error fetching users:', error);
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  const filteredUsers = users.filter(
+    (user) =>
+      user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const handleViewUser = (user) => {
@@ -107,53 +108,64 @@ export default function AdminUsersScreen({ navigation }) {
     setSelectedUser(user);
     setEditFormData({
       name: user.name,
-      email: user.email,
-      phone: user.phone,
       role: user.role,
-      status: user.status,
     });
     setShowEditModal(true);
   };
 
-  const handleUpdateUser = () => {
-    if (!editFormData.name.trim() || !editFormData.email.trim()) {
-      Alert.alert('Error', 'Please fill in all required fields');
+  const handleUpdateUser = async () => {
+    if (!editFormData.name.trim()) {
+      Alert.alert('Error', 'Please enter a name');
       return;
     }
 
-    const updatedUsers = users.map(user =>
-      user.id === selectedUser.id
-        ? { ...user, ...editFormData }
-        : user
-    );
+    if (selectedUser.id === auth.currentUser?.uid && editFormData.role !== 'admin') {
+      Alert.alert(
+        'Not Allowed',
+        "You can't remove your own admin role — that would lock you out of this dashboard. Have another admin make this change instead."
+      );
+      return;
+    }
 
-    setUsers(updatedUsers);
-    setShowEditModal(false);
-    Alert.alert('Success', 'User updated successfully');
+    setUpdating(true);
+    try {
+      await updateDoc(doc(db, 'users', selectedUser.id), {
+        name: editFormData.name.trim(),
+        role: editFormData.role,
+      });
+      setShowEditModal(false);
+      Alert.alert('Success', 'User updated successfully');
+    } catch (error) {
+      console.error('Error updating user:', error);
+      Alert.alert('Error', 'Could not update user. Please try again.');
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleToggleUserStatus = (user) => {
-    const newStatus = user.status === 'active' ? 'inactive' : 'active';
-    const updatedUsers = users.map(u =>
-      u.id === user.id ? { ...u, status: newStatus } : u
-    );
-    setUsers(updatedUsers);
-    Alert.alert('Success', `User ${newStatus === 'active' ? 'activated' : 'deactivated'} successfully`);
-  };
+    if (user.id === auth.currentUser?.uid) {
+      Alert.alert('Not Allowed', "You can't deactivate your own account.");
+      return;
+    }
 
-  const handleDeleteUser = (user) => {
+    const newStatus = !user.isActive;
     Alert.alert(
-      'Delete User',
-      `Are you sure you want to delete ${user.name}? This action cannot be undone.`,
+      newStatus ? 'Activate User' : 'Deactivate User',
+      `Are you sure you want to ${newStatus ? 'activate' : 'deactivate'} ${user.name}?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            const updatedUsers = users.filter(u => u.id !== user.id);
-            setUsers(updatedUsers);
-            Alert.alert('Success', 'User deleted successfully');
+          text: newStatus ? 'Activate' : 'Deactivate',
+          style: newStatus ? 'default' : 'destructive',
+          onPress: async () => {
+            try {
+              await updateDoc(doc(db, 'users', user.id), { isActive: newStatus });
+              Alert.alert('Success', `User ${newStatus ? 'activated' : 'deactivated'} successfully`);
+            } catch (error) {
+              console.error('Error updating user status:', error);
+              Alert.alert('Error', 'Could not update user status. Please try again.');
+            }
           },
         },
       ]
@@ -167,24 +179,26 @@ export default function AdminUsersScreen({ navigation }) {
     return { backgroundColor: '#007AFF20', color: '#007AFF' };
   };
 
-  const getStatusBadgeStyle = (status) => {
-    if (status === 'active') {
+  const getActiveBadgeStyle = (isActive) => {
+    if (isActive) {
       return { backgroundColor: '#34C75920', color: '#34C759' };
     }
     return { backgroundColor: '#FF3B3020', color: '#FF3B30' };
   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
+  const formatDate = (dateInput) => {
+    if (!dateInput) return 'Unknown';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return 'Unknown';
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   const getStats = () => {
     const totalUsers = users.length;
-    const activeUsers = users.filter(u => u.status === 'active').length;
-    const adminUsers = users.filter(u => u.role === 'admin').length;
-    const totalSpent = users.reduce((sum, u) => sum + u.totalSpent, 0);
-    
+    const activeUsers = users.filter((u) => u.isActive).length;
+    const adminUsers = users.filter((u) => u.role === 'admin').length;
+    const totalSpent = users.reduce((sum, u) => sum + (u.totalSpent || 0), 0);
+
     return { totalUsers, activeUsers, adminUsers, totalSpent };
   };
 
@@ -231,7 +245,7 @@ export default function AdminUsersScreen({ navigation }) {
         <Ionicons name="search-outline" size={20} color="#999" style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search by name, email or phone..."
+          placeholder="Search by name or email..."
           placeholderTextColor="#999"
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -269,16 +283,15 @@ export default function AdminUsersScreen({ navigation }) {
                   </View>
                 </View>
                 <Text style={styles.userEmail}>{user.email}</Text>
-                <Text style={styles.userPhone}>{user.phone}</Text>
                 <View style={styles.userStats}>
                   <Text style={styles.userStatsText}>Orders: {user.totalOrders}</Text>
                   <Text style={styles.userStatsText}>Spent: ₱{user.totalSpent.toFixed(2)}</Text>
                 </View>
               </View>
               <View style={styles.userActions}>
-                <View style={[styles.statusBadge, getStatusBadgeStyle(user.status)]}>
-                  <Text style={[styles.statusText, { color: getStatusBadgeStyle(user.status).color }]}>
-                    {user.status}
+                <View style={[styles.statusBadge, getActiveBadgeStyle(user.isActive)]}>
+                  <Text style={[styles.statusText, { color: getActiveBadgeStyle(user.isActive).color }]}>
+                    {user.isActive ? 'active' : 'inactive'}
                   </Text>
                 </View>
                 <View style={styles.actionButtons}>
@@ -290,9 +303,13 @@ export default function AdminUsersScreen({ navigation }) {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.actionButton}
-                    onPress={() => handleDeleteUser(user)}
+                    onPress={() => handleToggleUserStatus(user)}
                   >
-                    <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                    <Ionicons
+                      name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
+                      size={20}
+                      color={user.isActive ? '#FF3B30' : '#34C759'}
+                    />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -344,11 +361,6 @@ export default function AdminUsersScreen({ navigation }) {
                 </View>
 
                 <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Phone:</Text>
-                  <Text style={styles.modalInfoValue}>{selectedUser.phone}</Text>
-                </View>
-
-                <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Role:</Text>
                   <View style={[styles.modalRoleBadge, getRoleBadgeStyle(selectedUser.role)]}>
                     <Text style={[styles.modalRoleText, { color: getRoleBadgeStyle(selectedUser.role).color }]}>
@@ -359,16 +371,16 @@ export default function AdminUsersScreen({ navigation }) {
 
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Status:</Text>
-                  <View style={[styles.modalStatusBadge, getStatusBadgeStyle(selectedUser.status)]}>
-                    <Text style={[styles.modalStatusText, { color: getStatusBadgeStyle(selectedUser.status).color }]}>
-                      {selectedUser.status.toUpperCase()}
+                  <View style={[styles.modalStatusBadge, getActiveBadgeStyle(selectedUser.isActive)]}>
+                    <Text style={[styles.modalStatusText, { color: getActiveBadgeStyle(selectedUser.isActive).color }]}>
+                      {selectedUser.isActive ? 'ACTIVE' : 'INACTIVE'}
                     </Text>
                   </View>
                 </View>
 
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Join Date:</Text>
-                  <Text style={styles.modalInfoValue}>{formatDate(selectedUser.joinDate)}</Text>
+                  <Text style={styles.modalInfoValue}>{formatDate(selectedUser.createdAt)}</Text>
                 </View>
 
                 <View style={styles.modalInfoRow}>
@@ -394,12 +406,12 @@ export default function AdminUsersScreen({ navigation }) {
                   <TouchableOpacity
                     style={[styles.modalButton, styles.statusButton]}
                     onPress={() => {
-                      handleToggleUserStatus(selectedUser);
                       setShowUserModal(false);
+                      handleToggleUserStatus(selectedUser);
                     }}
                   >
                     <Text style={styles.statusButtonText}>
-                      {selectedUser.status === 'active' ? 'Deactivate' : 'Activate'}
+                      {selectedUser.isActive ? 'Deactivate' : 'Activate'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -437,26 +449,13 @@ export default function AdminUsersScreen({ navigation }) {
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Email *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Email address"
-                  value={editFormData.email}
-                  onChangeText={(text) => setEditFormData({ ...editFormData, email: text })}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Phone</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Phone number"
-                  value={editFormData.phone}
-                  onChangeText={(text) => setEditFormData({ ...editFormData, phone: text })}
-                  keyboardType="phone-pad"
-                />
+                <Text style={styles.inputLabel}>Email</Text>
+                <View style={[styles.input, styles.inputDisabled]}>
+                  <Text style={styles.disabledInputText}>{selectedUser?.email}</Text>
+                </View>
+                <Text style={styles.inputHint}>
+                  Login email can't be changed here — it's tied to their Firebase Auth account.
+                </Text>
               </View>
 
               <View style={styles.inputGroup}>
@@ -493,52 +492,24 @@ export default function AdminUsersScreen({ navigation }) {
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Status</Text>
-                <View style={styles.statusSelector}>
-                  <TouchableOpacity
-                    style={[
-                      styles.statusOption,
-                      editFormData.status === 'active' && styles.statusOptionActive,
-                    ]}
-                    onPress={() => setEditFormData({ ...editFormData, status: 'active' })}
-                  >
-                    <Text style={[
-                      styles.statusOptionText,
-                      editFormData.status === 'active' && styles.statusOptionTextActive,
-                    ]}>
-                      Active
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.statusOption,
-                      editFormData.status === 'inactive' && styles.statusOptionActive,
-                    ]}
-                    onPress={() => setEditFormData({ ...editFormData, status: 'inactive' })}
-                  >
-                    <Text style={[
-                      styles.statusOptionText,
-                      editFormData.status === 'inactive' && styles.statusOptionTextActive,
-                    ]}>
-                      Inactive
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
               <View style={styles.modalButtons}>
                 <TouchableOpacity
                   style={[styles.modalButton, styles.cancelButton]}
                   onPress={() => setShowEditModal(false)}
+                  disabled={updating}
                 >
                   <Text style={styles.cancelButtonText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalButton, styles.saveButton]}
+                  style={[styles.modalButton, styles.saveButton, updating && { opacity: 0.7 }]}
                   onPress={handleUpdateUser}
+                  disabled={updating}
                 >
-                  <Text style={styles.saveButtonText}>Save Changes</Text>
+                  {updating ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.saveButtonText}>Save Changes</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -676,11 +647,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   userEmail: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 2,
-  },
-  userPhone: {
     fontSize: 12,
     color: '#666',
     marginBottom: 4,
@@ -865,6 +831,19 @@ const styles = StyleSheet.create({
     color: '#000',
     backgroundColor: '#F9F9FB',
   },
+  inputDisabled: {
+    backgroundColor: '#F2F2F7',
+    justifyContent: 'center',
+  },
+  disabledInputText: {
+    fontSize: 14,
+    color: '#999',
+  },
+  inputHint: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 6,
+  },
   roleSelector: {
     flexDirection: 'row',
     gap: 12,
@@ -887,30 +866,6 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   roleOptionTextActive: {
-    color: '#fff',
-  },
-  statusSelector: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  statusOption: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
-  statusOptionActive: {
-    backgroundColor: '#34C759',
-    borderColor: '#34C759',
-  },
-  statusOptionText: {
-    fontSize: 14,
-    color: '#666',
-  },
-  statusOptionTextActive: {
     color: '#fff',
   },
 });

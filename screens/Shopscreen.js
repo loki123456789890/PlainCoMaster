@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,9 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useProducts } from '../context/ProductContext';
+import { useCart } from '../context/CartContext';
 
 const getProductTypeLabel = (type) => {
   if (type === 'ukay-ukay') {
@@ -31,19 +32,49 @@ const getProductTypeLabel = (type) => {
 };
 
 const menuItems = [
-  { icon: 'ticket-outline', label: 'Voucher', color: '#34C759' },
-  { icon: 'gift-outline', label: 'Bonus', color: '#007AFF' },
   { icon: 'location-outline', label: 'Location', color: '#FF9500' },
-  { icon: 'card-outline', label: 'Payment', color: '#AF52DE' },
   { icon: 'help-circle-outline', label: 'Help', color: '#FF3B30' },
 ];
 
-export default function ShopScreen({ navigation }) {
+const filterTabs = [
+  { key: 'all', label: 'All' },
+  { key: 'ready-to-wear', label: 'Ready-to-Wear' },
+  { key: 'ukay-ukay', label: 'Ukay-Ukay' },
+];
+
+export default function ShopScreen({ navigation, route }) {
   const { products, loading } = useProducts();
+  const { cartCount } = useCart();
+  const [activeFilter, setActiveFilter] = useState(route.params?.filterType || 'all');
+
+  // If Home navigates here again with a different filterType while this screen
+  // is already mounted (rather than freshly pushed), keep activeFilter synced.
+  useEffect(() => {
+    if (route.params?.filterType) {
+      setActiveFilter(route.params.filterType);
+    }
+  }, [route.params?.filterType]);
+
+  const filteredProducts =
+    activeFilter === 'all'
+      ? products
+      : products.filter((p) => p.type === activeFilter);
+
+  const renderCartIcon = () => (
+    <View style={styles.cartIconWrapper}>
+      <Ionicons name="cart-outline" size={24} color="#000" />
+      {cartCount > 0 && (
+        <View style={styles.cartBadge}>
+          <Text style={styles.cartBadgeText}>{cartCount > 99 ? '99+' : cartCount}</Text>
+        </View>
+      )}
+    </View>
+  );
 
   const renderProduct = ({ item }) => {
     const productType = getProductTypeLabel(item.type);
-    
+    const isUkay = item.type === 'ukay-ukay';
+
     return (
       <TouchableOpacity
         style={styles.productCard}
@@ -57,36 +88,66 @@ export default function ShopScreen({ navigation }) {
             onError={(e) => console.log('Image load error:', item.imageUrl)}
           />
           <View style={[styles.productTypeBadge, productType.style]}>
-            <Ionicons name={item.type === 'ukay-ukay' ? "recycle-outline" : "shirt-outline"} size={12} color={productType.textStyle.color} />
+            {isUkay ? (
+              <MaterialCommunityIcons name="recycle" size={12} color={productType.textStyle.color} />
+            ) : (
+              <Ionicons name="shirt-outline" size={12} color={productType.textStyle.color} />
+            )}
             <Text style={[styles.productTypeText, productType.textStyle]}>
               {productType.label}
             </Text>
           </View>
         </View>
         <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
-        <Text style={styles.productPrice}>${item.price}</Text>
+        <Text style={styles.productPrice}>₱{item.price}</Text>
       </TouchableOpacity>
     );
   };
 
+  const renderMenuRow = () => (
+    <View style={styles.menuRow}>
+      {menuItems.map((item, index) => (
+        <TouchableOpacity
+          key={index}
+          style={styles.menuButton}
+          onPress={() => navigation.navigate(item.label)}
+        >
+          <Ionicons name={item.icon} size={16} color={item.color} />
+          <Text style={styles.menuButtonLabel}>{item.label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+
+  const renderFilterTabs = () => (
+    <View style={styles.filterRow}>
+      {filterTabs.map((tab) => {
+        const isActive = activeFilter === tab.key;
+        return (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.filterChip, isActive && styles.filterChipActive]}
+            onPress={() => setActiveFilter(tab.key)}
+          >
+            <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.statusBar}>
-          <Text style={styles.time}>8:34</Text>
-          <View style={styles.statusIcons}>
-            <View style={styles.signal} />
-            <View style={styles.wifi} />
-            <View style={styles.battery} />
-          </View>
-        </View>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#000" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Shop</Text>
           <TouchableOpacity onPress={() => navigation.navigate('Cart')}>
-            <Ionicons name="cart-outline" size={24} color="#000" />
+            {renderCartIcon()}
           </TouchableOpacity>
         </View>
         <View style={styles.loadingContainer}>
@@ -99,54 +160,31 @@ export default function ShopScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.statusBar}>
-        <Text style={styles.time}>8:34</Text>
-        <View style={styles.statusIcons}>
-          <View style={styles.signal} />
-          <View style={styles.wifi} />
-          <View style={styles.battery} />
-        </View>
-      </View>
-
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Shop</Text>
         <TouchableOpacity onPress={() => navigation.navigate('Cart')}>
-          <Ionicons name="cart-outline" size={24} color="#000" />
+          {renderCartIcon()}
         </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.menuScroll}
-          contentContainerStyle={styles.menuScrollContent}
-        >
-          {menuItems.map((item, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.menuItem}
-              onPress={() => navigation.navigate(item.label)}
-            >
-              <View style={[styles.menuIcon, { backgroundColor: item.color + '20' }]}>
-                <Ionicons name={item.icon} size={20} color={item.color} />
-              </View>
-              <Text style={styles.menuLabel}>{item.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        {renderMenuRow()}
 
-        {products.length === 0 ? (
+        {renderFilterTabs()}
+
+        {filteredProducts.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Ionicons name="cube-outline" size={80} color="#ccc" />
-            <Text style={styles.emptyText}>No products available</Text>
+            <Text style={styles.emptyText}>
+              {activeFilter === 'all' ? 'No products available' : 'No products in this category yet'}
+            </Text>
           </View>
         ) : (
           <FlatList
-            data={products}
+            data={filteredProducts}
             renderItem={renderProduct}
             keyExtractor={(item) => item.id}
             numColumns={2}
@@ -165,19 +203,6 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: 12, fontSize: 14, color: '#666' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingTop: 100, paddingBottom: 40 },
   emptyText: { fontSize: 16, color: '#999', marginTop: 16 },
-  statusBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
-    paddingBottom: 10,
-  },
-  time: { fontSize: 17, fontWeight: '600', color: '#000' },
-  statusIcons: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  signal: { width: 18, height: 12, backgroundColor: '#000', borderRadius: 2 },
-  wifi: { width: 16, height: 12, backgroundColor: '#000', borderRadius: 2 },
-  battery: { width: 24, height: 12, backgroundColor: '#000', borderRadius: 3 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -189,11 +214,66 @@ const styles = StyleSheet.create({
   },
   backButton: { width: 40, height: 40, justifyContent: 'center' },
   headerTitle: { fontSize: 17, fontWeight: '600', color: '#000' },
-  menuScroll: { paddingVertical: 16, maxHeight: 120 },
-  menuScrollContent: { paddingHorizontal: 20 },
-  menuItem: { alignItems: 'center', marginRight: 25 },
-  menuIcon: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-  menuLabel: { fontSize: 12, color: '#000', fontWeight: '500' },
+  cartIconWrapper: { position: 'relative' },
+  cartBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -8,
+    backgroundColor: '#FF3B30',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cartBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  menuRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 8,
+    gap: 10,
+  },
+  menuButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F2F2F7',
+  },
+  menuButtonLabel: { fontSize: 13, fontWeight: '600', color: '#000' },
+  filterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 8,
+    gap: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F2F2F7',
+  },
+  filterChipActive: {
+    backgroundColor: '#8B6F47',
+  },
+  filterChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#666',
+  },
+  filterChipTextActive: {
+    color: '#fff',
+  },
   productsGrid: { paddingHorizontal: 10, paddingBottom: 20 },
   productCard: {
     flex: 1, margin: 8, backgroundColor: '#fff', borderRadius: 12, padding: 12,
@@ -207,6 +287,6 @@ const styles = StyleSheet.create({
   rtwLabel: { backgroundColor: '#4CAF50' },
   rtwLabelText: { color: '#FFFFFF' },
   productTypeText: { fontSize: 10, fontWeight: '600' },
-  productName: { fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 4 },
+  productName: { fontSize: 14, fontWeight: '600', color: '#000', marginBottom: 4, lineHeight: 18, height: 36 },
   productPrice: { fontSize: 16, fontWeight: '700', color: '#000' },
 });

@@ -65,17 +65,10 @@ export default function ForgotPasswordScreen({ navigation }) {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <ScrollView showsVerticalScrollIndicator={false}>
-          {/* Status Bar - Consistent with Login/Signup */}
-          <View style={styles.statusBar}>
-            <Text style={styles.time}>8:34</Text>
-            <View style={styles.statusIcons}>
-              <View style={styles.signal} />
-              <View style={styles.wifi} />
-              <View style={styles.battery} />
-            </View>
-          </View>
-
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Header with Back Button */}
           <View style={styles.header}>
             <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
@@ -85,6 +78,10 @@ export default function ForgotPasswordScreen({ navigation }) {
 
           {/* Content */}
           <View style={styles.content}>
+            <View style={styles.iconCircle}>
+              <Ionicons name="key-outline" size={36} color="#8B6F47" />
+            </View>
+
             <Text style={styles.title}>Forgot Password</Text>
             <Text style={styles.subtitle}>
               Enter your email address and we'll send you a link to reset your password.
@@ -134,46 +131,63 @@ export default function ForgotPasswordScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   keyboardView: { flex: 1 },
-  statusBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
-    paddingBottom: 10,
-  },
-  time: { fontSize: 17, fontWeight: '600', color: '#000' },
-  statusIcons: { flexDirection: 'row', alignItems: 'center' },
-  signal: { width: 18, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
-  wifi: { width: 16, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
-  battery: { width: 24, height: 12, backgroundColor: '#000', borderRadius: 3 },
+  scrollContent: { flexGrow: 1 },
   header: { paddingHorizontal: 20, paddingVertical: 16 },
   backButton: { width: 40, height: 40, justifyContent: 'center' },
-  content: { paddingHorizontal: 32, paddingTop: 40 },
-  title: { fontSize: 28, fontWeight: '700', color: '#000', marginBottom: 8 },
-  subtitle: { fontSize: 17, color: '#666', marginBottom: 40, lineHeight: 24 },
-  form: { marginTop: 20 },
-  inputGroup: { marginBottom: 24 },
-  label: { fontSize: 16, fontWeight: '600', color: '#000', marginBottom: 8 },
+  content: {
+    flex: 1,
+    paddingHorizontal: 32,
+    paddingTop: 24,
+    paddingBottom: 48,
+    justifyContent: 'center',
+  },
+  iconCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#F5EFE6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginBottom: 28,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#000',
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 48,
+    paddingHorizontal: 8,
+  },
+  form: { marginTop: 0 },
+  inputGroup: { marginBottom: 32 },
+  label: { fontSize: 16, fontWeight: '600', color: '#000', marginBottom: 10 },
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
     fontSize: 16,
     color: '#000',
   },
   resetButton: {
     backgroundColor: '#8B6F47',
-    borderRadius: 10,
+    borderRadius: 12,
     paddingVertical: 16,
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 8,
     height: 56,
     justifyContent: 'center',
   },
   resetText: { fontSize: 17, fontWeight: '600', color: '#fff' },
-  cancelButton: { alignItems: 'center', marginTop: 24, paddingVertical: 12 },
+  cancelButton: { alignItems: 'center', marginTop: 28, paddingVertical: 14 },
   cancelText: { fontSize: 16, color: '#8B6F47', fontWeight: '500' },
 });

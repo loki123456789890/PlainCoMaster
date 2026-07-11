@@ -12,21 +12,26 @@ import {
   Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useProducts } from '../../context/ProductContext';
 
 export default function AdminEditProductScreen({ navigation, route }) {
   const { product } = route.params;
-  
+  const { updateProduct, deleteProduct } = useProducts();
+
   const [formData, setFormData] = useState({
     name: product.name,
     price: product.price.toString(),
     type: product.type,
     stock: product.stock.toString(),
     description: product.description || '',
-    imageUrl: product.image,
+    // Was reading product.image, but products are stored with an
+    // imageUrl field (see ProductContext.js / AdminAddProductScreen.js) —
+    // that mismatch was silently leaving this field blank on edit.
+    imageUrl: product.imageUrl,
   });
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     // Validation
     if (!formData.name.trim()) {
       Alert.alert('Error', 'Please enter product name');
@@ -50,16 +55,27 @@ export default function AdminEditProductScreen({ navigation, route }) {
     }
 
     setLoading(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      setLoading(false);
+
+    const result = await updateProduct(product.id, {
+      name: formData.name,
+      price: formData.price,
+      type: formData.type,
+      stock: formData.stock,
+      description: formData.description,
+      imageUrl: formData.imageUrl,
+    });
+
+    setLoading(false);
+
+    if (result.success) {
       Alert.alert(
         'Success',
         'Product updated successfully!',
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
-    }, 1000);
+    } else {
+      Alert.alert('Error', 'Failed to update product: ' + result.error);
+    }
   };
 
   const handleDelete = () => {
@@ -71,14 +87,18 @@ export default function AdminEditProductScreen({ navigation, route }) {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
+          onPress: async () => {
             setLoading(true);
-            setTimeout(() => {
-              setLoading(false);
+            const result = await deleteProduct(product.id);
+            setLoading(false);
+
+            if (result.success) {
               Alert.alert('Success', 'Product deleted successfully!', [
                 { text: 'OK', onPress: () => navigation.goBack() }
               ]);
-            }, 1000);
+            } else {
+              Alert.alert('Error', 'Failed to delete product: ' + result.error);
+            }
           },
         },
       ]
@@ -172,7 +192,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
         {/* Price and Stock Row */}
         <View style={styles.rowInput}>
           <View style={[styles.inputGroup, { flex: 1, marginRight: 12 }]}>
-            <Text style={styles.inputLabel}>Price *</Text>
+            <Text style={styles.inputLabel}>Price (₱) *</Text>
             <TextInput
               style={styles.input}
               placeholder="0.00"

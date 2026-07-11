@@ -171,7 +171,7 @@ export default function AdminProductsScreen({ navigation }) {
                       {getTypeLabel(product.type)}
                     </Text>
                   </View>
-                  <Text style={styles.productPrice}>${parseFloat(product.price).toFixed(2)}</Text>
+                  <Text style={styles.productPrice}>₱{parseFloat(product.price).toFixed(2)}</Text>
                 </View>
                 <Text style={styles.productStock}>Stock: {product.stock} pcs</Text>
               </View>
@@ -230,7 +230,7 @@ export default function AdminProductsScreen({ navigation }) {
                 <Text style={styles.modalProductName}>{selectedProduct.name}</Text>
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Price:</Text>
-                  <Text style={styles.modalInfoValue}>${parseFloat(selectedProduct.price).toFixed(2)}</Text>
+                  <Text style={styles.modalInfoValue}>₱{parseFloat(selectedProduct.price).toFixed(2)}</Text>
                 </View>
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Type:</Text>

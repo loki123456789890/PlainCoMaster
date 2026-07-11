@@ -13,8 +13,13 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { auth, db } from '../../firebaseConfig';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import { useAdmin } from '../../context/AdminContext';
 
 export default function AdminLoginScreen({ navigation }) {
+  const { loginAsAdmin } = useAdmin();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -27,12 +32,84 @@ export default function AdminLoginScreen({ navigation }) {
     }
 
     setLoading(true);
-    
-    // Temporary login - replace with actual admin authentication
-    setTimeout(() => {
+
+    try {
+      // Actually sign in with Firebase Auth instead of faking it with a timer
+      const userCredential = await signInWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password
+      );
+      const uid = userCredential.user.uid;
+
+      // Confirm this account is actually an admin before letting them in.
+      // This mirrors the isAdmin() check in firestore.rules, so a customer
+      // account can't reach the dashboard even if they know this screen exists.
+      const userDocRef = doc(db, 'users', uid);
+      const userDocSnap = await getDoc(userDocRef);
+
+      if (!userDocSnap.exists() || userDocSnap.data().role !== 'admin') {
+        await auth.signOut();
+        Alert.alert(
+          'Access Denied',
+          'This account does not have admin privileges.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      // Deactivation check — an admin account can be deactivated by another
+      // admin (AdminUsersScreen), and that flag needs to actually block
+      // sign-in here, not just hide the account in a list somewhere.
+      if (userDocSnap.data().isActive === false) {
+        await auth.signOut();
+        Alert.alert(
+          'Account Deactivated',
+          'This admin account has been deactivated.'
+        );
+        setLoading(false);
+        return;
+      }
+
+      // Role confirmed server-side above — now reflect it in AdminContext
+      // so useAdmin().isAdmin actually tracks who's signed in, instead of
+      // always being false (nothing was calling this before).
+      loginAsAdmin();
+
       setLoading(false);
       navigation.replace('AdminDashboard');
-    }, 1000);
+    } catch (error) {
+      setLoading(false);
+      console.error('Admin login error:', error);
+
+      // Firebase error codes -> friendly messages
+      let message = 'Could not sign in. Please try again.';
+      if (
+        error.code === 'auth/invalid-credential' ||
+        error.code === 'auth/wrong-password' ||
+        error.code === 'auth/user-not-found'
+      ) {
+        message = 'Invalid email or password.';
+      } else if (error.code === 'auth/invalid-email') {
+        message = 'Please enter a valid email address.';
+      } else if (error.code === 'auth/too-many-requests') {
+        message = 'Too many failed attempts. Please try again later.';
+      }
+      Alert.alert('Login Failed', message);
+    }
+  };
+
+  const handleBack = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      // No history to go back to — this happens right after an admin
+      // logout, since AdminDashboardScreen resets the nav stack (and
+      // signs out of the single shared Firebase Auth session) so "back"
+      // can't return into an authenticated admin screen. Landing on
+      // Profile here would be worse — it expects someone signed in.
+      navigation.navigate('Home');
+    }
   };
 
   return (
@@ -42,7 +119,7 @@ export default function AdminLoginScreen({ navigation }) {
         style={styles.keyboardView}
       >
         <ScrollView contentContainerStyle={styles.scrollView}>
-          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+          <TouchableOpacity style={styles.backButton} onPress={handleBack}>
             <Ionicons name="arrow-back" size={24} color="#007AFF" />
           </TouchableOpacity>
 

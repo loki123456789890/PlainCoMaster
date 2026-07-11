@@ -159,7 +159,7 @@ export default function AdminAddProductScreen({ navigation }) {
         {/* Price and Stock Row */}
         <View style={styles.rowInput}>
           <View style={[styles.inputGroup, { flex: 1, marginRight: 12 }]}>
-            <Text style={styles.inputLabel}>Price (USD) *</Text>
+            <Text style={styles.inputLabel}>Price (₱) *</Text>
             <TextInput
               style={styles.input}
               placeholder="0.00"

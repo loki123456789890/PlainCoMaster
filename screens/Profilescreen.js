@@ -21,20 +21,28 @@ export default function ProfileScreen({ navigation }) {
   const [logoutVisible, setLogoutVisible] = useState(false);
 
   useEffect(() => {
+    const user = auth.currentUser;
+
+    if (!user) {
+      // Previously there was no else branch here at all — if nobody was
+      // signed in, userData just stayed at its initial placeholder state
+      // forever, which is why the name literally showed "Loading...".
+      // Profile is a customer-only screen, so redirect instead.
+      navigation.replace('Login');
+      return;
+    }
+
     const fetchUserData = async () => {
-      const user = auth.currentUser;
-      if (user) {
-        try {
-          const userDoc = await getDoc(doc(db, "users", user.uid));
-          if (userDoc.exists()) {
-            setUserData({ name: userDoc.data().name, email: userDoc.data().email });
-          } else {
-            setUserData({ name: user.displayName || 'User', email: user.email });
-          }
-        } catch (error) {
-          console.error("Error fetching user data:", error);
+      try {
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        if (userDoc.exists()) {
+          setUserData({ name: userDoc.data().name, email: userDoc.data().email });
+        } else {
           setUserData({ name: user.displayName || 'User', email: user.email });
         }
+      } catch (error) {
+        console.error("Error fetching user data:", error);
+        setUserData({ name: user.displayName || 'User', email: user.email });
       }
     };
     fetchUserData();
@@ -109,12 +117,6 @@ export default function ProfileScreen({ navigation }) {
           <TouchableOpacity style={styles.menuItem} onPress={() => navigation.navigate('Favorites')}>
             <Ionicons name="heart-outline" size={24} color="#666" />
             <Text style={styles.menuLabel}>Favorites</Text>
-            <Ionicons name="chevron-forward" size={20} color="#ccc" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.menuItem} onPress={() => navigation.navigate('Settings')}>
-            <Ionicons name="settings-outline" size={24} color="#666" />
-            <Text style={styles.menuLabel}>Settings</Text>
             <Ionicons name="chevron-forward" size={20} color="#ccc" />
           </TouchableOpacity>
 

@@ -16,13 +16,25 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 // --- FIREBASE IMPORTS ---
-import { auth } from '../firebaseConfig';
+import { auth, db } from '../firebaseConfig';
 import { signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const handleBack = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      // Reached here via navigation.replace('Login') from LandingScreen,
+      // which swaps the stack entry instead of pushing one — so there's
+      // no history to go back to. Landing is the natural pre-auth fallback.
+      navigation.navigate('Landing');
+    }
+  };
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -33,7 +45,44 @@ export default function LoginScreen({ navigation }) {
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const uid = userCredential.user.uid;
+
+      // Single Firestore read covers both checks below: deactivation and
+      // role. A deactivated account can still authenticate successfully
+      // with Firebase Auth (deactivation is a Firestore flag, not an
+      // Auth-level disable), so we have to check it ourselves right here.
+      const userDocRef = doc(db, 'users', uid);
+      const userDocSnap = await getDoc(userDocRef);
+
+      if (userDocSnap.exists() && userDocSnap.data().isActive === false) {
+        await auth.signOut();
+        Alert.alert(
+          "Account Deactivated",
+          "This account has been deactivated. Please contact support if you believe this is a mistake."
+        );
+        setLoading(false);
+        return;
+      }
+
+      // Admin accounts don't belong in the customer flow — Firebase Auth
+      // itself has no concept of role, so this is the only place that can
+      // stop an admin credential from landing on the customer HomeScreen.
+      // Mirrors AdminLoginScreen's own role check, just in reverse.
+      if (userDocSnap.exists() && userDocSnap.data().role === 'admin') {
+        await auth.signOut();
+        Alert.alert(
+          "Admin Account",
+          "This is an admin account. Please sign in through the Admin Portal instead.",
+          [
+            { text: "Go to Admin Portal", onPress: () => navigation.navigate('AdminLogin') },
+            { text: "Cancel", style: "cancel" }
+          ]
+        );
+        setLoading(false);
+        return;
+      }
+
       navigation.navigate('Home');
     } catch (error) {
       let errorMessage = "Invalid email or password.";
@@ -60,19 +109,9 @@ export default function LoginScreen({ navigation }) {
         style={styles.keyboardView}
       >
         <ScrollView showsVerticalScrollIndicator={false}>
-          {/* Status Bar */}
-          <View style={styles.statusBar}>
-            <Text style={styles.time}>8:34</Text>
-            <View style={styles.statusIcons}>
-              <View style={styles.signal} />
-              <View style={styles.wifi} />
-              <View style={styles.battery} />
-            </View>
-          </View>
-
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <TouchableOpacity onPress={handleBack} style={styles.backButton}>
               <Ionicons name="arrow-back" size={24} color="#8B6F47" />
             </TouchableOpacity>
           </View>
@@ -146,19 +185,6 @@ export default function LoginScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   keyboardView: { flex: 1 },
-  statusBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
-    paddingBottom: 10,
-  },
-  time: { fontSize: 17, fontWeight: '600', color: '#000' },
-  statusIcons: { flexDirection: 'row', alignItems: 'center' },
-  signal: { width: 18, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
-  wifi: { width: 16, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
-  battery: { width: 24, height: 12, backgroundColor: '#000', borderRadius: 3 },
   header: { paddingHorizontal: 20, paddingVertical: 16 },
   backButton: { width: 40, height: 40, justifyContent: 'center' },
   content: { paddingHorizontal: 32, paddingTop: 40 },

@@ -91,16 +91,6 @@ export default function SignupScreen({ navigation }) {
         style={styles.keyboardView}
       >
         <ScrollView showsVerticalScrollIndicator={false}>
-          {/* Status Bar */}
-          <View style={styles.statusBar}>
-            <Text style={styles.time}>8:34</Text>
-            <View style={styles.statusIcons}>
-              <View style={styles.signal} />
-              <View style={styles.wifi} />
-              <View style={styles.battery} />
-            </View>
-          </View>
-
           {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity 
@@ -109,7 +99,7 @@ export default function SignupScreen({ navigation }) {
             >
               <Ionicons name="arrow-back" size={24} color="#8B6F47" />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>Get Started</Text>
+            <Text style={styles.headerTitle}>Create Account</Text>
             <View style={styles.headerPlaceholder} />
           </View>
 
@@ -193,19 +183,6 @@ export default function SignupScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   keyboardView: { flex: 1 },
-  statusBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 50 : 30,
-    paddingBottom: 10,
-  },
-  time: { fontSize: 17, fontWeight: '600', color: '#000' },
-  statusIcons: { flexDirection: 'row', alignItems: 'center' },
-  signal: { width: 18, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
-  wifi: { width: 16, height: 12, backgroundColor: '#000', borderRadius: 2, marginRight: 4 },
-  battery: { width: 24, height: 12, backgroundColor: '#000', borderRadius: 3 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -8,27 +8,25 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdminProvider } from './context/AdminContext';
 import { ProductProvider } from './context/ProductContext';
 import { FavoritesProvider } from './context/FavoritesContext';
+import { CartProvider } from './context/CartContext';
+import withAdminGuard from './components/withAdminGuard';
 
 // Import all screens
 import LandingScreen from './screens/LandingScreen';
 import HomeScreen from './screens/Homescreen';
 import LoginScreen from './screens/Loginscreen';
 import SignupScreen from './screens/Signupscreen';
-import ForgotPasswordScreen from './screens/ForgotPasswordScreen'; // <-- NEW IMPORT
+import ForgotPasswordScreen from './screens/ForgotPasswordScreen';
 import ShopScreen from './screens/Shopscreen';
 import ProductScreen from './screens/Productscreen';
 import CartScreen from './screens/Cartscreen';
 import CheckoutScreen from './screens/Checkoutscreen';
 import ProfileScreen from './screens/Profilescreen';
-import NotificationsScreen from './screens/Notificationscreen';
 import FavoritesScreen from './screens/Favoritescreen';
-import VoucherScreen from './screens/VoucherScreen';
-import BonusScreen from './screens/BonusScreen';
 import LocationScreen from './screens/LocationScreen';
-import PaymentScreen from './screens/PaymentScreen';
 import HelpScreen from './screens/HelpScreen';
 import OrdersScreen from './screens/OrdersScreen';
-import SettingsScreen from './screens/SettingsScreen';
+import OrderDetailsScreen from './screens/OrderDetailsScreen'; // <-- NEW IMPORT
 
 import AdminLoginScreen from './screens/admin/AdminLoginScreen';
 import AdminDashboardScreen from './screens/admin/AdminDashboardScreen';
@@ -42,76 +40,86 @@ LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
 
 const Stack = createNativeStackNavigator();
 
+// Every admin screen except AdminLoginScreen itself is wrapped so it can
+// only render for someone whose AdminContext isAdmin flag is true.
+// AdminLoginScreen is intentionally left unguarded — it has to stay
+// reachable by non-admins, since it's the screen that grants isAdmin
+// in the first place.
+const GuardedAdminDashboardScreen = withAdminGuard(AdminDashboardScreen);
+const GuardedAdminProductsScreen = withAdminGuard(AdminProductsScreen);
+const GuardedAdminAddProductScreen = withAdminGuard(AdminAddProductScreen);
+const GuardedAdminEditProductScreen = withAdminGuard(AdminEditProductScreen);
+const GuardedAdminOrdersScreen = withAdminGuard(AdminOrdersScreen);
+const GuardedAdminUsersScreen = withAdminGuard(AdminUsersScreen);
+
 export default function App() {
   return (
     <SafeAreaProvider>
-      <ProductProvider>
-        <FavoritesProvider>
-          <NavigationContainer>
-            <Stack.Navigator
-              initialRouteName="Landing"
-              screenOptions={{
-                headerShown: false,
-                animation: 'slide_from_right',
-              }}
-            >
-              {/* Landing Screen */}
-              <Stack.Screen name="Landing" component={LandingScreen} />
-              
-              {/* iPhone 16 Pro Max - 1 */}
-              <Stack.Screen name="Home" component={HomeScreen} />
-              
-              {/* iPhone 16 Pro Max - 7 */}
-              <Stack.Screen name="Login" component={LoginScreen} />
-              
-              {/* iPhone 16 Pro Max - 6 */}
-              <Stack.Screen name="Signup" component={SignupScreen} />
+      <AdminProvider>
+        <ProductProvider>
+          <FavoritesProvider>
+            <CartProvider>
+              <NavigationContainer>
+                <Stack.Navigator
+                  initialRouteName="Landing"
+                  screenOptions={{
+                    headerShown: false,
+                    animation: 'slide_from_right',
+                  }}
+                >
+                  {/* Landing Screen */}
+                  <Stack.Screen name="Landing" component={LandingScreen} />
 
-              {/* New Forgot Password Screen */}
-              <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-              
-              {/* iPhone 16 Pro Max - 14 */}
-              <Stack.Screen name="Shop" component={ShopScreen} />
-              
-              {/* iPhone 16 Pro Max - 16 & 18 */}
-              <Stack.Screen name="Product" component={ProductScreen} />
-              
-              {/* iPhone 16 Pro Max - 24 & 25 */}
-              <Stack.Screen name="Cart" component={CartScreen} />
-              
-              {/* iPhone 16 Pro Max - 17 */}
-              <Stack.Screen name="Checkout" component={CheckoutScreen} />
-              
-              {/* iPhone 16 Pro Max - 13 */}
-              <Stack.Screen name="Profile" component={ProfileScreen} />
-              
-              {/* iPhone 16 Pro Max - 11 & 12 */}
-              <Stack.Screen name="Notifications" component={NotificationsScreen} />
-              
-              {/* iPhone 16 Pro Max - 9 */}
-              <Stack.Screen name="Favorites" component={FavoritesScreen} />
+                  {/* iPhone 16 Pro Max - 1 */}
+                  <Stack.Screen name="Home" component={HomeScreen} />
 
-              {/* New Screens for Shop Menu */}
-              <Stack.Screen name="Voucher" component={VoucherScreen} />
-              <Stack.Screen name="Bonus" component={BonusScreen} />
-              <Stack.Screen name="Location" component={LocationScreen} />
-              <Stack.Screen name="Payment" component={PaymentScreen} />
-              <Stack.Screen name="Help" component={HelpScreen} />
-              <Stack.Screen name="Orders" component={OrdersScreen} />
-              <Stack.Screen name="Settings" component={SettingsScreen} />
+                  {/* iPhone 16 Pro Max - 7 */}
+                  <Stack.Screen name="Login" component={LoginScreen} />
 
-              {/* Admin Screens */}
-              <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
-              <Stack.Screen name="AdminDashboard" component={AdminDashboardScreen} />
-              <Stack.Screen name="AdminProducts" component={AdminProductsScreen} />
-              <Stack.Screen name="AdminAddProduct" component={AdminAddProductScreen} />
-              <Stack.Screen name="AdminEditProduct" component={AdminEditProductScreen} />
-              <Stack.Screen name="AdminOrders" component={AdminOrdersScreen} />
-              <Stack.Screen name="AdminUsers" component={AdminUsersScreen} />
-            </Stack.Navigator>
-          </NavigationContainer>
-        </FavoritesProvider>
-      </ProductProvider>
+                  {/* iPhone 16 Pro Max - 6 */}
+                  <Stack.Screen name="Signup" component={SignupScreen} />
+
+                  {/* New Forgot Password Screen */}
+                  <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+
+                  {/* iPhone 16 Pro Max - 14 */}
+                  <Stack.Screen name="Shop" component={ShopScreen} />
+
+                  {/* iPhone 16 Pro Max - 16 & 18 */}
+                  <Stack.Screen name="Product" component={ProductScreen} />
+
+                  {/* iPhone 16 Pro Max - 24 & 25 */}
+                  <Stack.Screen name="Cart" component={CartScreen} />
+
+                  {/* iPhone 16 Pro Max - 17 */}
+                  <Stack.Screen name="Checkout" component={CheckoutScreen} />
+
+                  {/* iPhone 16 Pro Max - 13 */}
+                  <Stack.Screen name="Profile" component={ProfileScreen} />
+
+                  {/* iPhone 16 Pro Max - 9 */}
+                  <Stack.Screen name="Favorites" component={FavoritesScreen} />
+
+                  {/* New Screens for Shop Menu */}
+                  <Stack.Screen name="Location" component={LocationScreen} />
+                  <Stack.Screen name="Help" component={HelpScreen} />
+                  <Stack.Screen name="Orders" component={OrdersScreen} />
+                  <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} /> 
+
+                  {/* Admin Screens */}
+                  <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
+                  <Stack.Screen name="AdminDashboard" component={GuardedAdminDashboardScreen} />
+                  <Stack.Screen name="AdminProducts" component={GuardedAdminProductsScreen} />
+                  <Stack.Screen name="AdminAddProduct" component={GuardedAdminAddProductScreen} />
+                  <Stack.Screen name="AdminEditProduct" component={GuardedAdminEditProductScreen} />
+                  <Stack.Screen name="AdminOrders" component={GuardedAdminOrdersScreen} />
+                  <Stack.Screen name="AdminUsers" component={GuardedAdminUsersScreen} />
+                </Stack.Navigator>
+              </NavigationContainer>
+            </CartProvider>
+          </FavoritesProvider>
+        </ProductProvider>
+      </AdminProvider>
     </SafeAreaProvider>
   );
 }

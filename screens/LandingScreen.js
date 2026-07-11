@@ -41,10 +41,10 @@ export default function LandingScreen({ navigation }) {
           {/* Main Content */}
           <View style={styles.content}>
             <Text style={styles.title}>
-              Welcome to{'\n'}Your Favorite{'\n'}Shopping App
+              Preloved Finds{'\n'}Ready-to-Wear{'\n'}Styles
             </Text>
             <Text style={styles.subtitle}>
-              Buy everything from fashion to electronics with amazing deals and fast delivery
+              Shop quality Ukay-Ukay and Ready-to-Wear clothing with great deals and fast delivery
             </Text>
 
             {/* Features */}
@@ -58,8 +58,8 @@ export default function LandingScreen({ navigation }) {
                 <Text style={styles.featureText}>100% Secure</Text>
               </View>
               <View style={styles.featureItem}>
-                <Ionicons name="rocket" size={24} color="#D4A574" />
-                <Text style={styles.featureText}>Free Shipping</Text>
+                <Ionicons name="cash" size={24} color="#D4A574" />
+                <Text style={styles.featureText}>Cash on Delivery</Text>
               </View>
             </View>
           </View>
