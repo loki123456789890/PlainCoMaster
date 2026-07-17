@@ -18,10 +18,12 @@ import { Ionicons } from '@expo/vector-icons';
 // --- FIREBASE IMPORTS ---
 import { auth } from '../firebaseConfig';
 import { sendPasswordResetEmail } from 'firebase/auth';
+import useNetworkStatus from '../hooks/useNetworkStatus';
 
 export default function ForgotPasswordScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
+  const { isConnected } = useNetworkStatus();
 
   const handlePasswordReset = async () => {
     if (!email.trim()) {
@@ -34,8 +36,8 @@ export default function ForgotPasswordScreen({ navigation }) {
     try {
       await sendPasswordResetEmail(auth, email);
       Alert.alert(
-        "Email Sent", 
-        "A password reset link has been sent to your email address. Please check your inbox and spam folder.",
+        "Email Sent",
+        "If an account exists for that email address, a password reset link has been sent. Please check your inbox and spam folder.",
         [
           { 
             text: "OK", 
@@ -45,8 +47,10 @@ export default function ForgotPasswordScreen({ navigation }) {
       );
     } catch (error) {
       let errorMessage = "Something went wrong. Please try again.";
-      
-      if (error.code === 'auth/user-not-found') {
+
+      if (error.code === 'auth/network-request-failed') {
+        errorMessage = "No internet connection. Please check your connection and try again.";
+      } else if (error.code === 'auth/user-not-found') {
         errorMessage = "No account found with this email address.";
       } else if (error.code === 'auth/invalid-email') {
         errorMessage = "Please enter a valid email address.";
@@ -102,15 +106,20 @@ export default function ForgotPasswordScreen({ navigation }) {
                 />
               </View>
 
-              <TouchableOpacity 
-                style={[styles.resetButton, loading && { opacity: 0.8 }]}
+              <TouchableOpacity
+                style={[
+                  styles.resetButton,
+                  (loading || !isConnected) && styles.resetButtonDisabled,
+                ]}
                 onPress={handlePasswordReset}
-                disabled={loading}
+                disabled={loading || !isConnected}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.resetText}>Send Reset Link</Text>
+                  <Text style={styles.resetText}>
+                    {!isConnected ? 'No Internet Connection' : 'Send Reset Link'}
+                  </Text>
                 )}
               </TouchableOpacity>
 
@@ -187,6 +196,7 @@ const styles = StyleSheet.create({
     height: 56,
     justifyContent: 'center',
   },
+  resetButtonDisabled: { backgroundColor: '#ccc' },
   resetText: { fontSize: 17, fontWeight: '600', color: '#fff' },
   cancelButton: { alignItems: 'center', marginTop: 28, paddingVertical: 14 },
   cancelText: { fontSize: 16, color: '#8B6F47', fontWeight: '500' },

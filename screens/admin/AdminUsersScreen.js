@@ -5,13 +5,13 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   Alert,
   ActivityIndicator,
   Modal,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { db, auth } from '../../firebaseConfig';
 import {
@@ -21,6 +21,7 @@ import {
   updateDoc,
   getDocs,
 } from 'firebase/firestore';
+import useNetworkStatus from '../../hooks/useNetworkStatus';
 
 export default function AdminUsersScreen({ navigation }) {
   const [users, setUsers] = useState([]);
@@ -34,6 +35,10 @@ export default function AdminUsersScreen({ navigation }) {
     name: '',
     role: 'customer',
   });
+  // Tracks which single user's activate/deactivate write is in flight, so
+  // one row updating doesn't disable every other row's action button too.
+  const [togglingUserId, setTogglingUserId] = useState(null);
+  const { isConnected } = useNetworkStatus();
 
   useEffect(() => {
     const unsubscribe = onSnapshot(
@@ -137,6 +142,16 @@ export default function AdminUsersScreen({ navigation }) {
       Alert.alert('Success', 'User updated successfully');
     } catch (error) {
       console.error('Error updating user:', error);
+
+      const isNetworkError = !isConnected || error.code === 'unavailable';
+      if (isNetworkError) {
+        Alert.alert(
+          'No Internet Connection',
+          'Network connection lost. Please check your connection and try again.'
+        );
+        return;
+      }
+
       Alert.alert('Error', 'Could not update user. Please try again.');
     } finally {
       setUpdating(false);
@@ -159,12 +174,24 @@ export default function AdminUsersScreen({ navigation }) {
           text: newStatus ? 'Activate' : 'Deactivate',
           style: newStatus ? 'default' : 'destructive',
           onPress: async () => {
+            setTogglingUserId(user.id);
             try {
               await updateDoc(doc(db, 'users', user.id), { isActive: newStatus });
               Alert.alert('Success', `User ${newStatus ? 'activated' : 'deactivated'} successfully`);
             } catch (error) {
               console.error('Error updating user status:', error);
-              Alert.alert('Error', 'Could not update user status. Please try again.');
+
+              const isNetworkError = !isConnected || error.code === 'unavailable';
+              if (isNetworkError) {
+                Alert.alert(
+                  'No Internet Connection',
+                  'Network connection lost. Please check your connection and try again.'
+                );
+              } else {
+                Alert.alert('Error', 'Could not update user status. Please try again.');
+              }
+            } finally {
+              setTogglingUserId(null);
             }
           },
         },
@@ -216,29 +243,30 @@ export default function AdminUsersScreen({ navigation }) {
       </View>
 
       {/* Stats Cards */}
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        style={styles.statsScroll}
-        contentContainerStyle={styles.statsContainer}
-      >
-        <View style={styles.statCard}>
-          <Text style={styles.statValue}>{stats.totalUsers}</Text>
-          <Text style={styles.statLabel}>Total Users</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statValue}>{stats.activeUsers}</Text>
-          <Text style={styles.statLabel}>Active Users</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statValue}>{stats.adminUsers}</Text>
-          <Text style={styles.statLabel}>Admins</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statValue}>₱{stats.totalSpent.toFixed(2)}</Text>
-          <Text style={styles.statLabel}>Total Spent</Text>
-        </View>
-      </ScrollView>
+      <View style={styles.statsWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.statsContainer}
+        >
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{stats.totalUsers}</Text>
+            <Text style={styles.statLabel}>Total {stats.totalUsers === 1 ? 'User' : 'Users'}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{stats.activeUsers}</Text>
+            <Text style={styles.statLabel}>Active {stats.activeUsers === 1 ? 'User' : 'Users'}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{stats.adminUsers}</Text>
+            <Text style={styles.statLabel}>{stats.adminUsers === 1 ? 'Admin' : 'Admins'}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>₱{stats.totalSpent.toFixed(2)}</Text>
+            <Text style={styles.statLabel}>Total Spent</Text>
+          </View>
+        </ScrollView>
+      </View>
 
       {/* Search Bar */}
       <View style={styles.searchContainer}>
@@ -304,12 +332,20 @@ export default function AdminUsersScreen({ navigation }) {
                   <TouchableOpacity
                     style={styles.actionButton}
                     onPress={() => handleToggleUserStatus(user)}
+                    disabled={!isConnected || togglingUserId === user.id}
                   >
-                    <Ionicons
-                      name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
-                      size={20}
-                      color={user.isActive ? '#FF3B30' : '#34C759'}
-                    />
+                    {togglingUserId === user.id ? (
+                      <ActivityIndicator
+                        size="small"
+                        color={user.isActive ? '#FF3B30' : '#34C759'}
+                      />
+                    ) : (
+                      <Ionicons
+                        name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
+                        size={20}
+                        color={!isConnected ? '#ccc' : (user.isActive ? '#FF3B30' : '#34C759')}
+                      />
+                    )}
                   </TouchableOpacity>
                 </View>
               </View>
@@ -404,14 +440,24 @@ export default function AdminUsersScreen({ navigation }) {
                     <Text style={styles.editButtonText}>Edit User</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.modalButton, styles.statusButton]}
+                    style={[
+                      styles.modalButton,
+                      styles.statusButton,
+                      !isConnected && { opacity: 0.7 },
+                    ]}
                     onPress={() => {
                       setShowUserModal(false);
                       handleToggleUserStatus(selectedUser);
                     }}
+                    disabled={!isConnected}
                   >
                     <Text style={styles.statusButtonText}>
-                      {selectedUser.isActive ? 'Deactivate' : 'Activate'}
+                      {/* Shortened vs. the full "No Internet Connection" —
+                          this button shares a half-width row with Edit
+                          User, so the longer phrase wrapped awkwardly. */}
+                      {!isConnected
+                        ? 'Offline'
+                        : selectedUser.isActive ? 'Deactivate' : 'Activate'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -501,14 +547,20 @@ export default function AdminUsersScreen({ navigation }) {
                   <Text style={styles.cancelButtonText}>Cancel</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalButton, styles.saveButton, updating && { opacity: 0.7 }]}
+                  style={[
+                    styles.modalButton,
+                    styles.saveButton,
+                    (updating || !isConnected) && { opacity: 0.7 },
+                  ]}
                   onPress={handleUpdateUser}
-                  disabled={updating}
+                  disabled={updating || !isConnected}
                 >
                   {updating ? (
                     <ActivityIndicator color="#fff" size="small" />
                   ) : (
-                    <Text style={styles.saveButtonText}>Save Changes</Text>
+                    <Text style={styles.saveButtonText}>
+                      {!isConnected ? 'Offline' : 'Save Changes'}
+                    </Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -548,7 +600,7 @@ const styles = StyleSheet.create({
   placeholder: {
     width: 40,
   },
-  statsScroll: {
+  statsWrapper: {
     marginTop: 16,
   },
   statsContainer: {
@@ -564,6 +616,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E5EA',
   },
+  // Matches AdminOrdersScreen.js's statValue exactly (no lineHeight /
+  // includeFontPadding overrides) — those were added earlier as a guess at
+  // fixing clipped-looking numbers, but AdminOrdersScreen renders the same
+  // bold 24px numerals cleanly with this exact style, so the real cause
+  // was more likely the stats row's wrapping structure (now matched too)
+  // than glyph metrics. Revisit with a lineHeight override only if a real
+  // regression shows up here that Orders doesn't have.
   statValue: {
     fontSize: 24,
     fontWeight: '700',

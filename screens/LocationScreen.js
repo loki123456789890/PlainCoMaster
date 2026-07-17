@@ -17,6 +17,7 @@ import * as Location from 'expo-location';
 
 import { auth, db } from '../firebaseConfig';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import useNetworkStatus from '../hooks/useNetworkStatus';
 
 export default function LocationScreen({ navigation }) {
   const [formData, setFormData] = useState({
@@ -30,6 +31,7 @@ export default function LocationScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
+  const { isConnected } = useNetworkStatus();
 
   useEffect(() => {
     if (!auth.currentUser) {
@@ -160,6 +162,19 @@ export default function LocationScreen({ navigation }) {
       ]);
     } catch (error) {
       console.error('Error saving address:', error);
+
+      // Same check CheckoutScreen.js's handlePlaceOrder uses: our own
+      // NetInfo state, OR'd with Firestore's own 'unavailable' code in case
+      // connectivity dropped mid-write faster than the NetInfo event fired.
+      const isNetworkError = !isConnected || error.code === 'unavailable';
+      if (isNetworkError) {
+        Alert.alert(
+          'No Internet Connection',
+          'Network connection lost. Please check your connection and try again.'
+        );
+        return;
+      }
+
       Alert.alert('Error', 'Could not save your address. Please try again.');
     } finally {
       setSaving(false);
@@ -283,14 +298,23 @@ export default function LocationScreen({ navigation }) {
           </View>
 
           <TouchableOpacity
-            style={[styles.saveButton, saving && { opacity: 0.7 }]}
+            style={[
+              styles.saveButton,
+              saving && { opacity: 0.7 },
+              !isConnected && styles.saveButtonDisabled,
+            ]}
             onPress={handleSave}
-            disabled={saving}
+            disabled={saving || !isConnected}
           >
             {saving ? (
-              <ActivityIndicator color="#fff" />
+              <View style={styles.saveButtonLoading}>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={styles.saveButtonText}>Saving...</Text>
+              </View>
             ) : (
-              <Text style={styles.saveButtonText}>Save Address</Text>
+              <Text style={styles.saveButtonText}>
+                {!isConnected ? 'No Internet Connection' : 'Save Address'}
+              </Text>
             )}
           </TouchableOpacity>
         </ScrollView>
@@ -352,5 +376,7 @@ const styles = StyleSheet.create({
     height: 56,
     justifyContent: 'center',
   },
+  saveButtonDisabled: { backgroundColor: '#ccc' },
+  saveButtonLoading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   saveButtonText: { fontSize: 16, fontWeight: '600', color: '#fff' },
 });

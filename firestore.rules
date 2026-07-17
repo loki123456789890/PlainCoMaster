@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'customer') == 'admin';
+    }
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    function isActiveOwner(userId) {
+      return isOwner(userId) &&
+        (!exists(/databases/$(database)/documents/users/$(userId)) ||
+         get(/databases/$(database)/documents/users/$(userId)).data.get('isActive', true) != false);
+    }
+    // Same "not deactivated" check as isActiveOwner, but for writes that
+    // aren't scoped to a specific userId path (e.g. decrementing a
+    // product's stock during checkout).
+    function isActiveUser() {
+      return request.auth != null &&
+        (!exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isActive', true) != false);
+    }
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId);
+      // An owner may never change their own role (isAdmin() reads role
+      // straight off this same document, so allowing that would be a
+      // client-side path to self-granting admin), and may only ever flip
+      // isActive to false, never back to true — self-deactivation is
+      // allowed, self-reactivation is not. Only an admin can do either.
+      //
+      // Both fields are read via .get() with a default: customer documents
+      // created at signup do NOT have a role field at all, and dot notation
+      // on a missing field throws an error that Firestore surfaces as
+      // "Missing or insufficient permissions" — indistinguishable from a
+      // real deny. The default 'customer' compares equal on both sides for
+      // a normal update, while an attempt to set role: 'admin' still fails
+      // the comparison and is denied.
+      allow update: if isAdmin() ||
+        (
+          isOwner(userId) &&
+          request.resource.data.get('role', 'customer') ==
+            resource.data.get('role', 'customer') &&
+          (
+            request.resource.data.get('isActive', true) ==
+              resource.data.get('isActive', true)
+            ||
+            request.resource.data.get('isActive', true) == false
+          )
+        );
+      allow delete: if isAdmin();
+      match /orders/{orderId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isActiveOwner(userId);
+        allow update: if isOwner(userId) || isAdmin();
+        allow delete: if isAdmin();
+      }
+      match /cart/{itemId} {
+        allow read, write: if isActiveOwner(userId);
+      }
+      match /favorites/{productId} {
+        // New: favorites just migrated off AsyncStorage onto Firestore,
+        // same per-user subcollection shape as cart. Same isActiveOwner()
+        // gate — a deactivated account shouldn't be able to favorite
+        // new items either.
+        allow read, write: if isActiveOwner(userId);
+      }
+    }
+    match /{path=**}/orders/{orderId} {
+      allow read: if isAdmin();
+    }
+    match /products/{productId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      // Admins can change anything. A signed-in, active customer can also
+      // update a product doc, but ONLY as a stock decrement from checkout:
+      // "stock" must be the sole field that changed, both the old and new
+      // values must be numbers, and the new value must be smaller (but
+      // still non-negative) than what was there before. That blocks a
+      // client from rewriting price/name/imageUrl or from increasing
+      // stock, while still letting the transaction in CheckoutScreen.js
+      // decrement it atomically.
+      //
+      // NOTE: AdminAddProductScreen/AdminEditProductScreen now save
+      // "stock" as a real number, but any product created before that
+      // change still has it stored as a string, and `resource.data.stock
+      // is number` is false for those until an admin re-saves them once
+      // (via Edit Product) — until then this branch denies the decrement
+      // for that specific product, same as if stock were insufficient.
+      allow update: if isAdmin() ||
+        (
+          isActiveUser() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']) &&
+          resource.data.stock is number &&
+          request.resource.data.stock is number &&
+          request.resource.data.stock >= 0 &&
+          request.resource.data.stock < resource.data.stock
+        );
+    }
+    match /supportRequests/{requestId} {
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+      allow read, update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+  }
+}

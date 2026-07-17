@@ -19,11 +19,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../firebaseConfig';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
+import useNetworkStatus from '../hooks/useNetworkStatus';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const { isConnected } = useNetworkStatus();
 
   const handleBack = () => {
     if (navigation.canGoBack()) {
@@ -54,6 +57,21 @@ export default function LoginScreen({ navigation }) {
       // Auth-level disable), so we have to check it ourselves right here.
       const userDocRef = doc(db, 'users', uid);
       const userDocSnap = await getDoc(userDocRef);
+
+      // An Auth account with no matching Firestore document has no
+      // privacyConsentAccepted record, no isActive flag, and no role —
+      // the two checks below are both gated on exists() and would
+      // silently skip themselves for exactly this case, falling straight
+      // through to Home. Catch it explicitly instead.
+      if (!userDocSnap.exists()) {
+        await auth.signOut();
+        Alert.alert(
+          "Account Error",
+          "We couldn't load your account details. Please sign up again or contact support."
+        );
+        setLoading(false);
+        return;
+      }
 
       if (userDocSnap.exists() && userDocSnap.data().isActive === false) {
         await auth.signOut();
@@ -86,8 +104,10 @@ export default function LoginScreen({ navigation }) {
       navigation.navigate('Home');
     } catch (error) {
       let errorMessage = "Invalid email or password.";
-      
-      if (error.code === 'auth/user-not-found') {
+
+      if (error.code === 'auth/network-request-failed') {
+        errorMessage = "No internet connection. Please check your connection and try again.";
+      } else if (error.code === 'auth/user-not-found') {
         errorMessage = "No account found with this email.";
       } else if (error.code === 'auth/wrong-password') {
         errorMessage = "Incorrect password.";
@@ -138,25 +158,35 @@ export default function LoginScreen({ navigation }) {
 
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Password</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter your password"
-                  placeholderTextColor="#999"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry
-                />
+                <View style={styles.passwordInputContainer}>
+                  <TextInput
+                    style={styles.passwordInput}
+                    placeholder="Enter your password"
+                    placeholderTextColor="#999"
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                  />
+                  <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+                    <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color="#999" />
+                  </TouchableOpacity>
+                </View>
               </View>
 
-              <TouchableOpacity 
-                style={[styles.signInButton, loading && { opacity: 0.8 }]}
+              <TouchableOpacity
+                style={[
+                  styles.signInButton,
+                  (loading || !isConnected) && styles.signInButtonDisabled,
+                ]}
                 onPress={handleLogin}
-                disabled={loading}
+                disabled={loading || !isConnected}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.signInText}>Sign In</Text>
+                  <Text style={styles.signInText}>
+                    {!isConnected ? 'No Internet Connection' : 'Sign In'}
+                  </Text>
                 )}
               </TouchableOpacity>
 
@@ -202,6 +232,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#000',
   },
+  // Same border/radius/color as `input` above, just as a row container so
+  // the eye toggle can sit at the trailing edge — matches
+  // AdminLoginScreen's password field layout.
+  passwordInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: '#000',
+  },
   signInButton: {
     backgroundColor: '#8B6F47',
     borderRadius: 10,
@@ -211,6 +258,7 @@ const styles = StyleSheet.create({
     height: 56,
     justifyContent: 'center',
   },
+  signInButtonDisabled: { backgroundColor: '#ccc' },
   signInText: { fontSize: 17, fontWeight: '600', color: '#fff' },
   forgotButton: { alignItems: 'center', marginTop: 24, paddingVertical: 12 },
   forgotText: { fontSize: 16, color: '#8B6F47' },

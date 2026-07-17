@@ -4,18 +4,21 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   Platform,
   Alert,
   ScrollView,
   Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useProducts } from '../../context/ProductContext';
+import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { COLOR_PALETTE, SIZE_OPTIONS } from '../../constants/productOptions';
 
 export default function AdminAddProductScreen({ navigation }) {
   const { addProduct } = useProducts(); // Add this line
+  const { isConnected } = useNetworkStatus();
   const [formData, setFormData] = useState({
     name: '',
     price: '',
@@ -23,8 +26,28 @@ export default function AdminAddProductScreen({ navigation }) {
     stock: '',
     description: '',
     imageUrl: '',
+    colors: [],
+    sizes: [],
   });
   const [loading, setLoading] = useState(false);
+
+  const toggleColor = (colorName) => {
+    setFormData((prev) => ({
+      ...prev,
+      colors: prev.colors.includes(colorName)
+        ? prev.colors.filter((c) => c !== colorName)
+        : [...prev.colors, colorName],
+    }));
+  };
+
+  const toggleSize = (size) => {
+    setFormData((prev) => ({
+      ...prev,
+      sizes: prev.sizes.includes(size)
+        ? prev.sizes.filter((s) => s !== size)
+        : [...prev.sizes, size],
+    }));
+  };
 
   const handleSubmit = async () => { // Make this async
     // Validation
@@ -36,7 +59,11 @@ export default function AdminAddProductScreen({ navigation }) {
       Alert.alert('Error', 'Please enter product price');
       return;
     }
-    if (parseFloat(formData.price) <= 0) {
+    const parsedPrice = parseFloat(formData.price);
+    // parseFloat("abc") is NaN, and NaN <= 0 is false — a bare <= 0 check
+    // alone would silently let non-numeric input through, so NaN is
+    // checked explicitly rather than relying on the comparison alone.
+    if (Number.isNaN(parsedPrice) || parsedPrice <= 0) {
       Alert.alert('Error', 'Please enter a valid price');
       return;
     }
@@ -48,17 +75,34 @@ export default function AdminAddProductScreen({ navigation }) {
       Alert.alert('Error', 'Please enter an image URL');
       return;
     }
+    if (formData.colors.length === 0) {
+      Alert.alert('Error', 'Please select at least one color');
+      return;
+    }
+    if (formData.sizes.length === 0) {
+      Alert.alert('Error', 'Please select at least one size');
+      return;
+    }
 
     setLoading(true);
-    
+
     // Add product using context
     const result = await addProduct({
       name: formData.name,
-      price: formData.price,
+      // Stored as a real number, same reasoning as stock below —
+      // parseFloat rather than parseInt/Number since price needs to
+      // support decimals (e.g. 299.50). Already validated as a non-NaN,
+      // positive number above, so no further fallback is needed here.
+      price: parsedPrice,
       type: formData.type,
-      stock: formData.stock,
+      // Stored as a real number (not the raw TextInput string) so
+      // firestore.rules can validate checkout's stock decrement with a
+      // plain numeric comparison — see CheckoutScreen.js / firestore.rules.
+      stock: Number(formData.stock) || 0,
       description: formData.description,
       imageUrl: formData.imageUrl,
+      colors: formData.colors,
+      sizes: formData.sizes,
     });
 
     setLoading(false);
@@ -68,6 +112,16 @@ export default function AdminAddProductScreen({ navigation }) {
         'Success',
         'Product added successfully!',
         [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    } else if (!isConnected) {
+      // addProduct() (ProductContext) resolves { success: false, error }
+      // instead of throwing, and only passes along error.message, not
+      // error.code — so there's no Firestore 'unavailable' code available
+      // to check here the way Checkout/Location do. isConnected from our
+      // own NetInfo listener is the only reliable signal in this shape.
+      Alert.alert(
+        'No Internet Connection',
+        'Network connection lost. Please check your connection and try again.'
       );
     } else {
       Alert.alert('Error', 'Failed to add product: ' + result.error);
@@ -101,8 +155,8 @@ export default function AdminAddProductScreen({ navigation }) {
         {/* Image Preview */}
         {formData.imageUrl ? (
           <View style={styles.imagePreview}>
-            <Image 
-              source={{ uri: formData.imageUrl }} 
+            <Image
+              source={{ uri: formData.imageUrl }}
               style={styles.previewImage}
               onError={() => Alert.alert('Error', 'Invalid image URL')}
             />
@@ -197,14 +251,69 @@ export default function AdminAddProductScreen({ navigation }) {
           />
         </View>
 
+        {/* Colors */}
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Colors *</Text>
+          <View style={styles.colorSwatchesRow}>
+            {COLOR_PALETTE.map((color) => {
+              const isSelected = formData.colors.includes(color.name);
+              return (
+                <TouchableOpacity
+                  key={color.name}
+                  onPress={() => toggleColor(color.name)}
+                  style={[
+                    styles.colorSwatch,
+                    { backgroundColor: color.hex },
+                    isSelected && styles.colorSwatchSelected,
+                  ]}
+                >
+                  {isSelected && (
+                    <View style={styles.colorCheckBadge}>
+                      <Ionicons name="checkmark" size={10} color="#fff" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Sizes */}
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Sizes *</Text>
+          <View style={styles.sizeChipsRow}>
+            {SIZE_OPTIONS.map((size) => {
+              const isSelected = formData.sizes.includes(size);
+              return (
+                <TouchableOpacity
+                  key={size}
+                  onPress={() => toggleSize(size)}
+                  style={[styles.sizeChip, isSelected && styles.sizeChipActive]}
+                >
+                  <Text style={[styles.sizeChipText, isSelected && styles.sizeChipTextActive]}>
+                    {size}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         {/* Submit Button */}
         <TouchableOpacity
-          style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+          style={[
+            styles.submitButton,
+            (loading || !isConnected) && styles.submitButtonDisabled,
+          ]}
           onPress={handleSubmit}
-          disabled={loading}
+          disabled={loading || !isConnected}
         >
           <Text style={styles.submitButtonText}>
-            {loading ? 'Adding Product...' : 'Add Product'}
+            {loading
+              ? 'Adding Product...'
+              : !isConnected
+              ? 'No Internet Connection'
+              : 'Add Product'}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -303,6 +412,65 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   typeButtonTextActive: {
+    color: '#fff',
+  },
+  colorSwatchesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  colorSwatch: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    // Every swatch always keeps this neutral border, not just an
+    // unselected-state default — otherwise White has no visible edge
+    // against the form's own white/near-white background.
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  colorSwatchSelected: {
+    borderWidth: 2,
+    borderColor: '#007AFF',
+  },
+  colorCheckBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fff',
+  },
+  sizeChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  sizeChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    backgroundColor: '#fff',
+  },
+  sizeChipActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  sizeChipText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  sizeChipTextActive: {
     color: '#fff',
   },
   submitButton: {

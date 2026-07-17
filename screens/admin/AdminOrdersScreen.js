@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   Image,
   Alert,
   TextInput,
@@ -13,6 +12,7 @@ import {
   Modal,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { db } from '../../firebaseConfig';
 import {
@@ -22,6 +22,7 @@ import {
   onSnapshot,
   updateDoc,
 } from 'firebase/firestore';
+import useNetworkStatus from '../../hooks/useNetworkStatus';
 
 const STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
 
@@ -80,6 +81,7 @@ export default function AdminOrdersScreen({ navigation }) {
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [newStatus, setNewStatus] = useState('');
+  const { isConnected } = useNetworkStatus();
 
   useEffect(() => {
     // collectionGroup reads the "orders" subcollection across every user
@@ -167,6 +169,16 @@ export default function AdminOrdersScreen({ navigation }) {
       Alert.alert('Success', `Order status updated to ${getStatusLabel(newStatus)}`);
     } catch (error) {
       console.error('Error updating order status:', error);
+
+      const isNetworkError = !isConnected || error.code === 'unavailable';
+      if (isNetworkError) {
+        Alert.alert(
+          'No Internet Connection',
+          'Network connection lost. Please check your connection and try again.'
+        );
+        return;
+      }
+
       Alert.alert('Error', 'Could not update order status. Please try again.');
     } finally {
       setUpdating(false);
@@ -407,13 +419,20 @@ export default function AdminOrdersScreen({ navigation }) {
 
                 <View style={styles.modalButtons}>
                   <TouchableOpacity
-                    style={[styles.modalButton, styles.updateStatusButton]}
+                    style={[
+                      styles.modalButton,
+                      styles.updateStatusButton,
+                      !isConnected && { opacity: 0.7 },
+                    ]}
                     onPress={() => {
                       setShowOrderModal(false);
                       handleUpdateStatus(selectedOrder);
                     }}
+                    disabled={!isConnected}
                   >
-                    <Text style={styles.updateStatusButtonText}>Update Status</Text>
+                    <Text style={styles.updateStatusButtonText}>
+                      {!isConnected ? 'No Internet Connection' : 'Update Status'}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </ScrollView>
@@ -456,14 +475,24 @@ export default function AdminOrdersScreen({ navigation }) {
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton, updating && { opacity: 0.7 }]}
+                style={[
+                  styles.modalButton,
+                  styles.confirmButton,
+                  (updating || !isConnected) && { opacity: 0.7 },
+                ]}
                 onPress={confirmStatusUpdate}
-                disabled={updating}
+                disabled={updating || !isConnected}
               >
                 {updating ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.confirmButtonText}>Update</Text>
+                  <Text style={styles.confirmButtonText}>
+                    {/* Shortened vs. the full "No Internet Connection" used
+                        elsewhere — this button shares a half-width row with
+                        Cancel, so the longer phrase wrapped awkwardly. The
+                        full explanation still shows in the Alert if tapped. */}
+                    {!isConnected ? 'Offline' : 'Update'}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>

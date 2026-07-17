@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { auth } from '../firebaseConfig';
 import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
+import useNetworkStatus from '../hooks/useNetworkStatus';
 
 // Handles price as "₱450.00", "450", or a plain number 450
 const parsePrice = (price) => {
@@ -32,6 +33,7 @@ export default function CartScreen({ navigation }) {
   // product still exists — the cart item itself keeps its own saved price/name
   // regardless (see note on handleCheckout below).
   const { products } = useProducts();
+  const { isConnected } = useNetworkStatus();
 
   useEffect(() => {
     if (!auth.currentUser) {
@@ -100,8 +102,17 @@ export default function CartScreen({ navigation }) {
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Shopping Cart</Text>
-        <View style={{ width: 40 }} /> 
+        <View style={{ width: 40 }} />
       </View>
+
+      {!isConnected && (
+        <View style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={16} color="#FF3B30" />
+          <Text style={styles.offlineBannerText}>
+            No internet connection — your cart may be outdated.
+          </Text>
+        </View>
+      )}
 
       {loading ? (
         <View style={styles.centerContainer}>
@@ -163,6 +174,17 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#000', textAlign: 'center', flex: 1 },
   backButton: { width: 40 },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFF0EF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#FFD9D6',
+  },
+  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: '#FF3B30' },
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
   listContent: { padding: 20 },
   cartItemCard: {

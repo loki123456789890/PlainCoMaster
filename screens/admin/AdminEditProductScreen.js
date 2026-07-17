@@ -4,19 +4,22 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   Platform,
   Alert,
   ScrollView,
   Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useProducts } from '../../context/ProductContext';
+import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { COLOR_PALETTE, SIZE_OPTIONS } from '../../constants/productOptions';
 
 export default function AdminEditProductScreen({ navigation, route }) {
   const { product } = route.params;
   const { updateProduct, deleteProduct } = useProducts();
+  const { isConnected } = useNetworkStatus();
 
   const [formData, setFormData] = useState({
     name: product.name,
@@ -28,8 +31,31 @@ export default function AdminEditProductScreen({ navigation, route }) {
     // imageUrl field (see ProductContext.js / AdminAddProductScreen.js) —
     // that mismatch was silently leaving this field blank on edit.
     imageUrl: product.imageUrl,
+    // Legacy products predating per-product colors/sizes have no such
+    // field on their doc — pre-select nothing rather than guessing, so
+    // the admin has to make a real choice for them on next save.
+    colors: product.colors || [],
+    sizes: product.sizes || [],
   });
   const [loading, setLoading] = useState(false);
+
+  const toggleColor = (colorName) => {
+    setFormData((prev) => ({
+      ...prev,
+      colors: prev.colors.includes(colorName)
+        ? prev.colors.filter((c) => c !== colorName)
+        : [...prev.colors, colorName],
+    }));
+  };
+
+  const toggleSize = (size) => {
+    setFormData((prev) => ({
+      ...prev,
+      sizes: prev.sizes.includes(size)
+        ? prev.sizes.filter((s) => s !== size)
+        : [...prev.sizes, size],
+    }));
+  };
 
   const handleSubmit = async () => {
     // Validation
@@ -41,7 +67,11 @@ export default function AdminEditProductScreen({ navigation, route }) {
       Alert.alert('Error', 'Please enter product price');
       return;
     }
-    if (parseFloat(formData.price) <= 0) {
+    const parsedPrice = parseFloat(formData.price);
+    // parseFloat("abc") is NaN, and NaN <= 0 is false — a bare <= 0 check
+    // alone would silently let non-numeric input through, so NaN is
+    // checked explicitly rather than relying on the comparison alone.
+    if (Number.isNaN(parsedPrice) || parsedPrice <= 0) {
       Alert.alert('Error', 'Please enter a valid price');
       return;
     }
@@ -53,16 +83,37 @@ export default function AdminEditProductScreen({ navigation, route }) {
       Alert.alert('Error', 'Please enter an image URL');
       return;
     }
+    if (formData.colors.length === 0) {
+      Alert.alert('Error', 'Please select at least one color');
+      return;
+    }
+    if (formData.sizes.length === 0) {
+      Alert.alert('Error', 'Please select at least one size');
+      return;
+    }
 
     setLoading(true);
 
     const result = await updateProduct(product.id, {
       name: formData.name,
-      price: formData.price,
+      // Stored as a real number, same reasoning as stock below —
+      // parseFloat rather than parseInt/Number since price needs to
+      // support decimals (e.g. 299.50). Already validated as a non-NaN,
+      // positive number above, so no further fallback is needed here.
+      // Saving any existing product here also migrates a legacy
+      // string-typed price to a number, same as stock does.
+      price: parsedPrice,
       type: formData.type,
-      stock: formData.stock,
+      // Stored as a real number (not the raw TextInput string) so
+      // firestore.rules can validate checkout's stock decrement with a
+      // plain numeric comparison — see CheckoutScreen.js / firestore.rules.
+      // Saving any existing product here also migrates its stock field
+      // from the old string format to a number.
+      stock: Number(formData.stock) || 0,
       description: formData.description,
       imageUrl: formData.imageUrl,
+      colors: formData.colors,
+      sizes: formData.sizes,
     });
 
     setLoading(false);
@@ -72,6 +123,15 @@ export default function AdminEditProductScreen({ navigation, route }) {
         'Success',
         'Product updated successfully!',
         [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    } else if (!isConnected) {
+      // Same reasoning as AdminAddProductScreen.js: updateProduct()
+      // resolves { success: false, error } rather than throwing, and only
+      // passes along error.message (no error.code), so isConnected is the
+      // only reliable offline signal available in this shape.
+      Alert.alert(
+        'No Internet Connection',
+        'Network connection lost. Please check your connection and try again.'
       );
     } else {
       Alert.alert('Error', 'Failed to update product: ' + result.error);
@@ -134,8 +194,8 @@ export default function AdminEditProductScreen({ navigation, route }) {
         {/* Image Preview */}
         {formData.imageUrl ? (
           <View style={styles.imagePreview}>
-            <Image 
-              source={{ uri: formData.imageUrl }} 
+            <Image
+              source={{ uri: formData.imageUrl }}
               style={styles.previewImage}
               onError={() => Alert.alert('Error', 'Invalid image URL')}
             />
@@ -230,14 +290,69 @@ export default function AdminEditProductScreen({ navigation, route }) {
           />
         </View>
 
+        {/* Colors */}
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Colors *</Text>
+          <View style={styles.colorSwatchesRow}>
+            {COLOR_PALETTE.map((color) => {
+              const isSelected = formData.colors.includes(color.name);
+              return (
+                <TouchableOpacity
+                  key={color.name}
+                  onPress={() => toggleColor(color.name)}
+                  style={[
+                    styles.colorSwatch,
+                    { backgroundColor: color.hex },
+                    isSelected && styles.colorSwatchSelected,
+                  ]}
+                >
+                  {isSelected && (
+                    <View style={styles.colorCheckBadge}>
+                      <Ionicons name="checkmark" size={10} color="#fff" />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* Sizes */}
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Sizes *</Text>
+          <View style={styles.sizeChipsRow}>
+            {SIZE_OPTIONS.map((size) => {
+              const isSelected = formData.sizes.includes(size);
+              return (
+                <TouchableOpacity
+                  key={size}
+                  onPress={() => toggleSize(size)}
+                  style={[styles.sizeChip, isSelected && styles.sizeChipActive]}
+                >
+                  <Text style={[styles.sizeChipText, isSelected && styles.sizeChipTextActive]}>
+                    {size}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         {/* Submit Button */}
         <TouchableOpacity
-          style={[styles.submitButton, loading && styles.submitButtonDisabled]}
+          style={[
+            styles.submitButton,
+            (loading || !isConnected) && styles.submitButtonDisabled,
+          ]}
           onPress={handleSubmit}
-          disabled={loading}
+          disabled={loading || !isConnected}
         >
           <Text style={styles.submitButtonText}>
-            {loading ? 'Saving...' : 'Save Changes'}
+            {loading
+              ? 'Saving...'
+              : !isConnected
+              ? 'No Internet Connection'
+              : 'Save Changes'}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -336,6 +451,65 @@ const styles = StyleSheet.create({
     color: '#666',
   },
   typeButtonTextActive: {
+    color: '#fff',
+  },
+  colorSwatchesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  colorSwatch: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    // Every swatch always keeps this neutral border, not just an
+    // unselected-state default — otherwise White has no visible edge
+    // against the form's own white/near-white background.
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  colorSwatchSelected: {
+    borderWidth: 2,
+    borderColor: '#007AFF',
+  },
+  colorCheckBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#fff',
+  },
+  sizeChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  sizeChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    backgroundColor: '#fff',
+  },
+  sizeChipActive: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  sizeChipText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  sizeChipTextActive: {
     color: '#fff',
   },
   submitButton: {

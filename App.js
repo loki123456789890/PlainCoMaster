@@ -35,6 +35,7 @@ import AdminAddProductScreen from './screens/admin/AdminAddProductScreen';
 import AdminEditProductScreen from './screens/admin/AdminEditProductScreen';
 import AdminOrdersScreen from './screens/admin/AdminOrdersScreen';
 import AdminUsersScreen from './screens/admin/AdminUsersScreen';
+import AdminSupportScreen from './screens/admin/AdminSupportScreen';
 
 LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
 
@@ -51,6 +52,7 @@ const GuardedAdminAddProductScreen = withAdminGuard(AdminAddProductScreen);
 const GuardedAdminEditProductScreen = withAdminGuard(AdminEditProductScreen);
 const GuardedAdminOrdersScreen = withAdminGuard(AdminOrdersScreen);
 const GuardedAdminUsersScreen = withAdminGuard(AdminUsersScreen);
+const GuardedAdminSupportScreen = withAdminGuard(AdminSupportScreen);
 
 export default function App() {
   return (
@@ -114,6 +116,7 @@ export default function App() {
                   <Stack.Screen name="AdminEditProduct" component={GuardedAdminEditProductScreen} />
                   <Stack.Screen name="AdminOrders" component={GuardedAdminOrdersScreen} />
                   <Stack.Screen name="AdminUsers" component={GuardedAdminUsersScreen} />
+                  <Stack.Screen name="AdminSupport" component={GuardedAdminSupportScreen} />
                 </Stack.Navigator>
               </NavigationContainer>
             </CartProvider>

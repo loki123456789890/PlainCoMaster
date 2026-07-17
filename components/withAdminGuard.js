@@ -14,16 +14,24 @@ import { useAdmin } from '../context/AdminContext';
 // deep link.
 export default function withAdminGuard(ScreenComponent) {
   return function GuardedScreen(props) {
-    const { isAdmin } = useAdmin();
+    const { isAdmin, adminLoading } = useAdmin();
     const { navigation } = props;
 
     useEffect(() => {
+      // Don't redirect until AdminContext's persisted-session check has
+      // actually resolved — redirecting while adminLoading is still true
+      // is exactly the bug this guards against (bouncing a
+      // still-authenticated admin before their role has been confirmed).
+      if (adminLoading) return;
       if (!isAdmin) {
         navigation.replace('AdminLogin');
       }
-    }, [isAdmin]);
+    }, [isAdmin, adminLoading]);
 
-    if (!isAdmin) {
+    // Same loading view for both "still checking" and "confirmed not
+    // admin, waiting for the redirect above to take effect" — matches
+    // the original guard's behavior for the latter case exactly.
+    if (adminLoading || !isAdmin) {
       return (
         <View style={styles.container}>
           <ActivityIndicator size="large" color="#007AFF" />

@@ -7,12 +7,14 @@ import {
   ScrollView,
   Image,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { db, auth } from '../firebaseConfig';
-import { collection, doc, getDoc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import useNetworkStatus from '../hooks/useNetworkStatus';
 
 // Handles "$450.00", "450", or 450 — always returns a clean number
 const parsePrice = (price) => {
@@ -22,6 +24,14 @@ const parsePrice = (price) => {
     return parseFloat(cleaned) || 0;
   }
   return 0;
+};
+
+// Some existing products may still have "stock" stored as a string left
+// over from before AdminAddProductScreen/AdminEditProductScreen started
+// saving it as a number — parse defensively so old and new data both work.
+const parseStock = (stock) => {
+  const parsed = parseInt(stock, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
 };
 
 // UI-only, matching the SRS's "payment options are included in the UI
@@ -42,6 +52,8 @@ export default function CheckoutScreen({ navigation, route }) {
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [shippingAddress, setShippingAddress] = useState(null);
   const [loadingAddress, setLoadingAddress] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const { isConnected } = useNetworkStatus();
 
   // Refetch on every focus, not just on mount — this is how we pick up a
   // freshly saved/edited address when the user comes back from LocationScreen.
@@ -116,75 +128,158 @@ export default function CheckoutScreen({ navigation, route }) {
       return;
     }
 
+    // Cart lines don't dedupe by product — the same product can appear as
+    // several separate lines with different size/color (see CartContext's
+    // addToCart). Stock has to be checked/decremented per unique product
+    // using the combined quantity across all of that product's lines, or
+    // two lines of the same product could each pass a stock check
+    // individually while together requesting more than what's in stock —
+    // and worse, two transaction.update() calls to the same doc would
+    // silently drop one of the decrements (last write wins).
+    const quantityByProductId = new Map();
+    orderItems.forEach((item) => {
+      const productId = item.productId || item.id;
+      const qty = item.quantity || 1;
+      quantityByProductId.set(productId, (quantityByProductId.get(productId) || 0) + qty);
+    });
+    const productIds = Array.from(quantityByProductId.keys());
+
+    setSubmitting(true);
+
     try {
-      // Batched write: creating the order and clearing the purchased items
-      // out of the cart happen as one atomic unit — either both succeed or
-      // neither does, so we can never end up with an order placed but the
-      // cart still showing the same items (which would let it be
-      // accidentally checked out a second time).
-      const batch = writeBatch(db);
-
-      const userOrdersRef = collection(db, 'users', auth.currentUser.uid, 'orders');
       // doc() with no id generates a ref with an auto-id without writing
-      // anything yet — addDoc() can't be used here since it writes
-      // immediately and can't be grouped into a batch.
-      const newOrderRef = doc(userOrdersRef);
+      // anything yet — this can happen outside the transaction since it's
+      // just a client-side ref, no read or write involved.
+      const newOrderRef = doc(collection(db, 'users', auth.currentUser.uid, 'orders'));
 
-      const orderData = {
-        // customerId/customerEmail let the admin dashboard identify who placed
-        // this order — the order doc itself lives under users/{uid}/orders,
-        // so the uid is implicit in the path, but the admin's collectionGroup
-        // query reads many users' orders flattened together, where that
-        // context is lost unless we store it directly on the document.
-        customerId: auth.currentUser.uid,
-        customerEmail: auth.currentUser.email || 'unknown',
-        items: orderItems.map((item) => ({
-          productId: item.id || item.productId || 'unknown',
-          name: item.name,
-          price: parsePrice(item.price),
-          quantity: item.quantity || 1,
-          size: item.selectedSize || item.size || null,
-          color: item.selectedColor || item.color || null,
-          image: item.image || item.imageUrl || null,
-        })),
-        subtotal,
-        shipping,
-        total,
-        paymentMethod: selectedPayment,
-        shippingAddress: {
-          fullName: shippingAddress.fullName || '',
-          phone: shippingAddress.phone || '',
-          address: shippingAddress.address || '',
-          city: shippingAddress.city || '',
-          province: shippingAddress.province || '',
-          zipCode: shippingAddress.zipCode || '',
-        },
-        status: 'pending',
-        createdAt: serverTimestamp(),
-      };
+      await runTransaction(db, async (transaction) => {
+        // All reads must happen before any writes in a Firestore
+        // transaction, so every product doc is read up front.
+        const productRefs = productIds.map((id) => doc(db, 'products', id));
+        const productSnaps = await Promise.all(
+          productRefs.map((ref) => transaction.get(ref))
+        );
 
-      batch.set(newOrderRef, orderData);
-
-      // Only items that came from an actual cart document carry a
-      // `productId` field distinct from their own `id` (CartContext's
-      // addToCart writes it explicitly). Buy Now items are a raw spread
-      // of the product object and never had this field, so they're
-      // correctly skipped here — there's no cart entry to clear.
-      orderItems
-        .filter((item) => item.productId && item.id)
-        .forEach((item) => {
-          const cartItemRef = doc(db, 'users', auth.currentUser.uid, 'cart', item.id);
-          batch.delete(cartItemRef);
+        const insufficient = [];
+        productSnaps.forEach((snap, index) => {
+          const productId = productIds[index];
+          const requestedQty = quantityByProductId.get(productId);
+          const availableStock = snap.exists() ? parseStock(snap.data().stock) : 0;
+          if (availableStock < requestedQty) {
+            const matchingItem = orderItems.find(
+              (item) => (item.productId || item.id) === productId
+            );
+            insufficient.push({
+              name: matchingItem?.name || 'This item',
+              available: availableStock,
+              requested: requestedQty,
+            });
+          }
         });
 
-      await batch.commit();
+        if (insufficient.length > 0) {
+          const error = new Error('Insufficient stock for one or more items.');
+          error.insufficientItems = insufficient;
+          throw error;
+        }
+
+        // All items have enough stock — decrement each, create the order,
+        // and clear the corresponding cart items, all in this same
+        // transaction so it's all-or-nothing.
+        productSnaps.forEach((snap, index) => {
+          const productId = productIds[index];
+          const requestedQty = quantityByProductId.get(productId);
+          const availableStock = parseStock(snap.data().stock);
+          // Written as a real number — matches firestore.rules, which
+          // requires both the old and new stock values to be numbers to
+          // allow this decrement (see the products/{productId} rule).
+          transaction.update(productRefs[index], {
+            stock: availableStock - requestedQty,
+          });
+        });
+
+        const orderData = {
+          // customerId/customerEmail let the admin dashboard identify who placed
+          // this order — the order doc itself lives under users/{uid}/orders,
+          // so the uid is implicit in the path, but the admin's collectionGroup
+          // query reads many users' orders flattened together, where that
+          // context is lost unless we store it directly on the document.
+          customerId: auth.currentUser.uid,
+          customerEmail: auth.currentUser.email || 'unknown',
+          items: orderItems.map((item) => ({
+            productId: item.id || item.productId || 'unknown',
+            name: item.name,
+            price: parsePrice(item.price),
+            quantity: item.quantity || 1,
+            size: item.selectedSize || item.size || null,
+            color: item.selectedColor || item.color || null,
+            image: item.image || item.imageUrl || null,
+          })),
+          subtotal,
+          shipping,
+          total,
+          paymentMethod: selectedPayment,
+          shippingAddress: {
+            fullName: shippingAddress.fullName || '',
+            phone: shippingAddress.phone || '',
+            address: shippingAddress.address || '',
+            city: shippingAddress.city || '',
+            province: shippingAddress.province || '',
+            zipCode: shippingAddress.zipCode || '',
+          },
+          status: 'pending',
+          createdAt: serverTimestamp(),
+        };
+
+        transaction.set(newOrderRef, orderData);
+
+        // Only items that came from an actual cart document carry a
+        // `productId` field distinct from their own `id` (CartContext's
+        // addToCart writes it explicitly). Buy Now items are a raw spread
+        // of the product object and never had this field, so they're
+        // correctly skipped here — there's no cart entry to clear.
+        orderItems
+          .filter((item) => item.productId && item.id)
+          .forEach((item) => {
+            const cartItemRef = doc(db, 'users', auth.currentUser.uid, 'cart', item.id);
+            transaction.delete(cartItemRef);
+          });
+      });
 
       Alert.alert('Order Placed', 'Your order has been placed successfully!', [
         { text: 'OK', onPress: () => navigation.navigate('Home') },
       ]);
     } catch (error) {
       console.error('Error placing order:', error);
+
+      if (error.insufficientItems) {
+        const detail = error.insufficientItems
+          .map((i) => `• ${i.name} — only ${i.available} left (${i.requested} requested)`)
+          .join('\n');
+        Alert.alert(
+          'Item(s) No Longer Available',
+          `The following item(s) don't have enough stock:\n\n${detail}\n\nPlease update your cart and try again.`
+        );
+        return;
+      }
+
+      // isConnected reflects our own NetInfo listener at the moment the
+      // transaction failed; error.code === 'unavailable' is Firestore's own
+      // signal for the same thing, in case connectivity dropped mid-request
+      // faster than NetInfo's event fired. Either one means this failure
+      // was a network drop, not a real rejection from the backend.
+      const isNetworkError = !isConnected || error.code === 'unavailable';
+      if (isNetworkError) {
+        Alert.alert(
+          'No Internet Connection',
+          'Network connection lost. Please check your connection and try again.'
+        );
+        return;
+      }
+
       Alert.alert('Error', 'Could not place your order. Please try again.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -292,8 +387,24 @@ export default function CheckoutScreen({ navigation, route }) {
         </View>
       </ScrollView>
 
-      <TouchableOpacity style={styles.placeButton} onPress={handlePlaceOrder}>
-        <Text style={styles.placeButtonText}>Place Order</Text>
+      <TouchableOpacity
+        style={[
+          styles.placeButton,
+          (submitting || !isConnected) && styles.placeButtonDisabled,
+        ]}
+        onPress={handlePlaceOrder}
+        disabled={submitting || !isConnected}
+      >
+        {submitting ? (
+          <View style={styles.placeButtonLoading}>
+            <ActivityIndicator color="#fff" size="small" />
+            <Text style={styles.placeButtonText}>Placing Order...</Text>
+          </View>
+        ) : (
+          <Text style={styles.placeButtonText}>
+            {!isConnected ? 'No Internet Connection' : 'Place Order'}
+          </Text>
+        )}
       </TouchableOpacity>
     </SafeAreaView>
   );
@@ -380,5 +491,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
+  placeButtonDisabled: { backgroundColor: '#ccc' },
+  placeButtonLoading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   placeButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 });

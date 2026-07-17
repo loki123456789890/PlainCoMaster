@@ -5,18 +5,19 @@ import {
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  SafeAreaView,
   Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { auth, db } from '../../firebaseConfig';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { useAdmin } from '../../context/AdminContext';
+import useNetworkStatus from '../../hooks/useNetworkStatus';
 
 export default function AdminLoginScreen({ navigation }) {
   const { loginAsAdmin } = useAdmin();
@@ -24,6 +25,7 @@ export default function AdminLoginScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const { isConnected } = useNetworkStatus();
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -84,7 +86,9 @@ export default function AdminLoginScreen({ navigation }) {
 
       // Firebase error codes -> friendly messages
       let message = 'Could not sign in. Please try again.';
-      if (
+      if (error.code === 'auth/network-request-failed') {
+        message = 'No internet connection. Please check your connection and try again.';
+      } else if (
         error.code === 'auth/invalid-credential' ||
         error.code === 'auth/wrong-password' ||
         error.code === 'auth/user-not-found'
@@ -160,8 +164,21 @@ export default function AdminLoginScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity style={styles.loginButton} onPress={handleLogin} disabled={loading}>
-              {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginButtonText}>Login as Admin</Text>}
+            <TouchableOpacity
+              style={[
+                styles.loginButton,
+                (loading || !isConnected) && styles.loginButtonDisabled,
+              ]}
+              onPress={handleLogin}
+              disabled={loading || !isConnected}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.loginButtonText}>
+                  {!isConnected ? 'No Internet Connection' : 'Login as Admin'}
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
 
@@ -241,12 +258,15 @@ const styles = StyleSheet.create({
     fontSize: 14, 
     color: '#000' 
   },
-  loginButton: { 
-    backgroundColor: '#007AFF', 
-    borderRadius: 12, 
-    paddingVertical: 14, 
-    alignItems: 'center', 
-    marginTop: 8 
+  loginButton: {
+    backgroundColor: '#007AFF',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 8
+  },
+  loginButtonDisabled: {
+    backgroundColor: '#ccc',
   },
   loginButtonText: { 
     color: '#fff', 

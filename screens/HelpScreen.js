@@ -118,8 +118,8 @@ const faqCategories = [
       },
       {
         id: 'a2',
-        question: 'How do I delete my account?',
-        answer: 'To delete your account, please contact our support team. Note that this action is permanent and will remove all your order history and saved information.',
+        question: 'How do I deactivate my account?',
+        answer: 'You can deactivate your account from your Profile screen. Your account will be disabled and you will be signed out, and you will not be able to sign in again. Your personal information is retained only as required for order and transaction records — deactivation does not erase past orders. If you need further action on your data, send us a message through the Contact Support form below.',
       },
       {
         id: 'a3',

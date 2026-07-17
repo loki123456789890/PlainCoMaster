@@ -59,6 +59,8 @@ export const ProductProvider = ({ children }) => {
         stock: productData.stock,
         description: productData.description || '',
         imageUrl: productData.imageUrl,
+        colors: productData.colors || [],
+        sizes: productData.sizes || [],
         createdAt: serverTimestamp(),
       });
       return { success: true, product: { id: docRef.id, ...productData } };
