@@ -8,7 +8,8 @@ import {
   FlatList,
   Platform,
   Image,
-  ActivityIndicator
+  ActivityIndicator,
+  TextInput
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -46,6 +47,7 @@ export default function ShopScreen({ navigation, route }) {
   const { products, loading } = useProducts();
   const { cartCount } = useCart();
   const [activeFilter, setActiveFilter] = useState(route.params?.filterType || 'all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // If Home navigates here again with a different filterType while this screen
   // is already mounted (rather than freshly pushed), keep activeFilter synced.
@@ -55,10 +57,21 @@ export default function ShopScreen({ navigation, route }) {
     }
   }, [route.params?.filterType]);
 
-  const filteredProducts =
-    activeFilter === 'all'
-      ? products
-      : products.filter((p) => p.type === activeFilter);
+  // Category tab and search compose together (AND), not either/or — typing
+  // a search term never resets or bypasses whichever tab is currently
+  // selected. Filters over the already-fetched in-memory `products` list
+  // from ProductContext, same as AdminUsersScreen filters its own
+  // already-fetched `users` array — no new Firestore query.
+  const query = searchQuery.trim().toLowerCase();
+  const filteredProducts = products
+    .filter((p) => activeFilter === 'all' || p.type === activeFilter)
+    .filter((p) => {
+      if (!query) return true;
+      return (
+        p.name?.toLowerCase().includes(query) ||
+        p.type?.toLowerCase().includes(query)
+      );
+    });
 
   const renderCartIcon = () => (
     <View style={styles.cartIconWrapper}>
@@ -119,6 +132,24 @@ export default function ShopScreen({ navigation, route }) {
     </View>
   );
 
+  const renderSearchBar = () => (
+    <View style={styles.searchContainer}>
+      <Ionicons name="search-outline" size={20} color="#999" style={styles.searchIcon} />
+      <TextInput
+        style={styles.searchInput}
+        placeholder="Search products..."
+        placeholderTextColor="#999"
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+      />
+      {searchQuery.length > 0 && (
+        <TouchableOpacity onPress={() => setSearchQuery('')}>
+          <Ionicons name="close-circle" size={20} color="#999" />
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+
   const renderFilterTabs = () => (
     <View style={styles.filterRow}>
       {filterTabs.map((tab) => {
@@ -173,14 +204,23 @@ export default function ShopScreen({ navigation, route }) {
       <ScrollView showsVerticalScrollIndicator={false}>
         {renderMenuRow()}
 
+        {renderSearchBar()}
+
         {renderFilterTabs()}
 
         {filteredProducts.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Ionicons name="cube-outline" size={80} color="#ccc" />
             <Text style={styles.emptyText}>
-              {activeFilter === 'all' ? 'No products available' : 'No products in this category yet'}
+              {query
+                ? 'No products found'
+                : activeFilter === 'all'
+                ? 'No products available'
+                : 'No products in this category yet'}
             </Text>
+            {query ? (
+              <Text style={styles.emptySubtext}>Try a different search term</Text>
+            ) : null}
           </View>
         ) : (
           <FlatList
@@ -203,6 +243,7 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: 12, fontSize: 14, color: '#666' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingTop: 100, paddingBottom: 40 },
   emptyText: { fontSize: 16, color: '#999', marginTop: 16 },
+  emptySubtext: { fontSize: 14, color: '#999', marginTop: 8, textAlign: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -250,6 +291,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#F2F2F7',
   },
   menuButtonLabel: { fontSize: 13, fontWeight: '600', color: '#000' },
+  // Same search bar pattern as AdminUsersScreen.js.
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9F9FB',
+    marginHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    height: 44,
+    fontSize: 14,
+    color: '#000',
+  },
   filterRow: {
     flexDirection: 'row',
     paddingHorizontal: 20,
