@@ -4,12 +4,21 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   ScrollView,
-  Alert,
   Modal,
-  Platform,
-  ActivityIndicator
+  ActivityIndicator,
 } from 'react-native';
+import { showAppAlert } from '../utils/appAlert';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  useReducedMotion,
+  FadeIn,
+  FadeInDown,
+} from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -19,15 +28,137 @@ import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import { useAdmin } from '../context/AdminContext';
 import useNetworkStatus from '../hooks/useNetworkStatus';
+import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import AnimatedPressable from '../components/ui/AnimatedPressable';
+import SkeletonBlock from '../components/ui/Skeleton';
+import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+
+// Loading placeholder shaped like the real identity block (avatar + two
+// text lines), so there's no layout shift once the account data resolves —
+// same reasoning as OrdersSkeleton/CartSkeleton. Replaces the old
+// name: 'Loading...' placeholder text, which read as an unfinished string
+// rather than a deliberate loading state.
+function ProfileSkeleton() {
+  return (
+    <View style={styles.profileSection}>
+      <SkeletonBlock style={styles.avatarSkeleton} />
+      <SkeletonBlock style={[styles.skeletonLine, styles.skeletonNameLine]} />
+      <SkeletonBlock style={[styles.skeletonLine, styles.skeletonEmailLine]} />
+    </View>
+  );
+}
+
+// One account menu row: a tinted icon circle, a label, and a chevron (or a
+// trailing element in its place, e.g. a spinner). A shared shape for every
+// row on this screen — Orders, Favorites, Privacy Policy, Admin Portal,
+// Logout, and Deactivate all render through this so the menu reads as one
+// consistent list rather than several one-off treatments.
+function MenuRow({
+  icon,
+  iconColor,
+  circleColor,
+  label,
+  labelColor,
+  onPress,
+  disabled,
+  trailing,
+  accessibilityLabel,
+  accessibilityHint,
+  style,
+  index = 0,
+  reduceMotion,
+}) {
+  return (
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index, 8) * 40).duration(220).easing(EASE_OUT_QUART)}
+    >
+      <AnimatedPressable
+        onPress={onPress}
+        disabled={disabled}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel || label}
+        accessibilityHint={accessibilityHint}
+        accessibilityState={{ disabled: Boolean(disabled) }}
+      >
+        <Card variant="flat" style={[styles.menuCard, style]}>
+          <View style={[styles.menuIconCircle, { backgroundColor: circleColor }]}>
+            <Ionicons name={icon} size={20} color={iconColor} />
+          </View>
+          <Text style={[styles.menuLabel, labelColor && { color: labelColor }]}>{label}</Text>
+          {trailing}
+        </Card>
+      </AnimatedPressable>
+    </Animated.View>
+  );
+}
+
+// Shared confirmation dialog for Logout and Deactivate. Rendered only while
+// `visible` so its entrance animation replays fresh every time it opens
+// (React Native's <Modal> keeps its children mounted even while hidden, so
+// a mount-triggered `entering` prop would otherwise only ever fire once).
+function ConfirmDialog({
+  visible,
+  onClose,
+  title,
+  children,
+  confirmLabel,
+  confirmVariant = 'primary',
+  onConfirm,
+  loading,
+  confirmDisabled,
+  cancelDisabled,
+  reduceMotion,
+}) {
+  if (!visible) return null;
+
+  return (
+    <Modal
+      transparent
+      visible
+      animationType="fade"
+      onRequestClose={() => {
+        if (!cancelDisabled) onClose();
+      }}
+    >
+      <View style={styles.modalOverlay}>
+        <Animated.View
+          style={styles.modalContent}
+          entering={reduceMotion ? undefined : FadeIn.duration(200).easing(EASE_OUT_QUART)}
+        >
+          <Text style={styles.modalTitle}>{title}</Text>
+          {children}
+          <View style={styles.modalButtons}>
+            <View style={styles.modalButtonWrap}>
+              <Button variant="secondary" label="Cancel" onPress={onClose} disabled={cancelDisabled} />
+            </View>
+            <View style={styles.modalButtonWrap}>
+              <Button
+                variant={confirmVariant}
+                label={confirmLabel}
+                onPress={onConfirm}
+                loading={loading}
+                disabled={confirmDisabled}
+              />
+            </View>
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
 
 export default function ProfileScreen({ navigation }) {
-  const [userData, setUserData] = useState({ name: 'Loading...', email: '' });
+  const [userData, setUserData] = useState({ name: '', email: '' });
+  const [loadingProfile, setLoadingProfile] = useState(true);
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
   const [deactivateVisible, setDeactivateVisible] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
   const { isAdmin, adminLoading } = useAdmin();
   const { isConnected } = useNetworkStatus();
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
     const user = auth.currentUser;
@@ -52,6 +183,8 @@ export default function ProfileScreen({ navigation }) {
       } catch (error) {
         console.error("Error fetching user data:", error);
         setUserData({ name: user.displayName || 'User', email: user.email });
+      } finally {
+        setLoadingProfile(false);
       }
     };
     fetchUserData();
@@ -64,7 +197,12 @@ export default function ProfileScreen({ navigation }) {
   // isAdmin is still unresolved — that's exactly the race that used to
   // send a real admin back to AdminLogin.
   const handleAdminPortalPress = () => {
+    Haptics.selectionAsync();
     navigation.navigate(isAdmin ? 'AdminDashboard' : 'AdminLogin');
+  };
+
+  const handleOpenLogout = () => {
+    setLogoutVisible(true);
   };
 
   const handleLogout = async () => {
@@ -75,8 +213,13 @@ export default function ProfileScreen({ navigation }) {
       navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
     } catch (error) {
       setLogoutVisible(false);
-      Alert.alert("Error", "Failed to log out. Please try again.");
+      showAppAlert("Error", "Failed to log out. Please try again.");
     }
+  };
+
+  const handleOpenDeactivate = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setDeactivateVisible(true);
   };
 
   const handleDeactivateAccount = async () => {
@@ -108,134 +251,143 @@ export default function ProfileScreen({ navigation }) {
 
       const isNetworkError = !isConnected || error.code === 'unavailable';
       if (isNetworkError) {
-        Alert.alert(
+        showAppAlert(
           'No Internet Connection',
           'Network connection lost. Please check your connection and try again.'
         );
       } else {
-        Alert.alert('Error', 'Could not deactivate your account. Please try again.');
+        showAppAlert('Error', 'Could not deactivate your account. Please try again.');
       }
     }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <Modal
-        animationType="fade"
-        transparent={true}
+      <ConfirmDialog
         visible={logoutVisible}
-        onRequestClose={() => setLogoutVisible(false)}
+        onClose={() => setLogoutVisible(false)}
+        title="Logout"
+        confirmLabel="Logout"
+        confirmVariant="primary"
+        onConfirm={handleLogout}
+        reduceMotion={reduceMotion}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Logout</Text>
-            <Text style={styles.modalMessage}>Are you sure you want to log out?</Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setLogoutVisible(false)}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={handleLogout}
-              >
-                <Text style={styles.confirmButtonText}>Logout</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        <Text style={styles.modalMessage}>Are you sure you want to log out?</Text>
+      </ConfirmDialog>
 
       <PrivacyPolicyModal
         visible={privacyPolicyVisible}
         onClose={() => setPrivacyPolicyVisible(false)}
       />
 
-      <Modal
-        animationType="fade"
-        transparent={true}
+      <ConfirmDialog
         visible={deactivateVisible}
-        onRequestClose={() => {
-          if (!deactivating) setDeactivateVisible(false);
-        }}
+        onClose={() => setDeactivateVisible(false)}
+        title="Deactivate Account"
+        confirmLabel={!isConnected ? 'Offline' : 'Deactivate'}
+        confirmVariant="danger"
+        onConfirm={handleDeactivateAccount}
+        loading={deactivating}
+        confirmDisabled={deactivating || !isConnected}
+        cancelDisabled={deactivating}
+        reduceMotion={reduceMotion}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Deactivate Account</Text>
-            <Text style={styles.deactivateModalMessage}>
-              Your account will be disabled and you will be signed out. You will
-              not be able to sign in again. Your personal information is
-              retained only as required for order and transaction records. To
-              request further action on your data, contact the Store Manager
-              through the Help Center.
-            </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setDeactivateVisible(false)}
-                disabled={deactivating}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.modalButton,
-                  styles.confirmButton,
-                  (deactivating || !isConnected) && { opacity: 0.7 },
-                ]}
-                onPress={handleDeactivateAccount}
-                disabled={deactivating || !isConnected}
-              >
-                {deactivating ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.confirmButtonText}>
-                    {!isConnected ? 'Offline' : 'Deactivate'}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        <Text style={styles.deactivateModalMessage}>
+          Your account will be disabled and you will be signed out. You will
+          not be able to sign in again. Your personal information is
+          retained only as required for order and transaction records. To
+          request further action on your data, contact the Store Manager
+          through the Help Center.
+        </Text>
+      </ConfirmDialog>
 
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={24} color="#000" />
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Profile</Text>
-        <View style={{ width: 24 }} />
+        <TouchableOpacity
+          onPress={() => navigation.navigate('Help')}
+          style={styles.headerAction}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Get help"
+        >
+          <Ionicons name="help-circle-outline" size={24} color={Colors.light.tint} />
+        </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content}>
-        <View style={styles.profileSection}>
-          <View style={styles.avatar}>
-            <Ionicons name="person" size={60} color="#8B6F47" />
-          </View>
-          <Text style={styles.name}>{userData.name}</Text>
-          <Text style={styles.email}>{userData.email}</Text>
+      {!isConnected && (
+        <View style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
+          <Text style={styles.offlineBannerText}>
+            No internet connection — some account actions are unavailable.
+          </Text>
         </View>
+      )}
 
-        <View style={styles.menuSection}>
-          <TouchableOpacity style={styles.menuItem} onPress={() => navigation.navigate('Orders')}>
-            <Ionicons name="document-text-outline" size={24} color="#666" />
-            <Text style={styles.menuLabel}>My Orders</Text>
-            <Ionicons name="chevron-forward" size={20} color="#ccc" />
-          </TouchableOpacity>
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        {loadingProfile ? (
+          <ProfileSkeleton />
+        ) : (
+          <Animated.View
+            style={styles.profileSection}
+            entering={reduceMotion ? undefined : FadeIn.duration(240).easing(EASE_OUT_QUART)}
+            accessible
+            accessibilityLabel={`Signed in as ${userData.name}, ${userData.email}`}
+          >
+            <View style={styles.avatar}>
+              <Ionicons name="person" size={56} color={Colors.light.tint} />
+            </View>
+            <Text style={styles.name}>{userData.name}</Text>
+            <Text style={styles.email}>{userData.email}</Text>
+          </Animated.View>
+        )}
 
-          <TouchableOpacity style={styles.menuItem} onPress={() => navigation.navigate('Favorites')}>
-            <Ionicons name="heart-outline" size={24} color="#666" />
-            <Text style={styles.menuLabel}>Favorites</Text>
-            <Ionicons name="chevron-forward" size={20} color="#ccc" />
-          </TouchableOpacity>
+        <View style={styles.menuContent}>
+          <Text style={styles.sectionTitle}>Account</Text>
 
-          <TouchableOpacity style={styles.menuItem} onPress={() => setPrivacyPolicyVisible(true)}>
-            <Ionicons name="shield-outline" size={24} color="#666" />
-            <Text style={styles.menuLabel}>Privacy Policy</Text>
-            <Ionicons name="chevron-forward" size={20} color="#ccc" />
-          </TouchableOpacity>
+          <MenuRow
+            index={0}
+            icon="document-text-outline"
+            iconColor={Colors.light.icon}
+            circleColor={Colors.light.border}
+            label="My Orders"
+            onPress={() => navigation.navigate('Orders')}
+            accessibilityHint="Opens your order history"
+            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
+            reduceMotion={reduceMotion}
+          />
+
+          <MenuRow
+            index={1}
+            icon="heart-outline"
+            iconColor={Colors.light.icon}
+            circleColor={Colors.light.border}
+            label="Favorites"
+            onPress={() => navigation.navigate('Favorites')}
+            accessibilityHint="Opens your saved items"
+            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
+            reduceMotion={reduceMotion}
+          />
+
+          <MenuRow
+            index={2}
+            icon="shield-outline"
+            iconColor={Colors.light.icon}
+            circleColor={Colors.light.border}
+            label="Privacy Policy"
+            onPress={() => setPrivacyPolicyVisible(true)}
+            accessibilityHint="Opens the privacy policy"
+            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
+            reduceMotion={reduceMotion}
+          />
 
           {/* Stays visible and reachable for everyone, admin or not —
               AdminLoginScreen has to remain the one in-app entry point to
@@ -243,36 +395,57 @@ export default function ProfileScreen({ navigation }) {
               still only ever lands on AdminLogin and can't get further;
               that's already enforced by Firestore rules + withAdminGuard,
               not by hiding this row. */}
-          <TouchableOpacity
-            style={[styles.menuItem, styles.adminItem]}
+          <MenuRow
+            index={3}
+            icon="shield-checkmark"
+            iconColor={Colors.light.tint}
+            circleColor={Colors.light.tint + '15'}
+            label="Admin Portal"
+            labelColor={Colors.light.tint}
             onPress={handleAdminPortalPress}
             disabled={adminLoading}
-          >
-            <Ionicons name="shield-checkmark" size={24} color="#007AFF" />
-            <Text style={[styles.menuLabel, styles.adminLabel]}>Admin Portal</Text>
-            {adminLoading ? (
-              <ActivityIndicator size="small" color="#007AFF" />
-            ) : (
-              <Ionicons name="chevron-forward" size={20} color="#007AFF" />
-            )}
-          </TouchableOpacity>
+            accessibilityHint="Opens the admin portal"
+            style={styles.adminCard}
+            trailing={
+              adminLoading ? (
+                <ActivityIndicator size="small" color={Colors.light.tint} />
+              ) : (
+                <Ionicons name="chevron-forward" size={20} color={Colors.light.tint} />
+              )
+            }
+            reduceMotion={reduceMotion}
+          />
 
-          <TouchableOpacity style={[styles.menuItem, styles.logoutItem]} onPress={() => setLogoutVisible(true)}>
-            <Ionicons name="log-out-outline" size={24} color="#FF3B30" />
-            <Text style={[styles.menuLabel, styles.logoutLabel]}>Logout</Text>
-          </TouchableOpacity>
+          <View style={styles.sessionSection}>
+            <MenuRow
+              index={4}
+              icon="log-out-outline"
+              iconColor={Colors.light.danger}
+              circleColor={Colors.light.danger + '12'}
+              label="Logout"
+              labelColor={Colors.light.danger}
+              onPress={handleOpenLogout}
+              accessibilityHint="Signs you out of your account"
+              reduceMotion={reduceMotion}
+            />
 
-          {/* Deliberately separated from the rest of the menu (extra top
-              margin, no chevron) and placed last — this is irreversible
-              from the user's side, so it shouldn't sit where a normal
-              settings row would be tapped by accident. */}
-          <TouchableOpacity
-            style={[styles.menuItem, styles.deactivateItem]}
-            onPress={() => setDeactivateVisible(true)}
-          >
-            <Ionicons name="person-remove-outline" size={24} color="#FF3B30" />
-            <Text style={[styles.menuLabel, styles.deactivateLabel]}>Deactivate My Account</Text>
-          </TouchableOpacity>
+            {/* Deliberately separated from Logout above (extra top margin) and
+                placed last — this is irreversible from the user's side, so it
+                shouldn't sit where a normal settings row would be tapped by
+                accident. */}
+            <MenuRow
+              index={5}
+              icon="person-remove-outline"
+              iconColor={Colors.light.danger}
+              circleColor={Colors.light.danger + '12'}
+              label="Deactivate My Account"
+              labelColor={Colors.light.danger}
+              onPress={handleOpenDeactivate}
+              accessibilityHint="Opens a confirmation to deactivate your account"
+              style={styles.deactivateCard}
+              reduceMotion={reduceMotion}
+            />
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -280,54 +453,108 @@ export default function ProfileScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: Colors.light.background },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: Colors.light.border,
   },
-  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#000' },
+  backButton: { width: 40, height: 40, justifyContent: 'center' },
+  headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
+  headerAction: { width: 40, height: 40, justifyContent: 'center', alignItems: 'flex-end' },
+
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.light.danger + '15',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.danger + '40',
+  },
+  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
+
   content: { flex: 1 },
-  profileSection: { alignItems: 'center', paddingVertical: 30, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  avatar: { width: 100, height: 100, borderRadius: 50, backgroundColor: '#f0f0f0', justifyContent: 'center', alignItems: 'center', marginBottom: 15 },
-  name: { fontSize: 20, fontWeight: 'bold', color: '#000' },
-  email: { fontSize: 14, color: '#666', marginTop: 5 },
-  menuSection: { paddingVertical: 10 },
-  menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  menuLabel: { fontSize: 16, color: '#000', flex: 1, marginLeft: 15 },
-  logoutItem: { marginTop: 10 },
-  logoutLabel: { color: '#FF3B30' },
-  // Extra top margin (more than logoutItem's) and no border-bottom on its
-  // own row — this needs to read as clearly separate from Logout right
-  // above it, not just another item in the same list.
-  deactivateItem: { marginTop: 24, borderBottomWidth: 0 },
-  deactivateLabel: { color: '#FF3B30' },
-  adminItem: { backgroundColor: '#F9F9FB' },
-  adminLabel: { color: '#007AFF', fontWeight: '500' },
+
+  // Identity block — kept full-bleed under the header (not inset with the
+  // menu below) so it reads as the screen's one hero moment, the same way
+  // Home's greeting + hero photo sit outside its padded content sections.
+  profileSection: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xl,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  avatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: Colors.light.tint + '15',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+  },
+  name: { fontSize: 19, fontWeight: '700', color: Colors.light.text },
+  email: { fontSize: 14, color: Colors.light.icon, marginTop: 4 },
+
+  avatarSkeleton: { width: 100, height: 100, borderRadius: 50, marginBottom: Spacing.md },
+  skeletonLine: { height: 14, borderRadius: 4, marginTop: 6 },
+  skeletonNameLine: { width: 140 },
+  skeletonEmailLine: { width: 180, height: 12 },
+
+  menuContent: { paddingHorizontal: 20, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl },
+  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: Colors.light.text, marginBottom: 12 },
+
+  menuCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    padding: 12,
+    marginBottom: 10,
+  },
+  menuIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuLabel: { fontSize: 15, fontWeight: '600', color: Colors.light.text, flex: 1 },
+
+  adminCard: { backgroundColor: Colors.light.tint + '0D', borderColor: Colors.light.tint + '30' },
+
+  sessionSection: { marginTop: Spacing.lg },
+  deactivateCard: { marginTop: 14, marginBottom: 0 },
+
+  // Confirmation dialogs
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { width: '80%', backgroundColor: '#fff', borderRadius: 20, padding: 25, alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 10 },
-  modalMessage: { fontSize: 16, color: '#666', textAlign: 'center', marginBottom: 25 },
+  modalContent: {
+    width: '85%',
+    backgroundColor: Colors.light.background,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
+    alignItems: 'center',
+    ...Shadow.card,
+  },
+  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 10, color: Colors.light.text },
+  modalMessage: { fontSize: 15, color: Colors.light.icon, textAlign: 'center', marginBottom: Spacing.lg },
   // Left-aligned and smaller than modalMessage — this dialog's copy is a
   // full paragraph the user actually needs to read and understand (privacy
   // implications), not a short one-line confirmation, so centered text
   // would be harder to read here.
   deactivateModalMessage: {
     fontSize: 14,
-    color: '#666',
+    color: Colors.light.icon,
     textAlign: 'left',
     lineHeight: 20,
-    marginBottom: 25,
+    marginBottom: Spacing.lg,
     alignSelf: 'stretch',
   },
-  modalButtons: { flexDirection: 'row', width: '100%', justifyContent: 'space-between' },
-  modalButton: { flex: 0.45, paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
-  cancelButton: { backgroundColor: '#f0f0f0' },
-  confirmButton: { backgroundColor: '#FF3B30' },
-  cancelButtonText: { color: '#000', fontWeight: '600' },
-  confirmButtonText: { color: '#fff', fontWeight: '600' },
+  modalButtons: { flexDirection: 'row', width: '100%', gap: 12 },
+  modalButtonWrap: { flex: 1 },
 });

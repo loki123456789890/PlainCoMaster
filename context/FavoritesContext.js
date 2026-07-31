@@ -18,6 +18,13 @@ export const useFavorites = () => useContext(FavoritesContext);
 export const FavoritesProvider = ({ children }) => {
   const [favorites, setFavorites] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  // Bumped by retryFetchFavorites() to force the effect below to tear down
+  // and re-establish the onSnapshot subscription — same recovery pattern as
+  // ProductContext's retryToken, for the same reason: a listener that fails
+  // outright on its first subscribe (e.g. no connectivity at mount) doesn't
+  // self-heal on its own.
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
     // This provider wraps the whole app once at launch and never remounts,
@@ -37,11 +44,13 @@ export const FavoritesProvider = ({ children }) => {
       if (!user) {
         setFavorites([]);
         setLoading(false);
+        setError(null);
         unsubscribeFavorites = () => {};
         return;
       }
 
       setLoading(true);
+      setError(null);
       const favoritesRef = collection(db, 'users', user.uid, 'favorites');
       unsubscribeFavorites = onSnapshot(
         favoritesRef,
@@ -52,9 +61,11 @@ export const FavoritesProvider = ({ children }) => {
           }));
           setFavorites(fetched);
           setLoading(false);
+          setError(null);
         },
-        (error) => {
-          console.error('Error fetching favorites:', error);
+        (err) => {
+          console.error('Error fetching favorites:', err);
+          setError(err);
           setLoading(false);
         }
       );
@@ -64,7 +75,9 @@ export const FavoritesProvider = ({ children }) => {
       unsubscribeAuth();
       unsubscribeFavorites();
     };
-  }, []);
+  }, [retryToken]);
+
+  const retryFetchFavorites = () => setRetryToken((t) => t + 1);
 
   const toggleFavorite = async (product) => {
     if (!auth.currentUser) {
@@ -129,9 +142,11 @@ export const FavoritesProvider = ({ children }) => {
     <FavoritesContext.Provider value={{
       favorites,
       loading,
+      error,
       toggleFavorite,
       isFavorite,
       refreshFavorites,
+      retryFetchFavorites,
     }}>
       {children}
     </FavoritesContext.Provider>

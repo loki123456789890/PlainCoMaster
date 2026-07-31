@@ -1,29 +1,57 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
   Image,
-  Alert,
   TextInput,
-  ActivityIndicator,
   Modal,
   Platform,
   RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { showAppAlert } from '../../utils/appAlert';
+import Animated, { useReducedMotion, FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useProducts } from '../../context/ProductContext';
+import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { Colors, Radius } from '../../constants/theme';
+import { EASE_OUT_QUART } from '../../constants/motion';
+import Badge from '../../components/ui/Badge';
+import EmptyState from '../../components/ui/EmptyState';
+import Card from '../../components/ui/Card';
+import Button from '../../components/ui/Button';
+import AnimatedPressable from '../../components/ui/AnimatedPressable';
+import SkeletonBlock from '../../components/ui/Skeleton';
+
+// Shaped like a real product row so the loading state previews the content
+// that's about to arrive, matching the skeleton treatment every other admin
+// list screen (Orders, Users, Support) already uses.
+function ProductCardSkeleton() {
+  return (
+    <Card variant="flat" style={styles.productCard}>
+      <SkeletonBlock style={styles.productImageSkeleton} />
+      <View style={styles.productInfo}>
+        <SkeletonBlock style={{ width: '85%', height: 14, borderRadius: Radius.sm, marginBottom: 8 }} />
+        <SkeletonBlock style={{ width: 54, height: 18, borderRadius: Radius.pill, marginBottom: 8 }} />
+        <SkeletonBlock style={{ width: '40%', height: 11, borderRadius: Radius.sm }} />
+      </View>
+    </Card>
+  );
+}
 
 export default function AdminProductsScreen({ navigation }) {
-  const { products, loading, deleteProduct, refreshProducts } = useProducts();
+  const { products, loading, error, deleteProduct, refreshProducts, retryFetchProducts } = useProducts();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { isConnected } = useNetworkStatus();
+  const reduceMotion = useReducedMotion();
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -37,167 +65,221 @@ export default function AdminProductsScreen({ navigation }) {
   );
 
   const handleDelete = (product) => {
+    Haptics.selectionAsync();
     setSelectedProduct(product);
     setShowDeleteModal(true);
   };
 
   const confirmDelete = async () => {
     if (!selectedProduct || !selectedProduct.id) {
-      Alert.alert('Error', 'No product selected for deletion');
+      showAppAlert('Error', 'No product selected for deletion');
       setShowDeleteModal(false);
       return;
     }
-    
+
+    setDeleting(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const result = await deleteProduct(selectedProduct.id);
+    setDeleting(false);
     setShowDeleteModal(false);
     setSelectedProduct(null);
-    
+
     if (result.success) {
-      Alert.alert('Success', 'Product deleted successfully');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showAppAlert('Success', 'Product deleted successfully');
     } else {
-      Alert.alert('Error', 'Failed to delete product: ' + result.error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showAppAlert('Error', 'Failed to delete product: ' + result.error);
     }
   };
 
   const handleView = (product) => {
+    Haptics.selectionAsync();
     setSelectedProduct(product);
     setShowViewModal(true);
-  };
-
-  const getTypeBadgeStyle = (type) => {
-    if (type === 'ukay-ukay') {
-      return { backgroundColor: '#FF6B6B20', color: '#FF6B6B' };
-    }
-    return { backgroundColor: '#4CAF5020', color: '#4CAF50' };
   };
 
   const getTypeLabel = (type) => {
     return type === 'ukay-ukay' ? 'Ukay-Ukay' : 'Ready to Wear';
   };
 
-  if (loading && !refreshing) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#000" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Manage Products</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('AdminAddProduct')}>
-            <Ionicons name="add-circle-outline" size={24} color="#007AFF" />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Loading products...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#000" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Manage Products</Text>
-        <TouchableOpacity onPress={() => navigation.navigate('AdminAddProduct')}>
-          <Ionicons name="add-circle-outline" size={24} color="#007AFF" />
-        </TouchableOpacity>
+        <AnimatedPressable
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+        </AnimatedPressable>
+        <Text style={styles.headerTitle} accessibilityRole="header">Manage Products</Text>
+        <AnimatedPressable
+          onPress={() => navigation.navigate('AdminAddProduct')}
+          style={styles.addButton}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Add product"
+        >
+          <Ionicons name="add-circle-outline" size={24} color={Colors.light.tint} />
+        </AnimatedPressable>
       </View>
 
+      {!isConnected && (
+        <View style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
+          <Text style={styles.offlineBannerText}>
+            No internet connection — product data may be out of date.
+          </Text>
+        </View>
+      )}
+
       {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <Ionicons name="search-outline" size={20} color="#999" style={styles.searchIcon} />
+      <Animated.View
+        style={styles.searchContainer}
+        entering={reduceMotion ? undefined : FadeInDown.duration(240).easing(EASE_OUT_QUART)}
+      >
+        <Ionicons name="search-outline" size={20} color={Colors.light.icon} style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
           placeholder="Search products..."
-          placeholderTextColor="#999"
+          placeholderTextColor={Colors.light.icon}
           value={searchQuery}
           onChangeText={setSearchQuery}
+          accessibilityLabel="Search products by name or type"
         />
         {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <Ionicons name="close-circle" size={20} color="#999" />
-          </TouchableOpacity>
+          <AnimatedPressable
+            onPress={() => setSearchQuery('')}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+          >
+            <Ionicons name="close-circle" size={20} color={Colors.light.icon} />
+          </AnimatedPressable>
         )}
-      </View>
+      </Animated.View>
 
       {/* Stats Summary */}
-      <View style={styles.statsContainer}>
-        <View style={styles.statBox}>
+      <Animated.View
+        style={styles.statsContainer}
+        entering={reduceMotion ? undefined : FadeIn.duration(220)}
+      >
+        <Card variant="flat" style={styles.statBox}>
           <Text style={styles.statNumber}>{products.length}</Text>
           <Text style={styles.statLabel}>Total Products</Text>
-        </View>
-        <View style={styles.statBox}>
+        </Card>
+        <Card variant="flat" style={styles.statBox}>
           <Text style={styles.statNumber}>
             {products.filter(p => p.type === 'ready-to-wear').length}
           </Text>
           <Text style={styles.statLabel}>Ready to Wear</Text>
-        </View>
-        <View style={styles.statBox}>
+        </Card>
+        <Card variant="flat" style={styles.statBox}>
           <Text style={styles.statNumber}>
             {products.filter(p => p.type === 'ukay-ukay').length}
           </Text>
           <Text style={styles.statLabel}>Ukay-Ukay</Text>
-        </View>
-      </View>
+        </Card>
+      </Animated.View>
 
       {/* Products List */}
-      <ScrollView 
-        showsVerticalScrollIndicator={false} 
+      <ScrollView
+        showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.productsContainer}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        {filteredProducts.length > 0 ? (
-          filteredProducts.map((product) => (
-            <TouchableOpacity
+        {loading && !refreshing ? (
+          <>
+            <ProductCardSkeleton />
+            <ProductCardSkeleton />
+            <ProductCardSkeleton />
+          </>
+        ) : error ? (
+          <View style={styles.emptyStateWrap}>
+            <EmptyState
+              icon="cloud-offline-outline"
+              title="Couldn't load products"
+              subtitle="Check your connection and try again."
+            />
+            <View style={styles.emptyStateAction}>
+              <Button variant="outline" label="Retry" onPress={retryFetchProducts} />
+            </View>
+          </View>
+        ) : filteredProducts.length > 0 ? (
+          filteredProducts.map((product, index) => (
+            <Animated.View
               key={product.id}
-              style={styles.productCard}
-              onPress={() => handleView(product)}
+              entering={
+                reduceMotion
+                  ? undefined
+                  : FadeInDown.duration(240)
+                      .delay(Math.min(index, 8) * 40)
+                      .easing(EASE_OUT_QUART)
+              }
             >
-              <Image source={{ uri: product.imageUrl || product.image }} style={styles.productImage} />
-              <View style={styles.productInfo}>
-                <Text style={styles.productName} numberOfLines={2}>
-                  {product.name}
-                </Text>
-                <View style={styles.productMeta}>
-                  <View style={[styles.typeBadge, getTypeBadgeStyle(product.type)]}>
-                    <Text style={[styles.typeText, { color: getTypeBadgeStyle(product.type).color }]}>
-                      {getTypeLabel(product.type)}
+              <AnimatedPressable
+                onPress={() => handleView(product)}
+                accessibilityRole="button"
+                accessibilityLabel={`${product.name}, ${getTypeLabel(product.type)}, ₱${parseFloat(product.price).toFixed(2)}`}
+                accessibilityHint="Opens product details"
+              >
+                <Card variant="flat" style={styles.productCard}>
+                  <Image source={{ uri: product.imageUrl || product.image }} style={styles.productImage} />
+                  <View style={styles.productInfo}>
+                    <Text style={styles.productName} numberOfLines={2}>
+                      {product.name}
                     </Text>
+                    <View style={styles.productMeta}>
+                      <Badge
+                        label={getTypeLabel(product.type)}
+                        color={product.type === 'ukay-ukay' ? Colors.light.secondary : Colors.light.tint}
+                      />
+                      <Text style={styles.productPrice}>₱{parseFloat(product.price).toFixed(2)}</Text>
+                    </View>
+                    <Text style={styles.productStock}>Stock: {product.stock} pcs</Text>
                   </View>
-                  <Text style={styles.productPrice}>₱{parseFloat(product.price).toFixed(2)}</Text>
-                </View>
-                <Text style={styles.productStock}>Stock: {product.stock} pcs</Text>
-              </View>
-              <View style={styles.productActions}>
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={() => navigation.navigate('AdminEditProduct', { product })}
-                >
-                  <Ionicons name="create-outline" size={20} color="#007AFF" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.actionButton}
-                  onPress={() => handleDelete(product)}
-                >
-                  <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
+                  <View style={styles.productActions}>
+                    <AnimatedPressable
+                      style={styles.actionButton}
+                      onPress={() => navigation.navigate('AdminEditProduct', { product })}
+                      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Edit ${product.name}`}
+                    >
+                      <Ionicons name="create-outline" size={20} color={Colors.light.tint} />
+                    </AnimatedPressable>
+                    <AnimatedPressable
+                      style={styles.actionButton}
+                      onPress={() => handleDelete(product)}
+                      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Delete ${product.name}`}
+                    >
+                      <Ionicons name="trash-outline" size={20} color={Colors.light.danger} />
+                    </AnimatedPressable>
+                  </View>
+                </Card>
+              </AnimatedPressable>
+            </Animated.View>
           ))
         ) : (
-          <View style={styles.emptyState}>
-            <Ionicons name="cube-outline" size={64} color="#ccc" />
-            <Text style={styles.emptyStateText}>No products found</Text>
-            <Text style={styles.emptyStateSubtext}>
-              {searchQuery ? 'Try a different search term' : 'Tap + to add your first product'}
-            </Text>
+          <View style={styles.emptyStateWrap}>
+            <EmptyState
+              icon="cube-outline"
+              title="No products found"
+              subtitle={searchQuery ? 'Try a different search term' : 'Tap + to add your first product'}
+            />
+            {Boolean(searchQuery) && (
+              <View style={styles.emptyStateAction}>
+                <Button variant="outline" label="Clear search" onPress={() => setSearchQuery('')} />
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
@@ -216,16 +298,21 @@ export default function AdminProductsScreen({ navigation }) {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Product Details</Text>
-              <TouchableOpacity onPress={() => {
-                setShowViewModal(false);
-                setSelectedProduct(null);
-              }}>
-                <Ionicons name="close" size={24} color="#000" />
-              </TouchableOpacity>
+              <AnimatedPressable
+                onPress={() => {
+                  setShowViewModal(false);
+                  setSelectedProduct(null);
+                }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </AnimatedPressable>
             </View>
 
             {selectedProduct && (
-              <ScrollView>
+              <ScrollView showsVerticalScrollIndicator={false}>
                 <Image source={{ uri: selectedProduct.imageUrl || selectedProduct.image }} style={styles.modalImage} />
                 <Text style={styles.modalProductName}>{selectedProduct.name}</Text>
                 <View style={styles.modalInfoRow}>
@@ -234,11 +321,10 @@ export default function AdminProductsScreen({ navigation }) {
                 </View>
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Type:</Text>
-                  <View style={[styles.typeBadge, getTypeBadgeStyle(selectedProduct.type)]}>
-                    <Text style={[styles.typeText, { color: getTypeBadgeStyle(selectedProduct.type).color }]}>
-                      {getTypeLabel(selectedProduct.type)}
-                    </Text>
-                  </View>
+                  <Badge
+                    label={getTypeLabel(selectedProduct.type)}
+                    color={selectedProduct.type === 'ukay-ukay' ? Colors.light.secondary : Colors.light.tint}
+                  />
                 </View>
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Stock:</Text>
@@ -250,24 +336,26 @@ export default function AdminProductsScreen({ navigation }) {
                 </View>
 
                 <View style={styles.modalButtons}>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.editButton]}
-                    onPress={() => {
-                      setShowViewModal(false);
-                      navigation.navigate('AdminEditProduct', { product: selectedProduct });
-                    }}
-                  >
-                    <Text style={styles.editButtonText}>Edit Product</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.deleteButton]}
-                    onPress={() => {
-                      setShowViewModal(false);
-                      handleDelete(selectedProduct);
-                    }}
-                  >
-                    <Text style={styles.deleteButtonText}>Delete</Text>
-                  </TouchableOpacity>
+                  <View style={styles.modalButtonHalf}>
+                    <Button
+                      variant="primary"
+                      label="Edit Product"
+                      onPress={() => {
+                        setShowViewModal(false);
+                        navigation.navigate('AdminEditProduct', { product: selectedProduct });
+                      }}
+                    />
+                  </View>
+                  <View style={styles.modalButtonHalf}>
+                    <Button
+                      variant="danger"
+                      label="Delete"
+                      onPress={() => {
+                        setShowViewModal(false);
+                        handleDelete(selectedProduct);
+                      }}
+                    />
+                  </View>
                 </View>
               </ScrollView>
             )}
@@ -292,21 +380,26 @@ export default function AdminProductsScreen({ navigation }) {
               Are you sure you want to delete "{selectedProduct?.name}"? This action cannot be undone.
             </Text>
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setShowDeleteModal(false);
-                  setSelectedProduct(null);
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmDeleteButton]}
-                onPress={confirmDelete}
-              >
-                <Text style={styles.confirmDeleteText}>Delete</Text>
-              </TouchableOpacity>
+              <View style={styles.modalButtonHalf}>
+                <Button
+                  variant="secondary"
+                  label="Cancel"
+                  onPress={() => {
+                    setShowDeleteModal(false);
+                    setSelectedProduct(null);
+                  }}
+                  disabled={deleting}
+                />
+              </View>
+              <View style={styles.modalButtonHalf}>
+                <Button
+                  variant="danger"
+                  label="Delete"
+                  onPress={confirmDelete}
+                  loading={deleting}
+                  disabled={deleting}
+                />
+              </View>
             </View>
           </View>
         </View>
@@ -318,7 +411,7 @@ export default function AdminProductsScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.background,
   },
   header: {
     flexDirection: 'row',
@@ -327,28 +420,46 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F2F2F7',
+    borderBottomColor: Colors.light.border,
     marginTop: Platform.OS === 'ios' ? 0 : 30,
   },
   backButton: {
     width: 40,
     height: 40,
     justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#000',
+    color: Colors.light.text,
   },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: Colors.light.danger + '15',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.danger + '40',
+  },
+  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F9F9FB',
+    backgroundColor: Colors.light.background,
     margin: 16,
     paddingHorizontal: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: Colors.light.border,
   },
   searchIcon: {
     marginRight: 8,
@@ -357,7 +468,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 44,
     fontSize: 14,
-    color: '#000',
+    color: Colors.light.text,
   },
   statsContainer: {
     flexDirection: 'row',
@@ -367,21 +478,17 @@ const styles = StyleSheet.create({
   },
   statBox: {
     flex: 1,
-    backgroundColor: '#F9F9FB',
-    borderRadius: 12,
     padding: 12,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
   },
   statNumber: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#007AFF',
+    color: Colors.light.tint,
   },
   statLabel: {
     fontSize: 12,
-    color: '#666',
+    color: Colors.light.icon,
     marginTop: 4,
   },
   productsContainer: {
@@ -389,39 +496,33 @@ const styles = StyleSheet.create({
     paddingTop: 0,
     paddingBottom: 30,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#666',
-  },
+  emptyStateWrap: { paddingHorizontal: 16 },
+  emptyStateAction: { marginTop: -8, marginBottom: 16, paddingHorizontal: 32 },
   productCard: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 12,
     padding: 12,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
   },
   productImage: {
     width: 80,
     height: 80,
     borderRadius: 8,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: Colors.light.border,
+  },
+  productImageSkeleton: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
   },
   productInfo: {
     flex: 1,
     marginLeft: 12,
+    justifyContent: 'center',
   },
   productName: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#000',
+    color: Colors.light.text,
     marginBottom: 6,
   },
   productMeta: {
@@ -430,23 +531,14 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 4,
   },
-  typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  typeText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
   productPrice: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#007AFF',
+    color: Colors.light.highlight,
   },
   productStock: {
     fontSize: 12,
-    color: '#666',
+    color: Colors.light.icon,
   },
   productActions: {
     justifyContent: 'space-between',
@@ -455,21 +547,6 @@ const styles = StyleSheet.create({
   actionButton: {
     padding: 8,
   },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyStateText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#666',
-    marginTop: 16,
-  },
-  emptyStateSubtext: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 8,
-  },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
@@ -477,17 +554,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.background,
     borderRadius: 20,
     padding: 20,
     width: '90%',
     maxHeight: '80%',
   },
   deleteModalContent: {
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.background,
     borderRadius: 20,
     padding: 20,
     width: '90%',
+    alignItems: 'center',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -498,7 +576,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#000',
+    color: Colors.light.text,
   },
   modalImage: {
     width: '100%',
@@ -509,7 +587,7 @@ const styles = StyleSheet.create({
   modalProductName: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#000',
+    color: Colors.light.text,
     marginBottom: 16,
   },
   modalInfoRow: {
@@ -518,16 +596,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#F2F2F7',
+    borderBottomColor: Colors.light.border,
   },
   modalInfoLabel: {
     fontSize: 14,
-    color: '#666',
+    color: Colors.light.icon,
     fontWeight: '500',
   },
   modalInfoValue: {
     fontSize: 14,
-    color: '#000',
+    color: Colors.light.text,
     flex: 1,
     textAlign: 'right',
   },
@@ -536,47 +614,10 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 20,
   },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  editButton: {
-    backgroundColor: '#007AFF',
-  },
-  editButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  deleteButton: {
-    backgroundColor: '#FF3B30',
-  },
-  deleteButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  cancelButton: {
-    backgroundColor: '#F2F2F7',
-  },
-  cancelButtonText: {
-    color: '#666',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  confirmDeleteButton: {
-    backgroundColor: '#FF3B30',
-  },
-  confirmDeleteText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  modalButtonHalf: { flex: 1 },
   modalMessage: {
     fontSize: 14,
-    color: '#666',
+    color: Colors.light.icon,
     textAlign: 'center',
     marginBottom: 20,
   },

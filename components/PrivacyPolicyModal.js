@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import { Colors, Radius, Spacing } from '../constants/theme';
 
 // Shared between SignupScreen (consent flow) and ProfileScreen (read-only
 // re-read) — same content/visual style either way, only the caller decides
@@ -54,26 +55,26 @@ export default function PrivacyPolicyModal({ visible, onClose }) {
 const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(28, 27, 26, 0.5)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 20,
+    backgroundColor: Colors.light.background,
+    borderRadius: Radius.xl,
+    padding: Spacing.lg,
     width: '90%',
     maxHeight: '75%',
   },
-  modalHeader: { marginBottom: 16 },
-  modalTitle: { fontSize: 18, fontWeight: '600', color: '#000' },
-  modalParagraph: { fontSize: 14, color: '#333', lineHeight: 21, marginBottom: 14 },
+  modalHeader: { marginBottom: Spacing.md },
+  modalTitle: { fontSize: 18, fontWeight: '600', color: Colors.light.text },
+  modalParagraph: { fontSize: 14, color: Colors.light.icon, lineHeight: 21, marginBottom: Spacing.md },
   modalCloseButton: {
-    backgroundColor: '#8B6F47',
-    borderRadius: 10,
-    paddingVertical: 14,
+    backgroundColor: Colors.light.tint,
+    borderRadius: Radius.md,
+    paddingVertical: Spacing.md,
     alignItems: 'center',
-    marginTop: 12,
+    marginTop: Spacing.sm,
   },
   modalCloseText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });

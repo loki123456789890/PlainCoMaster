@@ -20,8 +20,18 @@ export const ProductProvider = ({ children }) => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Bumped by retryFetchProducts() to force the effect below to tear down
+  // and re-establish the onSnapshot subscription. Firestore's listener
+  // self-heals most transient network blips on its own, but if the very
+  // first subscribe attempt fails outright (e.g. no connectivity at mount),
+  // the listener never recovers on its own — a real resubscribe is the only
+  // way to try again once connectivity returns.
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
+
     const productsQuery = query(
       collection(db, 'products'),
       orderBy('createdAt', 'desc')
@@ -48,7 +58,9 @@ export const ProductProvider = ({ children }) => {
     // Live listener replaces the old manual loadProducts() call —
     // it fires immediately on mount and again on every change.
     return () => unsubscribe();
-  }, []);
+  }, [retryToken]);
+
+  const retryFetchProducts = () => setRetryToken((t) => t + 1);
 
   const addProduct = async (productData) => {
     try {
@@ -99,6 +111,7 @@ export const ProductProvider = ({ children }) => {
         addProduct,
         updateProduct,
         deleteProduct,
+        retryFetchProducts,
         // Kept for compatibility with any screen still calling this manually —
         // it's a no-op now since onSnapshot keeps `products` live automatically.
         refreshProducts: () => {},

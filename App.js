@@ -10,6 +10,7 @@ import { ProductProvider } from './context/ProductContext';
 import { FavoritesProvider } from './context/FavoritesContext';
 import { CartProvider } from './context/CartContext';
 import withAdminGuard from './components/withAdminGuard';
+import AppAlertHost from './components/ui/AppAlertHost';
 
 // Import all screens
 import LandingScreen from './screens/LandingScreen';
@@ -119,6 +120,7 @@ export default function App() {
                   <Stack.Screen name="AdminSupport" component={GuardedAdminSupportScreen} />
                 </Stack.Navigator>
               </NavigationContainer>
+              <AppAlertHost />
             </CartProvider>
           </FavoritesProvider>
         </ProductProvider>

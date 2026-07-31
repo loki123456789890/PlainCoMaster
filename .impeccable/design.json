@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-19T00:00:00.000Z",
+  "title": "Design System: PlainCo",
+  "extensions": {
+    "colorMeta": {
+      "clay": {
+        "role": "primary",
+        "displayName": "Clay",
+        "canonical": "#C4623E",
+        "tonalRamp": ["#3b1d12", "#6d3621", "#a04f31", "#c86d4b", "#d8967e", "#e7bfb1", "#f3dfd8", "#f9efeb"]
+      },
+      "moss": {
+        "role": "secondary",
+        "displayName": "Moss",
+        "canonical": "#5B6B4F",
+        "tonalRamp": ["#252c20", "#46523d", "#667859", "#879b78", "#a9b89e", "#cbd4c4", "#e5e9e2", "#f2f4f0"]
+      },
+      "gold": {
+        "role": "tertiary",
+        "displayName": "Gold",
+        "canonical": "#846B1A",
+        "note": "Darkened from an earlier #C9A227 for text contrast (2.26:1 -> ~4.8:1 on Canvas) — same hue/saturation, not a hue shift.",
+        "tonalRamp": ["#40340d", "#776117", "#af8e22", "#d8b33b", "#e3c972", "#eedeaa", "#f7efd4", "#fbf7ea"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1C1B1A",
+        "tonalRamp": ["#282625", "#4a4745", "#6c6965", "#8e8a85", "#aeaba8", "#ceccca", "#e6e6e5", "#f3f2f2"]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Line",
+        "canonical": "#E8E1D5",
+        "tonalRamp": ["#31291b", "#5c4d33", "#87714a", "#ac9367", "#c3b192", "#dbd0bd", "#ede7de", "#f6f3ef"]
+      },
+      "rust": {
+        "role": "semantic",
+        "displayName": "Rust",
+        "canonical": "#C4463E",
+        "tonalRamp": ["#3b1412", "#6d2621", "#a03831", "#c8534b", "#d8837e", "#e7b4b1", "#f3dad8", "#f9eceb"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Once per screen at most — auth headlines, hero titles. Never inside a list or card." },
+      "headline": { "displayName": "Headline", "purpose": "Header bar titles, modal titles, section titles." },
+      "title": { "displayName": "Title", "purpose": "Card and list-item primary text — product/user/item names." },
+      "body": { "displayName": "Body", "purpose": "Descriptions, form values, paragraph copy." },
+      "label": { "displayName": "Label", "purpose": "Badges, stat labels, timestamps, meta text." }
+    },
+    "shadows": [
+      { "name": "card", "value": "0 2px 8px rgba(28,27,26,0.08)", "purpose": "Reserved for surfaces that need to lift off a busy background (Cart, Checkout, Shop). Not the default card treatment." }
+    ],
+    "motion": [],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The only button style used for a screen's main action (Sign In, Add to Cart, Place Order).",
+      "html": "<button class=\"ds-btn-primary\">Add to Cart</button>",
+      "css": ".ds-btn-primary { background: #C4623E; color: #ffffff; padding: 12px 24px; border-radius: 12px; border: none; font-size: 16px; font-weight: 600; transition: opacity 0.15s ease-out; } .ds-btn-primary:hover { opacity: 0.9; } .ds-btn-primary:focus-visible { outline: 2px solid #C4623E; outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.5; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Non-destructive secondary action — Cancel, Back.",
+      "html": "<button class=\"ds-btn-secondary\">Cancel</button>",
+      "css": ".ds-btn-secondary { background: #FAF7F2; color: #1C1B1A; padding: 12px 24px; border-radius: 12px; border: 1px solid #E8E1D5; font-size: 16px; font-weight: 600; transition: background 0.15s ease-out; } .ds-btn-secondary:hover { background: #F3EFE7; } .ds-btn-secondary:focus-visible { outline: 2px solid #C4623E; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Delete/deactivate confirmations only — Rust, never Clay, so it never reads as a primary action.",
+      "html": "<button class=\"ds-btn-danger\">Delete</button>",
+      "css": ".ds-btn-danger { background: #C4463E; color: #ffffff; padding: 12px 24px; border-radius: 12px; border: none; font-size: 16px; font-weight: 600; transition: opacity 0.15s ease-out; } .ds-btn-danger:hover { opacity: 0.9; } .ds-btn-danger:focus-visible { outline: 2px solid #C4463E; outline-offset: 2px; }"
+    },
+    {
+      "name": "Card (flat)",
+      "kind": "card",
+      "refersTo": "card-flat",
+      "description": "The app's standard card — a 1px Line border does the separating, not a shadow. Every card and card-shaped list row passes variant=\"flat\" explicitly.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Vintage Denim Jacket</div><div class=\"ds-card-body\">₱450.00 · Ukay-Ukay</div></div>",
+      "css": ".ds-card { background: #FAF7F2; border: 1px solid #E8E1D5; border-radius: 12px; padding: 16px; } .ds-card-title { color: #1C1B1A; font-size: 15px; font-weight: 600; margin-bottom: 4px; } .ds-card-body { color: #6B655C; font-size: 13px; }"
+    },
+    {
+      "name": "Card (elevated)",
+      "kind": "card",
+      "refersTo": "card-elevated",
+      "description": "The Card component's default parameter value, kept for backward compatibility — used on Cart, Checkout, and Shop, where a card needs to lift off a busier background.",
+      "html": "<div class=\"ds-card-elevated\"><div class=\"ds-card-title\">Featured</div></div>",
+      "css": ".ds-card-elevated { background: #FAF7F2; border-radius: 16px; padding: 16px; box-shadow: 0 2px 8px rgba(28,27,26,0.08); } .ds-card-title { color: #1C1B1A; font-size: 15px; font-weight: 600; }"
+    },
+    {
+      "name": "Input Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Canvas background, Line border, Ash placeholder — shared by every text field in the app via the Input component.",
+      "html": "<div class=\"ds-input-group\"><label class=\"ds-input-label\">Email Address</label><input class=\"ds-input-field\" placeholder=\"Enter your email\" /></div>",
+      "css": ".ds-input-group { margin-bottom: 16px; } .ds-input-label { display: block; color: #1C1B1A; font-size: 14px; font-weight: 600; margin-bottom: 8px; } .ds-input-field { width: 100%; background: #FAF7F2; border: 1px solid #E8E1D5; border-radius: 12px; padding: 12px 16px; font-size: 16px; color: #1C1B1A; box-sizing: border-box; } .ds-input-field::placeholder { color: #6B655C; } .ds-input-field:focus-visible { outline: 2px solid #C4623E; outline-offset: 1px; }"
+    },
+    {
+      "name": "Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Tinted pill — background is the role color at 20% opacity, text is the same color at full opacity. Used for category and status tags.",
+      "html": "<span class=\"ds-badge\">Ukay-Ukay</span>",
+      "css": ".ds-badge { display: inline-block; background: rgba(91,107,79,0.2); color: #5B6B4F; padding: 4px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }"
+    },
+    {
+      "name": "Cart Count Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "The one solid-fill badge exception — overlays the bottom-nav cart icon.",
+      "html": "<span class=\"ds-cart-badge\">3</span>",
+      "css": ".ds-cart-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; padding: 0 3px; background: #C4463E; color: #ffffff; border-radius: 8px; font-size: 10px; font-weight: 700; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Neighborhood Thrift Counter",
+    "overview": "PlainCo reads like a trusted local shop, not a marketplace app fighting for a tap. The palette is warm without being precious — clay, moss, and gold sit on a soft canvas instead of stark white, but the warmth is carried by accent color and typography, never by decoration. Every screen — from the customer shop floor to the admin dashboard — shares the same handful of components (Button, Input, Card, Badge, EmptyState), so the system feels consistent whether you're browsing ukay-ukay finds or an admin is reviewing orders.\n\nThe system explicitly rejects generic marketplace clutter: no countdown timers, no stacked discount badges, no red/orange flash-sale banners competing for attention. It also rejects sterile minimalist tech — PlainCo should feel human and a little unhurried, not clinical. Surfaces stay flat by default (a 1px line, not a shadow) because a thrift counter doesn't need to shout about depth; it needs to be legible and calm.",
+    "keyCharacteristics": [
+      "Warm, restrained palette: one clay accent for primary actions, moss and gold reserved for secondary/semantic roles",
+      "Flat-by-default surfaces — a hairline border does the separating, not elevation",
+      "One shared component vocabulary across customer and admin surfaces",
+      "Native system type (San Francisco on iOS, Roboto on Android) — no custom display font",
+      "Native, dual-target platform: the same brand system renders on iOS and Android; OS conventions are respected in behavior (gestures, safe areas), not overridden in look"
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "Clay is the only color used for primary calls-to-action and active/selected states. Moss and Gold have their own dedicated jobs (category, money) — they never substitute for Clay on a button.", "section": "colors" },
+      { "name": "The No-Shout Rule", "body": "Warmth comes from Clay, Moss, and Gold used deliberately — never from tinting the whole background warm \"for elegance.\" Canvas stays a true off-white; the accent colors carry the personality.", "section": "colors" },
+      { "name": "The Dark Mode Note", "body": "constants/theme.ts defines a complete Colors.dark palette, but no screen currently reads it — every screen imports Colors.light directly with no theme-switching logic. Treat Colors.light as the only shipped theme until a dark-mode toggle is actually wired up.", "section": "colors" },
+      { "name": "The One Family Rule", "body": "There is no second typeface anywhere in the app. Hierarchy is built entirely from size and weight, never from a display font swapped in for hero moments.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "A card is a bordered rectangle, not a shadowed one. Reach for Card's elevated variant (Shadow.card) only when a surface genuinely needs to separate from a busy background, not as a default \"make it look premium\" move. Every other card in the app passes variant=\"flat\" explicitly.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use Clay (#C4623E) as the only primary-action color — buttons, active states, selected filters.",
+      "Do default every card and list row to a 1px Line border with no shadow; reach for Shadow.card only on a surface that truly needs to lift.",
+      "Do keep Moss as both the Ukay-Ukay category accent and the success color — don't introduce a second green.",
+      "Do keep type to one system family, building hierarchy from size and weight only.",
+      "Do use the shared Button / Input / Badge / Card / EmptyState components on new screens. A tappable card is TouchableOpacity wrapping <Card variant=\"flat\">, not a hand-rolled bordered View."
+    ],
+    "donts": [
+      "Don't ship Shopee/Lazada-style marketplace clutter — no countdown timers, no stacked discount badges, no red/orange flash-sale banners.",
+      "Don't tint the base Canvas background warm \"for elegance.\" Canvas stays a true off-white.",
+      "Don't reach for a gradient text fill, a colored side-stripe border, or glassmorphism as decoration.",
+      "Don't design against Colors.dark as if it's live — it's defined but not wired up.",
+      "Don't let a destructive action borrow Clay. Rust is the only color for delete/deactivate/error."
+    ]
+  }
+}

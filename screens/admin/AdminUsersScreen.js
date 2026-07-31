@@ -4,15 +4,24 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  TouchableOpacity,
+  Pressable,
   TextInput,
-  Alert,
   ActivityIndicator,
   Modal,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { showAppAlert } from '../../utils/appAlert';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  useReducedMotion,
+  FadeIn,
+  FadeInDown,
+} from 'react-native-reanimated';
 import { db, auth } from '../../firebaseConfig';
 import {
   collection,
@@ -22,10 +31,38 @@ import {
   getDocs,
 } from 'firebase/firestore';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { Colors, Spacing, Radius } from '../../constants/theme';
+import Card from '../../components/ui/Card';
+import EmptyState from '../../components/ui/EmptyState';
+import Input from '../../components/ui/Input';
+import Button from '../../components/ui/Button';
+import AnimatedPressable from '../../components/ui/AnimatedPressable';
+import SkeletonBlock from '../../components/ui/Skeleton';
+import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
+
+// Shaped like a real user row so the loading state previews the content
+// that's about to arrive, instead of a spinner floating mid-screen.
+function UserCardSkeleton() {
+  return (
+    <Card variant="flat" style={styles.userCard}>
+      <SkeletonBlock style={styles.avatarSkeleton} />
+      <View style={styles.userInfo}>
+        <SkeletonBlock style={{ width: '55%', height: 14, borderRadius: Radius.sm, marginBottom: 8 }} />
+        <SkeletonBlock style={{ width: '75%', height: 11, borderRadius: Radius.sm, marginBottom: 8 }} />
+        <SkeletonBlock style={{ width: '40%', height: 11, borderRadius: Radius.sm }} />
+      </View>
+      <View style={styles.userActions}>
+        <SkeletonBlock style={{ width: 54, height: 18, borderRadius: Radius.pill, marginBottom: 8 }} />
+        <SkeletonBlock style={{ width: 60, height: 20, borderRadius: Radius.sm }} />
+      </View>
+    </Card>
+  );
+}
 
 export default function AdminUsersScreen({ navigation }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [usersError, setUsersError] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
@@ -38,9 +75,18 @@ export default function AdminUsersScreen({ navigation }) {
   // Tracks which single user's activate/deactivate write is in flight, so
   // one row updating doesn't disable every other row's action button too.
   const [togglingUserId, setTogglingUserId] = useState(null);
+  // Bumped by handleRetry() to force the listener below to tear down and
+  // re-subscribe — same shape as AdminOrdersScreen's retryToken, so a
+  // permissions blip or bad connection at mount doesn't leave the list
+  // silently stuck on an unrecoverable listener.
+  const [retryToken, setRetryToken] = useState(0);
   const { isConnected } = useNetworkStatus();
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
+    setLoading(true);
+    setUsersError(false);
+
     const unsubscribe = onSnapshot(
       collection(db, 'users'),
       async (snapshot) => {
@@ -63,6 +109,7 @@ export default function AdminUsersScreen({ navigation }) {
         });
 
         setUsers(baseUsers);
+        setUsersError(false);
         setLoading(false);
 
         // Order stats live in each user's orders subcollection, not on
@@ -91,12 +138,15 @@ export default function AdminUsersScreen({ navigation }) {
       },
       (error) => {
         console.error('Error fetching users:', error);
+        setUsersError(true);
         setLoading(false);
       }
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [retryToken]);
+
+  const handleRetry = () => setRetryToken((t) => t + 1);
 
   const filteredUsers = users.filter(
     (user) =>
@@ -105,11 +155,13 @@ export default function AdminUsersScreen({ navigation }) {
   );
 
   const handleViewUser = (user) => {
+    Haptics.selectionAsync();
     setSelectedUser(user);
     setShowUserModal(true);
   };
 
   const handleEditUser = (user) => {
+    Haptics.selectionAsync();
     setSelectedUser(user);
     setEditFormData({
       name: user.name,
@@ -120,12 +172,12 @@ export default function AdminUsersScreen({ navigation }) {
 
   const handleUpdateUser = async () => {
     if (!editFormData.name.trim()) {
-      Alert.alert('Error', 'Please enter a name');
+      showAppAlert('Error', 'Please enter a name');
       return;
     }
 
     if (selectedUser.id === auth.currentUser?.uid && editFormData.role !== 'admin') {
-      Alert.alert(
+      showAppAlert(
         'Not Allowed',
         "You can't remove your own admin role — that would lock you out of this dashboard. Have another admin make this change instead."
       );
@@ -133,26 +185,29 @@ export default function AdminUsersScreen({ navigation }) {
     }
 
     setUpdating(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
       await updateDoc(doc(db, 'users', selectedUser.id), {
         name: editFormData.name.trim(),
         role: editFormData.role,
       });
       setShowEditModal(false);
-      Alert.alert('Success', 'User updated successfully');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showAppAlert('Success', 'User updated successfully');
     } catch (error) {
       console.error('Error updating user:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
       const isNetworkError = !isConnected || error.code === 'unavailable';
       if (isNetworkError) {
-        Alert.alert(
+        showAppAlert(
           'No Internet Connection',
           'Network connection lost. Please check your connection and try again.'
         );
         return;
       }
 
-      Alert.alert('Error', 'Could not update user. Please try again.');
+      showAppAlert('Error', 'Could not update user. Please try again.');
     } finally {
       setUpdating(false);
     }
@@ -160,12 +215,13 @@ export default function AdminUsersScreen({ navigation }) {
 
   const handleToggleUserStatus = (user) => {
     if (user.id === auth.currentUser?.uid) {
-      Alert.alert('Not Allowed', "You can't deactivate your own account.");
+      showAppAlert('Not Allowed', "You can't deactivate your own account.");
       return;
     }
 
+    Haptics.selectionAsync();
     const newStatus = !user.isActive;
-    Alert.alert(
+    showAppAlert(
       newStatus ? 'Activate User' : 'Deactivate User',
       `Are you sure you want to ${newStatus ? 'activate' : 'deactivate'} ${user.name}?`,
       [
@@ -175,20 +231,23 @@ export default function AdminUsersScreen({ navigation }) {
           style: newStatus ? 'default' : 'destructive',
           onPress: async () => {
             setTogglingUserId(user.id);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             try {
               await updateDoc(doc(db, 'users', user.id), { isActive: newStatus });
-              Alert.alert('Success', `User ${newStatus ? 'activated' : 'deactivated'} successfully`);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              showAppAlert('Success', `User ${newStatus ? 'activated' : 'deactivated'} successfully`);
             } catch (error) {
               console.error('Error updating user status:', error);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
               const isNetworkError = !isConnected || error.code === 'unavailable';
               if (isNetworkError) {
-                Alert.alert(
+                showAppAlert(
                   'No Internet Connection',
                   'Network connection lost. Please check your connection and try again.'
                 );
               } else {
-                Alert.alert('Error', 'Could not update user status. Please try again.');
+                showAppAlert('Error', 'Could not update user status. Please try again.');
               }
             } finally {
               setTogglingUserId(null);
@@ -201,17 +260,19 @@ export default function AdminUsersScreen({ navigation }) {
 
   const getRoleBadgeStyle = (role) => {
     if (role === 'admin') {
-      return { backgroundColor: '#FF3B3020', color: '#FF3B30' };
+      return { backgroundColor: Colors.light.danger + '20', color: Colors.light.danger };
     }
-    return { backgroundColor: '#007AFF20', color: '#007AFF' };
+    return { backgroundColor: Colors.light.tint + '20', color: Colors.light.tint };
   };
 
   const getActiveBadgeStyle = (isActive) => {
     if (isActive) {
-      return { backgroundColor: '#34C75920', color: '#34C759' };
+      return { backgroundColor: Colors.light.success + '20', color: Colors.light.success };
     }
-    return { backgroundColor: '#FF3B3020', color: '#FF3B30' };
+    return { backgroundColor: Colors.light.danger + '20', color: Colors.light.danger };
   };
+
+  const getStatusIcon = (isActive) => (isActive ? 'checkmark-circle-outline' : 'close-circle-outline');
 
   const formatDate = (dateInput) => {
     if (!dateInput) return 'Unknown';
@@ -235,129 +296,214 @@ export default function AdminUsersScreen({ navigation }) {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#000" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Manage Users</Text>
+        <AnimatedPressable
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+        </AnimatedPressable>
+        <Text style={styles.headerTitle} accessibilityRole="header">Manage Users</Text>
         <View style={styles.placeholder} />
       </View>
 
+      {!isConnected && (
+        <View style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
+          <Text style={styles.offlineBannerText}>
+            No internet connection — user data may be out of date.
+          </Text>
+        </View>
+      )}
+
       {/* Stats Cards */}
-      <View style={styles.statsWrapper}>
+      <Animated.View
+        style={styles.statsWrapper}
+        entering={reduceMotion ? undefined : FadeIn.duration(220)}
+      >
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.statsContainer}
         >
-          <View style={styles.statCard}>
+          <Card variant="flat" style={styles.statCard}>
             <Text style={styles.statValue}>{stats.totalUsers}</Text>
             <Text style={styles.statLabel}>Total {stats.totalUsers === 1 ? 'User' : 'Users'}</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.activeUsers}</Text>
+          </Card>
+          <Card variant="flat" style={[styles.statCard, { backgroundColor: Colors.light.success + '15' }]}>
+            <Text style={[styles.statValue, { color: Colors.light.success }]}>{stats.activeUsers}</Text>
             <Text style={styles.statLabel}>Active {stats.activeUsers === 1 ? 'User' : 'Users'}</Text>
-          </View>
-          <View style={styles.statCard}>
+          </Card>
+          <Card variant="flat" style={[styles.statCard, { backgroundColor: Colors.light.border + '60' }]}>
             <Text style={styles.statValue}>{stats.adminUsers}</Text>
             <Text style={styles.statLabel}>{stats.adminUsers === 1 ? 'Admin' : 'Admins'}</Text>
-          </View>
-          <View style={styles.statCard}>
+          </Card>
+          <Card variant="flat" style={styles.statCard}>
             <Text style={styles.statValue}>₱{stats.totalSpent.toFixed(2)}</Text>
             <Text style={styles.statLabel}>Total Spent</Text>
-          </View>
+          </Card>
         </ScrollView>
-      </View>
+      </Animated.View>
 
       {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <Ionicons name="search-outline" size={20} color="#999" style={styles.searchIcon} />
+      <Animated.View
+        style={styles.searchContainer}
+        entering={reduceMotion ? undefined : FadeInDown.duration(240).delay(40).easing(EASE_OUT_QUART)}
+      >
+        <Ionicons name="search-outline" size={20} color={Colors.light.icon} style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
           placeholder="Search by name or email..."
-          placeholderTextColor="#999"
+          placeholderTextColor={Colors.light.icon}
           value={searchQuery}
           onChangeText={setSearchQuery}
+          accessibilityLabel="Search users by name or email"
         />
         {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <Ionicons name="close-circle" size={20} color="#999" />
-          </TouchableOpacity>
+          <Pressable
+            onPress={() => setSearchQuery('')}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Clear search"
+          >
+            <Ionicons name="close-circle" size={20} color={Colors.light.icon} />
+          </Pressable>
         )}
-      </View>
+      </Animated.View>
 
       {/* Users List */}
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.usersContainer}>
         {loading ? (
-          <ActivityIndicator size="large" color="#007AFF" style={styles.loader} />
+          <>
+            <UserCardSkeleton />
+            <UserCardSkeleton />
+            <UserCardSkeleton />
+          </>
+        ) : usersError ? (
+          <View style={styles.emptyStateWrap}>
+            <EmptyState
+              icon="cloud-offline-outline"
+              title="Couldn't load users"
+              subtitle="Check your connection and try again."
+            />
+            <View style={styles.emptyStateAction}>
+              <Button variant="outline" label="Retry" onPress={handleRetry} />
+            </View>
+          </View>
         ) : filteredUsers.length > 0 ? (
-          filteredUsers.map((user) => (
-            <TouchableOpacity
+          filteredUsers.map((user, index) => (
+            <Animated.View
               key={user.id}
-              style={styles.userCard}
-              onPress={() => handleViewUser(user)}
+              entering={
+                reduceMotion
+                  ? undefined
+                  : FadeInDown.duration(240)
+                      .delay(80 + Math.min(index, 8) * 40)
+                      .easing(EASE_OUT_QUART)
+              }
             >
-              <View style={styles.userAvatar}>
-                <Text style={styles.userAvatarText}>
-                  {user.name.charAt(0).toUpperCase()}
-                </Text>
-              </View>
-              <View style={styles.userInfo}>
-                <View style={styles.userNameRow}>
-                  <Text style={styles.userName}>{user.name}</Text>
-                  <View style={[styles.roleBadge, getRoleBadgeStyle(user.role)]}>
-                    <Text style={[styles.roleText, { color: getRoleBadgeStyle(user.role).color }]}>
-                      {user.role.toUpperCase()}
+              <AnimatedPressable
+                onPress={() => handleViewUser(user)}
+                accessibilityRole="button"
+                accessibilityLabel={`${user.name}, ${user.role} role, ${user.isActive ? 'active' : 'inactive'}`}
+                accessibilityHint="Opens user details"
+              >
+                <Card variant="flat" style={styles.userCard}>
+                  <View style={styles.userAvatar}>
+                    <Text style={styles.userAvatarText}>
+                      {user.name.charAt(0).toUpperCase()}
                     </Text>
                   </View>
-                </View>
-                <Text style={styles.userEmail}>{user.email}</Text>
-                <View style={styles.userStats}>
-                  <Text style={styles.userStatsText}>Orders: {user.totalOrders}</Text>
-                  <Text style={styles.userStatsText}>Spent: ₱{user.totalSpent.toFixed(2)}</Text>
-                </View>
-              </View>
-              <View style={styles.userActions}>
-                <View style={[styles.statusBadge, getActiveBadgeStyle(user.isActive)]}>
-                  <Text style={[styles.statusText, { color: getActiveBadgeStyle(user.isActive).color }]}>
-                    {user.isActive ? 'active' : 'inactive'}
-                  </Text>
-                </View>
-                <View style={styles.actionButtons}>
-                  <TouchableOpacity
-                    style={styles.actionButton}
-                    onPress={() => handleEditUser(user)}
-                  >
-                    <Ionicons name="create-outline" size={20} color="#007AFF" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.actionButton}
-                    onPress={() => handleToggleUserStatus(user)}
-                    disabled={!isConnected || togglingUserId === user.id}
-                  >
-                    {togglingUserId === user.id ? (
-                      <ActivityIndicator
-                        size="small"
-                        color={user.isActive ? '#FF3B30' : '#34C759'}
-                      />
-                    ) : (
+                  <View style={styles.userInfo}>
+                    <View style={styles.userNameRow}>
+                      <Text style={styles.userName} numberOfLines={1} ellipsizeMode="tail">
+                        {user.name}
+                      </Text>
+                      <View style={[styles.roleBadge, getRoleBadgeStyle(user.role)]}>
+                        <Text style={[styles.roleText, { color: getRoleBadgeStyle(user.role).color }]}>
+                          {user.role.toUpperCase()}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.userEmailRow}>
+                      <Ionicons name="mail-outline" size={12} color={Colors.light.icon} />
+                      <Text style={styles.userEmail} numberOfLines={1} ellipsizeMode="tail">
+                        {user.email}
+                      </Text>
+                    </View>
+                    <View style={styles.userStats}>
+                      <View style={styles.userStatsItem}>
+                        <Ionicons name="receipt-outline" size={11} color={Colors.light.icon} />
+                        <Text style={styles.userStatsText}>{user.totalOrders} orders</Text>
+                      </View>
+                      <View style={styles.userStatsItem}>
+                        <Ionicons name="cash-outline" size={11} color={Colors.light.icon} />
+                        <Text style={styles.userStatsText}>₱{user.totalSpent.toFixed(2)}</Text>
+                      </View>
+                    </View>
+                  </View>
+                  <View style={styles.userActions}>
+                    <View style={[styles.statusBadge, getActiveBadgeStyle(user.isActive)]}>
                       <Ionicons
-                        name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
-                        size={20}
-                        color={!isConnected ? '#ccc' : (user.isActive ? '#FF3B30' : '#34C759')}
+                        name={getStatusIcon(user.isActive)}
+                        size={11}
+                        color={getActiveBadgeStyle(user.isActive).color}
                       />
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </TouchableOpacity>
+                      <Text style={[styles.statusText, { color: getActiveBadgeStyle(user.isActive).color }]}>
+                        {user.isActive ? 'ACTIVE' : 'INACTIVE'}
+                      </Text>
+                    </View>
+                    <View style={styles.actionButtons}>
+                      <AnimatedPressable
+                        style={styles.actionButton}
+                        onPress={() => handleEditUser(user)}
+                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Edit ${user.name}`}
+                      >
+                        <Ionicons name="create-outline" size={20} color={Colors.light.tint} />
+                      </AnimatedPressable>
+                      <AnimatedPressable
+                        style={styles.actionButton}
+                        onPress={() => handleToggleUserStatus(user)}
+                        disabled={!isConnected || togglingUserId === user.id}
+                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${user.isActive ? 'Deactivate' : 'Activate'} ${user.name}`}
+                      >
+                        {togglingUserId === user.id ? (
+                          <ActivityIndicator
+                            size="small"
+                            color={user.isActive ? Colors.light.danger : Colors.light.success}
+                          />
+                        ) : (
+                          <Ionicons
+                            name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
+                            size={20}
+                            color={!isConnected ? Colors.light.border : (user.isActive ? Colors.light.danger : Colors.light.success)}
+                          />
+                        )}
+                      </AnimatedPressable>
+                    </View>
+                  </View>
+                </Card>
+              </AnimatedPressable>
+            </Animated.View>
           ))
         ) : (
-          <View style={styles.emptyState}>
-            <Ionicons name="people-outline" size={64} color="#ccc" />
-            <Text style={styles.emptyStateText}>No users found</Text>
-            <Text style={styles.emptyStateSubtext}>
-              {searchQuery ? 'Try a different search term' : 'Users will appear here'}
-            </Text>
+          <View style={styles.emptyStateWrap}>
+            <EmptyState
+              icon="people-outline"
+              title="No users found"
+              subtitle={searchQuery ? 'Try a different search term' : 'Users will appear here'}
+            />
+            {Boolean(searchQuery) && (
+              <View style={styles.emptyStateAction}>
+                <Button variant="outline" label="Clear search" onPress={() => setSearchQuery('')} />
+              </View>
+            )}
           </View>
         )}
       </ScrollView>
@@ -373,13 +519,18 @@ export default function AdminUsersScreen({ navigation }) {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>User Details</Text>
-              <TouchableOpacity onPress={() => setShowUserModal(false)}>
-                <Ionicons name="close" size={24} color="#000" />
-              </TouchableOpacity>
+              <Pressable
+                onPress={() => setShowUserModal(false)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
             </View>
 
             {selectedUser && (
-              <ScrollView>
+              <ScrollView showsVerticalScrollIndicator={false}>
                 <View style={styles.modalAvatar}>
                   <Text style={styles.modalAvatarText}>
                     {selectedUser.name.charAt(0).toUpperCase()}
@@ -408,6 +559,11 @@ export default function AdminUsersScreen({ navigation }) {
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Status:</Text>
                   <View style={[styles.modalStatusBadge, getActiveBadgeStyle(selectedUser.isActive)]}>
+                    <Ionicons
+                      name={getStatusIcon(selectedUser.isActive)}
+                      size={12}
+                      color={getActiveBadgeStyle(selectedUser.isActive).color}
+                    />
                     <Text style={[styles.modalStatusText, { color: getActiveBadgeStyle(selectedUser.isActive).color }]}>
                       {selectedUser.isActive ? 'ACTIVE' : 'INACTIVE'}
                     </Text>
@@ -430,36 +586,45 @@ export default function AdminUsersScreen({ navigation }) {
                 </View>
 
                 <View style={styles.modalButtons}>
-                  <TouchableOpacity
-                    style={[styles.modalButton, styles.editButton]}
-                    onPress={() => {
-                      setShowUserModal(false);
-                      handleEditUser(selectedUser);
-                    }}
-                  >
-                    <Text style={styles.editButtonText}>Edit User</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.modalButton,
-                      styles.statusButton,
-                      !isConnected && { opacity: 0.7 },
-                    ]}
-                    onPress={() => {
-                      setShowUserModal(false);
-                      handleToggleUserStatus(selectedUser);
-                    }}
-                    disabled={!isConnected}
-                  >
-                    <Text style={styles.statusButtonText}>
-                      {/* Shortened vs. the full "No Internet Connection" —
-                          this button shares a half-width row with Edit
-                          User, so the longer phrase wrapped awkwardly. */}
-                      {!isConnected
-                        ? 'Offline'
-                        : selectedUser.isActive ? 'Deactivate' : 'Activate'}
-                    </Text>
-                  </TouchableOpacity>
+                  <View style={styles.modalButtonHalf}>
+                    <Button
+                      variant="primary"
+                      label="Edit User"
+                      onPress={() => {
+                        setShowUserModal(false);
+                        handleEditUser(selectedUser);
+                      }}
+                    />
+                  </View>
+                  <View style={styles.modalButtonHalf}>
+                    <AnimatedPressable
+                      style={[
+                        styles.statusToggleButton,
+                        { backgroundColor: selectedUser.isActive ? Colors.light.danger : Colors.light.success },
+                        !isConnected && { opacity: 0.7 },
+                      ]}
+                      onPress={() => {
+                        setShowUserModal(false);
+                        handleToggleUserStatus(selectedUser);
+                      }}
+                      disabled={!isConnected}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        !isConnected
+                          ? 'Offline, cannot change status'
+                          : `${selectedUser.isActive ? 'Deactivate' : 'Activate'} ${selectedUser.name}`
+                      }
+                    >
+                      <Text style={styles.statusButtonText}>
+                        {/* Shortened vs. the full "No Internet Connection" —
+                            this button shares a half-width row with Edit
+                            User, so the longer phrase wrapped awkwardly. */}
+                        {!isConnected
+                          ? 'Offline'
+                          : selectedUser.isActive ? 'Deactivate' : 'Activate'}
+                      </Text>
+                    </AnimatedPressable>
+                  </View>
                 </View>
               </ScrollView>
             )}
@@ -478,21 +643,23 @@ export default function AdminUsersScreen({ navigation }) {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit User</Text>
-              <TouchableOpacity onPress={() => setShowEditModal(false)}>
-                <Ionicons name="close" size={24} color="#000" />
-              </TouchableOpacity>
+              <Pressable
+                onPress={() => setShowEditModal(false)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+              >
+                <Ionicons name="close" size={24} color={Colors.light.text} />
+              </Pressable>
             </View>
 
-            <ScrollView>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Name *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Full name"
-                  value={editFormData.name}
-                  onChangeText={(text) => setEditFormData({ ...editFormData, name: text })}
-                />
-              </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Input
+                label="Name *"
+                value={editFormData.name}
+                onChangeText={(text) => setEditFormData({ ...editFormData, name: text })}
+                placeholder="Full name"
+              />
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Email</Text>
@@ -507,12 +674,18 @@ export default function AdminUsersScreen({ navigation }) {
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Role</Text>
                 <View style={styles.roleSelector}>
-                  <TouchableOpacity
+                  <AnimatedPressable
                     style={[
                       styles.roleOption,
                       editFormData.role === 'customer' && styles.roleOptionActive,
                     ]}
-                    onPress={() => setEditFormData({ ...editFormData, role: 'customer' })}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setEditFormData({ ...editFormData, role: 'customer' });
+                    }}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: editFormData.role === 'customer' }}
+                    accessibilityLabel="Customer role"
                   >
                     <Text style={[
                       styles.roleOptionText,
@@ -520,13 +693,19 @@ export default function AdminUsersScreen({ navigation }) {
                     ]}>
                       Customer
                     </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
+                  </AnimatedPressable>
+                  <AnimatedPressable
                     style={[
                       styles.roleOption,
                       editFormData.role === 'admin' && styles.roleOptionActive,
                     ]}
-                    onPress={() => setEditFormData({ ...editFormData, role: 'admin' })}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setEditFormData({ ...editFormData, role: 'admin' });
+                    }}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: editFormData.role === 'admin' }}
+                    accessibilityLabel="Admin role"
                   >
                     <Text style={[
                       styles.roleOptionText,
@@ -534,35 +713,28 @@ export default function AdminUsersScreen({ navigation }) {
                     ]}>
                       Admin
                     </Text>
-                  </TouchableOpacity>
+                  </AnimatedPressable>
                 </View>
               </View>
 
               <View style={styles.modalButtons}>
-                <TouchableOpacity
-                  style={[styles.modalButton, styles.cancelButton]}
-                  onPress={() => setShowEditModal(false)}
-                  disabled={updating}
-                >
-                  <Text style={styles.cancelButtonText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.modalButton,
-                    styles.saveButton,
-                    (updating || !isConnected) && { opacity: 0.7 },
-                  ]}
-                  onPress={handleUpdateUser}
-                  disabled={updating || !isConnected}
-                >
-                  {updating ? (
-                    <ActivityIndicator color="#fff" size="small" />
-                  ) : (
-                    <Text style={styles.saveButtonText}>
-                      {!isConnected ? 'Offline' : 'Save Changes'}
-                    </Text>
-                  )}
-                </TouchableOpacity>
+                <View style={styles.modalButtonHalf}>
+                  <Button
+                    variant="secondary"
+                    label="Cancel"
+                    onPress={() => setShowEditModal(false)}
+                    disabled={updating}
+                  />
+                </View>
+                <View style={styles.modalButtonHalf}>
+                  <Button
+                    variant="primary"
+                    label={!isConnected ? 'Offline' : 'Save Changes'}
+                    onPress={handleUpdateUser}
+                    loading={updating}
+                    disabled={updating || !isConnected}
+                  />
+                </View>
               </View>
             </ScrollView>
           </View>
@@ -575,7 +747,7 @@ export default function AdminUsersScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.background,
   },
   header: {
     flexDirection: 'row',
@@ -584,22 +756,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F2F2F7',
+    borderBottomColor: Colors.light.border,
     marginTop: Platform.OS === 'ios' ? 0 : 30,
   },
   backButton: {
     width: 40,
     height: 40,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#000',
+    color: Colors.light.text,
   },
   placeholder: {
     width: 40,
   },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    backgroundColor: Colors.light.danger + '15',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.danger + '40',
+  },
+  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
   statsWrapper: {
     marginTop: 16,
   },
@@ -608,13 +792,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   statCard: {
-    backgroundColor: '#F9F9FB',
-    borderRadius: 12,
-    padding: 16,
     minWidth: 100,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
   },
   // Matches AdminOrdersScreen.js's statValue exactly (no lineHeight /
   // includeFontPadding overrides) — those were added earlier as a guess at
@@ -626,22 +805,22 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#000',
+    color: Colors.light.text,
     marginBottom: 4,
   },
   statLabel: {
     fontSize: 12,
-    color: '#666',
+    color: Colors.light.icon,
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F9F9FB',
+    backgroundColor: Colors.light.background,
     margin: 16,
     paddingHorizontal: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: Colors.light.border,
   },
   searchIcon: {
     marginRight: 8,
@@ -650,31 +829,32 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 44,
     fontSize: 14,
-    color: '#000',
+    color: Colors.light.text,
   },
   usersContainer: {
     padding: 16,
     paddingTop: 0,
   },
-  loader: {
-    marginTop: 40,
-  },
+  emptyStateWrap: { paddingHorizontal: Spacing.md },
+  emptyStateAction: { marginTop: -Spacing.sm, marginBottom: Spacing.md, paddingHorizontal: Spacing.xl },
   userCard: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 12,
     padding: 12,
     marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
   },
   userAvatar: {
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: '#007AFF',
+    backgroundColor: Colors.light.tint,
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
+  },
+  avatarSkeleton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     marginRight: 12,
   },
   userAvatarText: {
@@ -694,7 +874,8 @@ const styles = StyleSheet.create({
   userName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#000',
+    color: Colors.light.text,
+    flexShrink: 1,
   },
   roleBadge: {
     paddingHorizontal: 8,
@@ -705,24 +886,38 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
+  userEmailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 6,
+  },
   userEmail: {
     fontSize: 12,
-    color: '#666',
-    marginBottom: 4,
+    color: Colors.light.icon,
+    flexShrink: 1,
   },
   userStats: {
     flexDirection: 'row',
     gap: 12,
   },
+  userStatsItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   userStatsText: {
     fontSize: 11,
-    color: '#999',
+    color: Colors.light.icon,
   },
   userActions: {
     alignItems: 'flex-end',
     justifyContent: 'space-between',
   },
   statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 12,
@@ -734,25 +929,13 @@ const styles = StyleSheet.create({
   },
   actionButtons: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 4,
   },
   actionButton: {
-    padding: 4,
-  },
-  emptyState: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
-  },
-  emptyStateText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#666',
-    marginTop: 16,
-  },
-  emptyStateSubtext: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 8,
   },
   modalOverlay: {
     flex: 1,
@@ -761,7 +944,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.background,
     borderRadius: 20,
     padding: 20,
     width: '90%',
@@ -776,13 +959,13 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#000',
+    color: Colors.light.text,
   },
   modalAvatar: {
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: '#007AFF',
+    backgroundColor: Colors.light.tint,
     justifyContent: 'center',
     alignItems: 'center',
     alignSelf: 'center',
@@ -799,16 +982,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#F2F2F7',
+    borderBottomColor: Colors.light.border,
   },
   modalInfoLabel: {
     fontSize: 14,
-    color: '#666',
+    color: Colors.light.icon,
     fontWeight: '500',
   },
   modalInfoValue: {
     fontSize: 14,
-    color: '#000',
+    color: Colors.light.text,
   },
   modalRoleBadge: {
     paddingHorizontal: 12,
@@ -820,6 +1003,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   modalStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 12,
@@ -833,40 +1019,13 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 20,
   },
-  modalButton: {
-    flex: 1,
+  modalButtonHalf: { flex: 1 },
+  statusToggleButton: {
     paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
   },
-  editButton: {
-    backgroundColor: '#007AFF',
-  },
-  editButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  statusButton: {
-    backgroundColor: '#FF9500',
-  },
   statusButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  cancelButton: {
-    backgroundColor: '#F2F2F7',
-  },
-  cancelButtonText: {
-    color: '#666',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  saveButton: {
-    backgroundColor: '#007AFF',
-  },
-  saveButtonText: {
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
@@ -877,30 +1036,30 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#000',
+    color: Colors.light.text,
     marginBottom: 8,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: Colors.light.border,
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 12,
     fontSize: 14,
-    color: '#000',
-    backgroundColor: '#F9F9FB',
+    color: Colors.light.text,
+    backgroundColor: Colors.light.background,
   },
   inputDisabled: {
-    backgroundColor: '#F2F2F7',
+    backgroundColor: Colors.light.border + '30',
     justifyContent: 'center',
   },
   disabledInputText: {
     fontSize: 14,
-    color: '#999',
+    color: Colors.light.icon,
   },
   inputHint: {
     fontSize: 11,
-    color: '#999',
+    color: Colors.light.icon,
     marginTop: 6,
   },
   roleSelector: {
@@ -912,17 +1071,17 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: Colors.light.border,
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.background,
   },
   roleOptionActive: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
+    backgroundColor: Colors.light.tint,
+    borderColor: Colors.light.tint,
   },
   roleOptionText: {
     fontSize: 14,
-    color: '#666',
+    color: Colors.light.icon,
   },
   roleOptionTextActive: {
     color: '#fff',

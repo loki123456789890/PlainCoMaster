@@ -6,6 +6,7 @@ import {
   doc,
   addDoc,
   deleteDoc,
+  updateDoc,
   onSnapshot,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -102,6 +103,24 @@ export const CartProvider = ({ children }) => {
     }
   };
 
+  // Cart-screen quantity stepper writes straight to the line's own doc — no
+  // dedupe/merge logic needed since cart lines never combine (see addToCart).
+  const updateQuantity = async (itemId, quantity) => {
+    if (!auth.currentUser) {
+      return { success: false, error: 'not-authenticated' };
+    }
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      return { success: false, error: 'invalid-quantity' };
+    }
+    try {
+      await updateDoc(doc(db, 'users', auth.currentUser.uid, 'cart', itemId), { quantity });
+      return { success: true };
+    } catch (error) {
+      console.error('Error updating quantity:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
   // Badge count = total quantity across all cart lines, not just the
   // number of distinct lines — e.g. one line with quantity 3 shows "3".
   // Swap to cartItems.length if you'd rather the badge reflect distinct
@@ -115,6 +134,7 @@ export const CartProvider = ({ children }) => {
       cartCount,
       addToCart,
       removeFromCart,
+      updateQuantity,
     }}>
       {children}
     </CartContext.Provider>
