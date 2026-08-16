@@ -9,7 +9,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:rules": "firebase emulators:exec --only firestore \"node scripts/test-rules.mjs\"",
+    "test:rules": "node scripts/run-rules-tests.mjs",
     "rules:deploy": "firebase deploy --only firestore:rules"
   },
   "dependencies": {
