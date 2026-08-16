@@ -55,6 +55,15 @@ function findJavaBin() {
 
 const env = { ...process.env };
 
+// Windows names this variable "Path", not "PATH", and env vars are
+// case-insensitive there — but a plain object spread from process.env is
+// not. Writing env.PATH directly would add a SECOND key beside the
+// existing "Path" and read as undefined, handing the child a PATH holding
+// nothing but the Java directory. That breaks the child far worse than
+// the missing Java did: even `node` stops resolving. So find whatever
+// casing this platform actually used and update that key.
+const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+
 if (!javaOnPath(env)) {
   const javaBin = findJavaBin();
   if (!javaBin) {
@@ -66,7 +75,7 @@ if (!javaOnPath(env)) {
     );
     process.exit(1);
   }
-  env.PATH = javaBin + delimiter + (env.PATH ?? '');
+  env[pathKey] = javaBin + delimiter + (env[pathKey] ?? '');
   if (!env.JAVA_HOME) env.JAVA_HOME = join(javaBin, '..');
   console.log(`Using Java from ${javaBin}\n`);
 }
