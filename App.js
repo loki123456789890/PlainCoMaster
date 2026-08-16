@@ -9,7 +9,7 @@ import { AdminProvider } from './context/AdminContext';
 import { ProductProvider } from './context/ProductContext';
 import { FavoritesProvider } from './context/FavoritesContext';
 import { CartProvider } from './context/CartContext';
-import withAdminGuard from './components/withAdminGuard';
+import withRoleGuard from './components/withRoleGuard';
 import AppAlertHost from './components/ui/AppAlertHost';
 
 // Import all screens
@@ -30,7 +30,7 @@ import OrdersScreen from './screens/OrdersScreen';
 import OrderDetailsScreen from './screens/OrderDetailsScreen'; // <-- NEW IMPORT
 
 import AdminLoginScreen from './screens/admin/AdminLoginScreen';
-import AdminDashboardScreen from './screens/admin/AdminDashboardScreen';
+import StoreManagerDashboardScreen from './screens/admin/StoreManagerDashboardScreen';
 import AdminProductsScreen from './screens/admin/AdminProductsScreen';
 import AdminAddProductScreen from './screens/admin/AdminAddProductScreen';
 import AdminEditProductScreen from './screens/admin/AdminEditProductScreen';
@@ -49,19 +49,19 @@ const Stack = createNativeStackNavigator();
 // in firestore.rules exactly. AdminLoginScreen is intentionally left
 // unguarded — it has to stay reachable by non-admins, since it's the
 // screen that grants a role in the first place.
-const GuardedAdminDashboardScreen = withAdminGuard(AdminDashboardScreen, 'seller');
-const GuardedAdminProductsScreen = withAdminGuard(AdminProductsScreen, 'seller');
-const GuardedAdminAddProductScreen = withAdminGuard(AdminAddProductScreen, 'seller');
-const GuardedAdminEditProductScreen = withAdminGuard(AdminEditProductScreen, 'seller');
-const GuardedAdminOrdersScreen = withAdminGuard(AdminOrdersScreen, 'seller');
-const GuardedAdminUsersScreen = withAdminGuard(AdminUsersScreen, 'platformAdmin');
-const GuardedAdminSupportScreen = withAdminGuard(AdminSupportScreen, 'seller');
+const GuardedStoreManagerDashboard = withRoleGuard(StoreManagerDashboardScreen, 'seller');
+const GuardedAdminProductsScreen = withRoleGuard(AdminProductsScreen, 'seller');
+const GuardedAdminAddProductScreen = withRoleGuard(AdminAddProductScreen, 'seller');
+const GuardedAdminEditProductScreen = withRoleGuard(AdminEditProductScreen, 'seller');
+const GuardedAdminOrdersScreen = withRoleGuard(AdminOrdersScreen, 'seller');
+const GuardedAdminUsersScreen = withRoleGuard(AdminUsersScreen, 'platformAdmin');
+const GuardedAdminSupportScreen = withRoleGuard(AdminSupportScreen, 'seller');
 // The one screen both roles may open, and the exception that proves the
 // rule: it shows each role its OWN activity log and nothing else, because
 // it picks the collection from the signed-in role and firestore.rules
 // refuses the other collection in both directions. Shared screen, disjoint
 // data — see AdminActivityScreen's VIEWS map.
-const GuardedAdminActivityScreen = withAdminGuard(AdminActivityScreen, ['seller', 'platformAdmin']);
+const GuardedAdminActivityScreen = withRoleGuard(AdminActivityScreen, ['seller', 'platformAdmin']);
 
 export default function App() {
   return (
@@ -119,7 +119,7 @@ export default function App() {
 
                   {/* Admin Screens */}
                   <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
-                  <Stack.Screen name="AdminDashboard" component={GuardedAdminDashboardScreen} />
+                  <Stack.Screen name="AdminDashboard" component={GuardedStoreManagerDashboard} />
                   <Stack.Screen name="AdminProducts" component={GuardedAdminProductsScreen} />
                   <Stack.Screen name="AdminAddProduct" component={GuardedAdminAddProductScreen} />
                   <Stack.Screen name="AdminEditProduct" component={GuardedAdminEditProductScreen} />

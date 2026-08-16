@@ -51,7 +51,7 @@ const formatCurrency = (value) => {
 
 const formatCount = (value) => groupThousands(String(Number(value) || 0));
 
-export default function AdminDashboardScreen({ navigation }) {
+export default function StoreManagerDashboardScreen({ navigation }) {
   const { logoutAsAdmin } = useAdmin();
   const {
     products,

@@ -22,7 +22,7 @@ import { useAdmin } from '../context/AdminContext';
 // code, or a future deep link.
 const DEFAULT_ALLOWED_ROLES = ['seller', 'platformAdmin'];
 
-export default function withAdminGuard(ScreenComponent, allowedRoles = DEFAULT_ALLOWED_ROLES) {
+export default function withRoleGuard(ScreenComponent, allowedRoles = DEFAULT_ALLOWED_ROLES) {
   const roles = Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles];
 
   return function GuardedScreen(props) {

@@ -21,7 +21,7 @@ jobs and read as one confusing permission set.
 
 1. **`firestore.rules`** — the real boundary. `isSeller()` and
    `isPlatformAdmin()` are separate predicates; no rule grants both.
-2. **`withAdminGuard`** ([components/withAdminGuard.js](components/withAdminGuard.js))
+2. **`withRoleGuard`** ([components/withRoleGuard.js](components/withRoleGuard.js))
    — a UI guard only. Each admin screen names the exact role allowed, in
    [App.js](App.js). It stops the wrong screen from rendering; it is not
    what stops the data from being read.

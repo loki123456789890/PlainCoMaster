@@ -35,7 +35,7 @@ export const AdminProvider = ({ children }) => {
   const [role, setRole] = useState(null);
   // role starts null, but that's not the same as "confirmed unprivileged" —
   // on mount it's genuinely UNKNOWN until onAuthStateChanged fires and (if
-  // there's a user) the Firestore role check resolves. withAdminGuard must
+  // there's a user) the Firestore role check resolves. withRoleGuard must
   // treat this as a distinct third state and hold off redirecting while
   // it's true, or it reproduces the exact bug this fixes (bouncing a
   // still-authenticated seller/platformAdmin before their role has
@@ -66,7 +66,7 @@ export const AdminProvider = ({ children }) => {
         setRole(resolvePrivilegedRole(userDocSnap));
       } catch (error) {
         // A failed Firestore read must not leave the app stuck on
-        // withAdminGuard's loading spinner forever — fail closed and let
+        // withRoleGuard's loading spinner forever — fail closed and let
         // the guard redirect normally.
         console.error('Error restoring admin session:', error);
         setRole(null);

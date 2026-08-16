@@ -460,7 +460,7 @@ export default function ProfileScreen({ navigation }) {
               the portal for a signed-out staff member. A customer tapping
               this still only ever lands on AdminLogin and can't get
               further; that's already enforced by Firestore rules +
-              withAdminGuard, not by hiding this row.
+              withRoleGuard, not by hiding this row.
 
               The label names the role for a restored privileged session
               ("Store Manager" / "Platform Admin") and falls back to the

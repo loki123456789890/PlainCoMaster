@@ -236,7 +236,7 @@ export default function AdminLoginScreen({ navigation }) {
       navigation.goBack();
     } else {
       // No history to go back to — this happens right after an admin
-      // logout, since AdminDashboardScreen resets the nav stack (and
+      // logout, since StoreManagerDashboardScreen resets the nav stack (and
       // signs out of the single shared Firebase Auth session) so "back"
       // can't return into an authenticated admin screen. Landing on
       // Profile here would be worse — it expects someone signed in.

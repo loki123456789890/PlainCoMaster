@@ -230,7 +230,7 @@ segregation, the atomic Firestore stock-decrement transaction on checkout
 Dependency 5), the `expo-location` "Use Current Location" fallback chain
 (GPS → last-known → manual entry), account deactivation semantics (SRS
 Constraint 2.4.1), the two-phase signup rollback for orphaned Auth accounts
-(SRS Security), RBAC via `firestore.rules` + `withAdminGuard`, offline
+(SRS Security), RBAC via `firestore.rules` + `withRoleGuard`, offline
 network-loss messaging matching the SRS's exact wording, per-color image
 absence (SRS Dependency 4), and the Admin Dashboard's "Total Order Value"
 naming (SRS Module 4.1).

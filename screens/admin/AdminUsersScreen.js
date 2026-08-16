@@ -100,7 +100,7 @@ export default function AdminUsersScreen({ navigation }) {
   // see AdminLoginScreen.js), so there's no screen underneath to pop back
   // to. When that's the case, the header control can't go back at all; it
   // has to actually exit the admin portal instead, the same way
-  // AdminDashboardScreen's logout button does.
+  // StoreManagerDashboardScreen's logout button does.
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -167,7 +167,7 @@ export default function AdminUsersScreen({ navigation }) {
   // pushes on top of the customer stack — canGoBack() is true there, so a
   // normal pop is correct. Reached from AdminLoginScreen via replace(), it
   // isn't, and the same tap has to exit the portal instead — see
-  // confirmLogout below, copied from AdminDashboardScreen's logout.
+  // confirmLogout below, copied from StoreManagerDashboardScreen's logout.
   const handleBackPress = () => {
     if (navigation.canGoBack()) {
       navigation.goBack();

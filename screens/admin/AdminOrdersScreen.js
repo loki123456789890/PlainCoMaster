@@ -127,7 +127,7 @@ export default function AdminOrdersScreen({ navigation }) {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [newStatus, setNewStatus] = useState('');
   // Bumped by handleRetry() to force the listener below to tear down and
-  // re-subscribe — same shape as AdminDashboardScreen's retryToken, so a
+  // re-subscribe — same shape as StoreManagerDashboardScreen's retryToken, so a
   // permissions blip or bad connection at mount doesn't leave the list
   // silently stuck on an unrecoverable listener.
   const [retryToken, setRetryToken] = useState(0);
