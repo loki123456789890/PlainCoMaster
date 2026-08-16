@@ -218,5 +218,68 @@ service cloud.firestore {
       allow read, update: if isSeller();
       allow delete: if isSeller();
     }
+    // Activity logging (SRS Constraint 2.4.5, "Audit Functions").
+    //
+    // TWO collections rather than one with a "domain" field, because
+    // Firestore rules cannot inspect a query's filters: a rule can only
+    // allow or deny a read of the collection as a whole. A single log
+    // would therefore have to be readable by both roles — meaning a Store
+    // Manager could read account-management history, or a Platform Admin
+    // could read store operations. Splitting the collection is what keeps
+    // the log's read boundary the same shape as the role boundary
+    // everywhere else.
+    //
+    // Both are APPEND-ONLY: create is the only write verb allowed, for
+    // every role, so a record can't be rewritten or erased after the fact
+    // by the same account that produced it. That is the property that
+    // makes a log worth keeping.
+    //
+    // HONEST LIMITATION: these entries are written by the client, right
+    // after the action they describe. Rules can enforce that an entry is
+    // well-formed, truthfully attributed, and never altered — but they
+    // cannot force a modified client to write one at all. This is an
+    // operational activity log for monitoring, per the SRS, not a
+    // tamper-proof security audit trail; guaranteeing that would take a
+    // server-side trigger (Cloud Functions), which this project doesn't
+    // use. See ROLES.md.
+    function isValidLogEntry() {
+      return request.resource.data.keys().hasOnly(
+          ['action', 'actorId', 'actorEmail', 'targetId', 'targetLabel', 'summary', 'createdAt']
+        ) &&
+        request.resource.data.keys().hasAll(
+          ['action', 'actorId', 'actorEmail', 'targetId', 'targetLabel', 'summary', 'createdAt']
+        ) &&
+        // An entry cannot be attributed to anyone but its author, so a
+        // privileged account can't log its own actions under someone
+        // else's name.
+        request.resource.data.actorId == request.auth.uid &&
+        request.resource.data.action is string &&
+        request.resource.data.action.size() <= 40 &&
+        request.resource.data.actorEmail is string &&
+        request.resource.data.targetId is string &&
+        request.resource.data.targetLabel is string &&
+        request.resource.data.targetLabel.size() <= 120 &&
+        request.resource.data.summary is string &&
+        request.resource.data.summary.size() <= 200 &&
+        // Forces serverTimestamp() — request.time is the server's clock,
+        // so a client cannot backdate or post-date an entry to disguise
+        // when something happened.
+        request.resource.data.createdAt == request.time;
+    }
+    // Store operations: product changes and order transactions. The Store
+    // Manager's domain, and the pair the SRS names explicitly.
+    // read and create are stated separately on purpose: isValidLogEntry()
+    // reads request.resource, which only exists on a write, so folding
+    // them into one `allow read, create` would make every read fail.
+    match /activityLogs/{logId} {
+      allow read: if isSeller();
+      allow create: if isSeller() && isValidLogEntry();
+    }
+    // Account management: role grants and activation changes. The Platform
+    // Admin's domain.
+    match /accountLogs/{logId} {
+      allow read: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && isValidLogEntry();
+    }
   }
 }

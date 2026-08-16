@@ -84,6 +84,55 @@ account after the first is granted in-app through the flow above. (This is
 the same bootstrap every permission system has — the first root account is
 always established out-of-band.)
 
+## Activity logging
+
+SRS Constraint 2.4.5 ("Audit Functions") asks for logs of user activities
+— product updates and order transactions — to help store managers monitor
+operations. Two collections implement it, split along the same line as
+the roles:
+
+| Collection | Written by | Records | Read by |
+|---|---|---|---|
+| `activityLogs` | Store Manager | Product create/edit/delete, order status changes | Store Manager |
+| `accountLogs` | Platform Admin | Role grants, account activate/deactivate | Platform Admin |
+
+Both are reached from the same screen
+([AdminActivityScreen](screens/admin/AdminActivityScreen.js)), which picks
+its collection from the signed-in role. Store Managers open it from the
+Activity tile on their dashboard; Platform Admins from the clock icon in
+Manage Users.
+
+**Why two collections rather than one with a `domain` field:** Firestore
+rules cannot inspect a query's filters — a rule may only allow or deny a
+read of the collection as a whole. A single log would therefore have to be
+readable by both roles, which would let a Store Manager read account
+history or a Platform Admin read store operations. Splitting the
+collection keeps the log's read boundary identical to the role boundary.
+
+Rules enforce four things on every entry:
+
+1. **Append-only.** `create` is the only write verb allowed, for every
+   role. Nobody can edit or delete an entry, including its author.
+2. **Truthful attribution.** `actorId` must equal `request.auth.uid`, so
+   an action cannot be logged under someone else's name.
+3. **Honest timestamps.** `createdAt` must equal `request.time`, which
+   forces `serverTimestamp()` and prevents back- or post-dating.
+4. **A fixed shape.** Exactly seven fields, with length caps.
+
+### Limitation, stated plainly
+
+These entries are written **by the client**, immediately after the action
+they describe. The rules can guarantee an entry is well-formed, correctly
+attributed, and never altered — but they cannot force a modified client to
+write one in the first place.
+
+So this is an **operational activity log for monitoring**, which is what
+the SRS asks for, and not a tamper-proof security audit trail. Making it
+the latter requires writing entries server-side from a database trigger
+(Cloud Functions), which this project does not use. If the log is ever
+relied on for dispute resolution rather than monitoring, that is the
+change to make.
+
 ## Deactivation, not deletion
 
 No `delete` rule exists for user documents, for any role. SRS §2.4

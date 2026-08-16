@@ -182,6 +182,17 @@ export default function AdminDashboardScreen({ navigation }) {
       onRetry: handleRetry,
       badge: openSupportCount > 0,
     },
+    {
+      // No count: the other tiles count things needing attention, while an
+      // activity log only ever grows. A number here would read as a queue
+      // to clear rather than a history to consult.
+      title: 'Activity',
+      icon: 'time-outline',
+      screen: 'AdminActivity',
+      caption: 'View log',
+      loading: false,
+      error: false,
+    },
   ];
 
   const handleLogout = () => {
@@ -323,7 +334,11 @@ export default function AdminDashboardScreen({ navigation }) {
 
         <View style={styles.grid}>
           {gridItems.map((item, index) => {
-            const statusLabel = item.error ? 'unavailable' : item.loading ? 'loading' : item.count;
+            const statusLabel = item.error
+              ? 'unavailable'
+              : item.loading
+              ? 'loading'
+              : item.caption ?? item.count;
             return (
               <Animated.View
                 key={item.title}
@@ -376,6 +391,12 @@ export default function AdminDashboardScreen({ navigation }) {
                             </>
                           )}
                         </Pressable>
+                      ) : item.caption ? (
+                        // A tile can carry a caption instead of a number
+                        // when counting isn't meaningful — formatCount()
+                        // would render a missing count as "0", which reads
+                        // as "nothing here" rather than "not a count".
+                        <Text style={styles.gridCaption}>{item.caption}</Text>
                       ) : (
                         <Text style={styles.gridCount}>{formatCount(item.count)}</Text>
                       )}
@@ -558,6 +579,15 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: Colors.light.text,
+  },
+  // Sits where a count would so tiles keep a common baseline, but at body
+  // weight — it's a label, not a figure, and shouldn't compete with the
+  // real numbers beside it.
+  gridCaption: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: Colors.light.icon,
+    paddingVertical: 3,
   },
   gridSkeleton: {
     width: 40,

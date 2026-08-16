@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebaseConfig';
+import { logStoreActivity, ACTIONS } from '../utils/activityLog';
 
 const ProductContext = createContext();
 
@@ -115,6 +116,14 @@ export const ProductProvider = ({ children }) => {
         docData.measurementType = productData.measurementType;
       }
       const docRef = await addDoc(collection(db, 'products'), docData);
+      // Not awaited: the product exists at this point, so the caller's
+      // success path shouldn't wait on (or fail with) the log write.
+      logStoreActivity({
+        action: ACTIONS.PRODUCT_CREATED,
+        targetId: docRef.id,
+        targetLabel: productData.name,
+        summary: `Added product "${productData.name}"`,
+      });
       return { success: true, product: { id: docRef.id, ...productData } };
     } catch (error) {
       console.error('Error adding product:', error.code, error.message);
@@ -125,6 +134,19 @@ export const ProductProvider = ({ children }) => {
   const updateProduct = async (productId, updatedData) => {
     try {
       await updateDoc(doc(db, 'products', productId), updatedData);
+      // Names the fields that changed rather than dumping their values:
+      // "who touched what, and when" is what the SRS asks the log to
+      // answer, and a full before/after diff of every product edit would
+      // bury that under noise. updatedData carries deleteField() sentinels
+      // for cleared optional fields, so only the keys are meaningful here.
+      const changed = Object.keys(updatedData).join(', ');
+      const label = updatedData.name || products.find((p) => p.id === productId)?.name || productId;
+      logStoreActivity({
+        action: ACTIONS.PRODUCT_UPDATED,
+        targetId: productId,
+        targetLabel: label,
+        summary: `Edited "${label}"${changed ? ` — changed ${changed}` : ''}`,
+      });
       return { success: true };
     } catch (error) {
       console.error('Error updating product:', error.code, error.message);
@@ -133,8 +155,19 @@ export const ProductProvider = ({ children }) => {
   };
 
   const deleteProduct = async (productId) => {
+    // Resolved before the delete, not after: once the document is gone the
+    // local list drops it too, and the log entry would be left naming a
+    // bare id. The id is kept as a fallback so an entry is still written
+    // even if the product was never in local state.
+    const label = products.find((p) => p.id === productId)?.name || productId;
     try {
       await deleteDoc(doc(db, 'products', productId));
+      logStoreActivity({
+        action: ACTIONS.PRODUCT_DELETED,
+        targetId: productId,
+        targetLabel: label,
+        summary: `Deleted product "${label}"`,
+      });
       return { success: true };
     } catch (error) {
       console.error('Error deleting product:', error.code, error.message);

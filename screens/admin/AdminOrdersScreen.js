@@ -38,6 +38,7 @@ import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
+import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
 
 const STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
 
@@ -233,7 +234,19 @@ export default function AdminOrdersScreen({ navigation }) {
     setUpdating(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
+      const previousStatus = selectedOrder.status;
       await updateDoc(selectedOrder.ref, { status: newStatus });
+      // Records the transition, not just the new value — "who moved this
+      // order to cancelled, and what was it before?" is the question the
+      // SRS's audit clause exists to answer.
+      logStoreActivity({
+        action: ACTIONS.ORDER_STATUS,
+        targetId: selectedOrder.id,
+        targetLabel: `Order #${selectedOrder.orderNumber || selectedOrder.id}`,
+        summary:
+          `Order #${selectedOrder.orderNumber || selectedOrder.id} — status ` +
+          `${getStatusLabel(previousStatus)} → ${getStatusLabel(newStatus)}`,
+      });
       setShowStatusModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showAppAlert('Success', `Order status updated to ${getStatusLabel(newStatus)}`);

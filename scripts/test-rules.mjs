@@ -293,6 +293,97 @@ await test('SHOP-5  a guest cannot read products', async () => {
 });
 
 // ---------------------------------------------------------------------------
+console.log('\nActivity logs');
+// ---------------------------------------------------------------------------
+
+// serverTimestamp() is mandatory: the rules require createdAt to equal
+// request.time, which is what stops an entry being back- or post-dated.
+const logEntry = (actorId, overrides = {}) => ({
+  action: 'product.updated',
+  actorId,
+  actorEmail: 'someone@example.com',
+  targetId: 'p1',
+  targetLabel: 'Denim Jacket',
+  summary: 'Edited "Denim Jacket"',
+  createdAt: serverTimestamp(),
+  ...overrides,
+});
+
+await test('LOG-1  a store manager can write and read store activity', async () => {
+  const db = asSeller();
+  await assertSucceeds(setDoc(doc(db, 'activityLogs/l1'), logEntry('seller1')));
+  await assertSucceeds(getDocs(collection(db, 'activityLogs')));
+});
+
+await test('LOG-2  a platform admin can write and read account activity', async () => {
+  const db = asAdmin();
+  await assertSucceeds(
+    setDoc(doc(db, 'accountLogs/l1'), logEntry('admin1', { action: 'user.role' }))
+  );
+  await assertSucceeds(getDocs(collection(db, 'accountLogs')));
+});
+
+await test('LOG-3  each role is shut out of the OTHER log', async () => {
+  await assertFails(getDocs(collection(asAdmin(), 'activityLogs')));
+  await assertFails(getDocs(collection(asSeller(), 'accountLogs')));
+  await assertFails(setDoc(doc(asAdmin(), 'activityLogs/x'), logEntry('admin1')));
+  await assertFails(setDoc(doc(asSeller(), 'accountLogs/x'), logEntry('seller1')));
+});
+
+await test('LOG-4  entries cannot be attributed to someone else', async () => {
+  // seller1 trying to log an action as if admin1 had done it.
+  await assertFails(setDoc(doc(asSeller(), 'activityLogs/l2'), logEntry('admin1')));
+});
+
+await test('LOG-5  entries cannot be backdated', async () => {
+  await assertFails(
+    setDoc(
+      doc(asSeller(), 'activityLogs/l3'),
+      logEntry('seller1', { createdAt: new Date('2020-01-01') })
+    )
+  );
+});
+
+await test('LOG-6  the log is append-only — no edits, no deletes', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'activityLogs/existing'), {
+      action: 'product.deleted', actorId: 'seller1', actorEmail: 'sam@example.com',
+      targetId: 'p1', targetLabel: 'Denim Jacket', summary: 'Deleted product', createdAt: new Date(),
+    });
+  });
+  // The author of an entry cannot rewrite or erase it afterwards. This is
+  // the property that makes the log worth keeping at all.
+  await assertFails(updateDoc(doc(asSeller(), 'activityLogs/existing'), { summary: 'Nothing happened' }));
+  await assertFails(deleteDoc(doc(asSeller(), 'activityLogs/existing')));
+  await assertFails(deleteDoc(doc(asAdmin(), 'activityLogs/existing')));
+});
+
+await test('LOG-7  a customer cannot read or write either log', async () => {
+  const db = asCustomer();
+  await assertFails(getDocs(collection(db, 'activityLogs')));
+  await assertFails(getDocs(collection(db, 'accountLogs')));
+  await assertFails(setDoc(doc(db, 'activityLogs/l4'), logEntry('customer1')));
+});
+
+await test('LOG-8  malformed entries are rejected', async () => {
+  const db = asSeller();
+  const { summary, ...missingSummary } = logEntry('seller1');
+  await assertFails(setDoc(doc(db, 'activityLogs/l5'), missingSummary));
+  await assertFails(
+    setDoc(doc(db, 'activityLogs/l6'), logEntry('seller1', { note: 'extra field' }))
+  );
+  await assertFails(
+    setDoc(doc(db, 'activityLogs/l7'), logEntry('seller1', { summary: 'x'.repeat(201) }))
+  );
+});
+
+await test('LOG-9  a deactivated store manager cannot write to the log', async () => {
+  await assertFails(
+    setDoc(doc(asDeactivatedSeller(), 'activityLogs/l8'), logEntry('deactivatedSeller'))
+  );
+});
+
+// ---------------------------------------------------------------------------
 await testEnv.cleanup();
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);

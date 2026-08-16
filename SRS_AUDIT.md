@@ -9,7 +9,14 @@ first, internal/code-only details last).
 
 ## CATEGORY A — SRS promises it, the app does not do it
 
-### A1. "Strict data type enforcement on the backend to prevent XSS" does not exist
+### A1. "Strict data type enforcement on the backend to prevent XSS" — PARTIALLY RESOLVED
+
+> **Update:** now implemented for `users` create (an exact key allowlist
+> with string and length checks) and for both activity log collections.
+> Still absent for `products` create and `supportRequests` create, which
+> remain unvalidated — the finding below is accurate for those two.
+
+
 **SRS (Security, p.29):**
 > "Because Cloud Firestore is a NoSQL database, it is immune to traditional SQL
 > injection attacks. However, the system will still implement strict data type
@@ -25,7 +32,19 @@ A panelist can open `firestore.rules` and ask "where is the backend data-type
 enforcement the SRS promises?" — beyond the one narrow stock-number check,
 it is not implemented anywhere.
 
-### A2. Audit logging of user activities does not exist
+### A2. Audit logging of user activities does not exist — RESOLVED
+
+> **Update:** implemented. `activityLogs` (Store Manager: product changes
+> and order status transitions) and `accountLogs` (Platform Admin: role
+> grants and account activation) are written at each privileged action and
+> surfaced in [AdminActivityScreen](screens/admin/AdminActivityScreen.js).
+> Both are append-only, self-attributed, and server-timestamped by rule;
+> nine tests in `scripts/test-rules.mjs` cover it. One caveat now recorded
+> in [ROLES.md](ROLES.md): entries are client-written, so this is an
+> operational monitoring log as the SRS describes, not a tamper-proof
+> audit trail. The original finding is kept below for reference.
+
+
 **SRS (Constraints 2.4.5, "Audit Functions"):**
 > "The system should maintain logs of user activities (product updates and
 > order transactions) to assist store managers in monitoring operations and

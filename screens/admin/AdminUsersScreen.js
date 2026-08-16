@@ -42,6 +42,7 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import DialogButtonRow from '../../components/ui/DialogButtonRow';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { ROLES, getRoleLabel, getPortalLabel, ROLE_PLATFORM_ADMIN } from '../../constants/roles';
+import { logAccountActivity, ACTIONS } from '../../utils/activityLog';
 
 // The three roles Firestore recognizes (see firestore.rules) and their
 // user-facing names both come from constants/roles.js, so the picker, the
@@ -254,8 +255,20 @@ export default function AdminUsersScreen({ navigation }) {
       // hasOnly(['role', 'isActive']) allowlist in firestore.rules for the
       // platformAdmin branch. Name is edited by the account owner from
       // their own Profile screen, not here.
+      const previousRole = selectedUser.role;
       await updateDoc(doc(db, 'users', selectedUser.id), {
         role: editFormData.role,
+      });
+      // Granting or revoking staff access is the single most consequential
+      // action this screen performs, so it's the one the log most needs to
+      // carry — including what the role was before.
+      logAccountActivity({
+        action: ACTIONS.USER_ROLE,
+        targetId: selectedUser.id,
+        targetLabel: selectedUser.name,
+        summary:
+          `${selectedUser.name} — role ${getRoleLabel(previousRole)} → ` +
+          `${getRoleLabel(editFormData.role)}`,
       });
       setShowEditModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -302,6 +315,16 @@ export default function AdminUsersScreen({ navigation }) {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             try {
               await updateDoc(doc(db, 'users', user.id), { isActive: newStatus });
+              // Deactivation is this project's stand-in for deletion (SRS
+              // §2.4 keeps accounts for auditability), so it needs to leave
+              // a trace of its own — otherwise an account can go dark with
+              // nothing recording who did it.
+              logAccountActivity({
+                action: ACTIONS.USER_STATUS,
+                targetId: user.id,
+                targetLabel: user.name,
+                summary: `${user.name} — account ${newStatus ? 'activated' : 'deactivated'}`,
+              });
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               showAppAlert('Success', `User ${newStatus ? 'activated' : 'deactivated'} successfully`);
             } catch (error) {
@@ -420,19 +443,22 @@ export default function AdminUsersScreen({ navigation }) {
 
       {/* Header */}
       <View style={styles.header}>
-        <AnimatedPressable
-          onPress={handleBackPress}
-          style={styles.backButton}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel={canGoBack ? 'Go back' : 'Log out'}
-        >
-          <Ionicons
-            name={canGoBack ? 'arrow-back' : 'log-out-outline'}
-            size={24}
-            color={canGoBack ? Colors.light.text : Colors.light.danger}
-          />
-        </AnimatedPressable>
+        <View style={styles.headerActions}>
+          <AnimatedPressable
+            onPress={handleBackPress}
+            style={styles.backButton}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={canGoBack ? 'Go back' : 'Log out'}
+          >
+            <Ionicons
+              name={canGoBack ? 'arrow-back' : 'log-out-outline'}
+              size={24}
+              color={canGoBack ? Colors.light.text : Colors.light.danger}
+            />
+          </AnimatedPressable>
+          <View style={styles.headerSpacer} />
+        </View>
         {/* The signed-in role is named in the header, not just implied by
             which screen you happen to be on. Before the split there was
             one "admin" and no reason to say which hat you were wearing;
@@ -448,15 +474,29 @@ export default function AdminUsersScreen({ navigation }) {
             platform admin arrives with; answering it in the place they'd
             look for a + button is cheaper than letting them conclude the
             feature is missing. */}
-        <AnimatedPressable
-          onPress={handleOpenAddStaff}
-          style={styles.headerAction}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel="How to add a staff member"
-        >
-          <Ionicons name="person-add-outline" size={22} color={Colors.light.tint} />
-        </AnimatedPressable>
+        <View style={styles.headerActions}>
+          <AnimatedPressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              navigation.navigate('AdminActivity');
+            }}
+            style={styles.headerAction}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Account activity log"
+          >
+            <Ionicons name="time-outline" size={22} color={Colors.light.tint} />
+          </AnimatedPressable>
+          <AnimatedPressable
+            onPress={handleOpenAddStaff}
+            style={styles.headerAction}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="How to add a staff member"
+          >
+            <Ionicons name="person-add-outline" size={22} color={Colors.light.tint} />
+          </AnimatedPressable>
+        </View>
       </View>
 
       {!isConnected && (
@@ -967,13 +1007,25 @@ const styles = StyleSheet.create({
   placeholder: {
     width: 40,
   },
-  // Same 40px footprint the balance spacer used, so swapping a control in
-  // doesn't shift the centered title.
   headerAction: {
     width: 40,
     height: 40,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Two actions now sit on the right, so the left side has to reserve the
+  // same 80px or the centered title drifts off-centre by exactly one
+  // button. backButton keeps its own 40 and this pads the rest.
+  // Both header sides use this: 80px wide holding two 40px slots, so they
+  // balance exactly and the title stays centered. The left side is the
+  // back button plus a spacer; the right is two real buttons. No
+  // justifyContent needed — the children fill the width precisely.
+  headerActions: {
+    flexDirection: 'row',
+    width: 80,
+  },
+  headerSpacer: {
+    width: 40,
   },
   addStaffSteps: {
     alignSelf: 'stretch',
