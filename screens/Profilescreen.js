@@ -256,8 +256,25 @@ export default function ProfileScreen({ navigation }) {
   // editing the document in the Firebase console.
   //
   // firestore.rules already blocks a platform admin from deactivating
-  // themselves through AdminUsersScreen, for exactly this reason. This
-  // closes the other door into the same hole.
+  // themselves through AdminUsersScreen, for exactly this reason.
+  //
+  // REACHABILITY, honestly: a platform admin cannot currently open this
+  // screen at all. No staff screen navigates to Profile, and Loginscreen
+  // signs staff accounts out and redirects them to the Staff Portal, so
+  // there is no path from a privileged session into the customer stack.
+  // (The handleAdminPortalPress branch above, which routes a privileged
+  // viewer to their portal, predates that redirect and describes a state
+  // the app no longer reaches.) A customer promoted mid-session doesn't
+  // reach it either: AdminContext only re-resolves role on auth state
+  // change, so `role` is still null for them and this check wouldn't fire.
+  //
+  // It is kept as defence in depth, not because it currently protects
+  // anything: it costs nothing at runtime (the query only runs when role
+  // is already platformAdmin, which never happens here today) and it would
+  // become load-bearing again the moment someone adds a route from the
+  // staff stack to Profile, or makes a persisted session enter the app
+  // directly. Anyone reading this should know it is currently dormant
+  // rather than assume the door is being held shut.
   //
   // A client-side check, deliberately: rules can't count documents, so
   // this can't be enforced server-side. That's acceptable here because

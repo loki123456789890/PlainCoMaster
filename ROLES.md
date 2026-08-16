@@ -92,33 +92,42 @@ becomes unusable, nothing inside the app can restore account management,
 because no one else can set `isActive` back to `true` or grant the role.
 Recovery means editing the document in the Firebase console.
 
-`firestore.rules` closes one door — the platformAdmin update branch cannot
-target the requester's own document, so an admin can't demote or
-deactivate themselves from Manage Users. But the **owner** branch lets any
-account deactivate itself from the ordinary Profile screen, and that path
-reaches the same dead end.
+### How the app currently prevents it
 
-Two client-side guards cover it:
+`firestore.rules` blocks the direct route: the platformAdmin update branch
+cannot target the requester's own document, so an admin cannot demote or
+deactivate themselves from Manage Users.
 
-1. **Manage Users** shows a standing warning whenever the active
-   platformAdmin count is 1, naming the risk while a second admin can
-   still be appointed.
-2. **Profile** refuses self-deactivation for the last active platform
-   admin, and explains that another person must be granted the role first.
-   It fails closed if the count can't be verified — the action is
-   irreversible from inside the app for this role, so proceeding on an
-   unverified count risks the exact outcome the check exists to prevent.
+The **owner** branch does still permit self-deactivation from the Profile
+screen — but a platform admin **cannot reach that screen**. No staff screen
+navigates to Profile, and `Loginscreen` signs staff accounts out and sends
+them to the Staff Portal, so there is no path from a privileged session
+into the customer stack. (Before that redirect was fixed, staff *did* fall
+through to the customer HomeScreen, which is why `Profilescreen` still
+carries code for routing "a restored privileged session" to its portal.)
 
-These are **guardrails, not security boundaries.** Rules cannot count
+`Profilescreen` also refuses self-deactivation for the last active platform
+admin, failing closed if the count can't be verified. **This check is
+currently dormant** — it cannot be triggered, for the reason above. It is
+kept as defence in depth: it costs nothing at runtime and would become
+load-bearing again if anyone routes from the staff stack to Profile, or
+makes a persisted session enter the app directly.
+
+**Manage Users** shows a standing warning whenever the active platformAdmin
+count is 1. This is the guard that actually does work today.
+
+Both are **guardrails, not security boundaries** — rules cannot count
 documents, so neither can be enforced server-side. That's acceptable
-because this protects against a mistake rather than an attacker: nothing
-is gained by stranding your own account, and no security property depends
-on preventing it.
+because they protect against a mistake rather than an attacker.
 
-**Operational recommendation: keep at least two active Platform Admins.**
-The guards make the failure hard to reach by accident; a second admin
-makes it recoverable when it happens some other way, such as losing access
-to the only admin's email.
+### The risk that remains
+
+Screen-level guards can't help with the likeliest cause: **losing access to
+the only admin's credentials or email.** Nothing in the app prevents that,
+and recovery still means the Firebase console.
+
+**So: keep at least two active Platform Admins.** That's the actual
+mitigation; everything above only removes the ways to cause it by accident.
 
 ## Activity logging
 
