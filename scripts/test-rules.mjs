@@ -35,7 +35,16 @@ import {
   collectionGroup,
   getDocs,
   serverTimestamp,
+  setLogLevel,
 } from 'firebase/firestore';
+
+// Most of this suite asserts that a write is REFUSED, and the Firestore
+// SDK logs every refusal as a multi-line PERMISSION_DENIED error. Those
+// lines are the tests succeeding, but they read as a wall of failures to
+// anyone watching, which is the opposite of what a suite like this is for.
+// Silenced so the output is just the pass/fail list. A genuinely broken
+// rule still surfaces: the assertion fails and the harness prints it.
+setLogLevel('silent');
 
 const PROJECT_ID = 'plainco-rules-test';
 
