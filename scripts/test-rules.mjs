@@ -117,6 +117,23 @@ const asAdmin = () => testEnv.authenticatedContext('admin1').firestore();
 const asDeactivatedSeller = () => testEnv.authenticatedContext('deactivatedSeller').firestore();
 const asGuest = () => testEnv.unauthenticatedContext().firestore();
 
+// The exact shape ProductContext.addProduct writes. Defined up here
+// because the role-separation tests need it too: a denial asserted with a
+// malformed product would pass whether the role or the shape caused it,
+// which would make those tests prove nothing about roles at all.
+const productDoc = (overrides = {}) => ({
+  name: 'Corduroy Shirt',
+  price: 650,
+  type: 'Tops',
+  stock: 5,
+  description: 'Lightly worn.',
+  imageUrl: 'https://example.com/shirt.jpg',
+  colors: ['brown'],
+  sizes: ['M'],
+  createdAt: serverTimestamp(),
+  ...overrides,
+});
+
 // The exact shape Signupscreen.js writes. Any test that varies from this is
 // varying from what the real app does.
 const signupDoc = (uid, overrides = {}) => ({
@@ -224,7 +241,7 @@ await test('UPDATE-8  a store manager cannot change roles', async () => {
 });
 
 await test('UPDATE-9  a deactivated store manager has no privileges', async () => {
-  await assertFails(setDoc(doc(asDeactivatedSeller(), 'products/p2'), { name: 'X', price: 1, stock: 1 }));
+  await assertFails(setDoc(doc(asDeactivatedSeller(), 'products/p2'), productDoc()));
 });
 
 // ---------------------------------------------------------------------------
@@ -241,14 +258,14 @@ await test('SPLIT-2  a store manager CANNOT read user accounts', async () => {
 
 await test('SPLIT-3  a store manager can manage products', async () => {
   const db = asSeller();
-  await assertSucceeds(setDoc(doc(db, 'products/p2'), { name: 'Tee', price: 300, stock: 4 }));
+  await assertSucceeds(setDoc(doc(db, 'products/p2'), productDoc()));
   await assertSucceeds(updateDoc(doc(db, 'products/p1'), { price: 900 }));
   await assertSucceeds(deleteDoc(doc(db, 'products/p1')));
 });
 
 await test('SPLIT-4  a platform admin CANNOT manage products', async () => {
   const db = asAdmin();
-  await assertFails(setDoc(doc(db, 'products/p2'), { name: 'Tee', price: 300, stock: 4 }));
+  await assertFails(setDoc(doc(db, 'products/p2'), productDoc()));
   await assertFails(updateDoc(doc(db, 'products/p1'), { price: 900 }));
   await assertFails(deleteDoc(doc(db, 'products/p1')));
 });
@@ -271,7 +288,7 @@ console.log('\nProducts and checkout');
 // ---------------------------------------------------------------------------
 
 await test('SHOP-1  a customer cannot create or edit products', async () => {
-  await assertFails(setDoc(doc(asCustomer(), 'products/p9'), { name: 'Free', price: 0, stock: 1 }));
+  await assertFails(setDoc(doc(asCustomer(), 'products/p9'), productDoc()));
   await assertFails(updateDoc(doc(asCustomer(), 'products/p1'), { price: 1 }));
 });
 
@@ -290,6 +307,112 @@ await test('SHOP-4  stock decrement cannot smuggle a price change', async () => 
 
 await test('SHOP-5  a guest cannot read products', async () => {
   await assertFails(getDoc(doc(asGuest(), 'products/p1')));
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nField validation (SRS "strict data type enforcement")');
+// ---------------------------------------------------------------------------
+
+await test('VALID-1  a real product create succeeds', async () => {
+  await assertSucceeds(setDoc(doc(asSeller(), 'products/new1'), productDoc()));
+  // The optional size guide must still be accepted.
+  await assertSucceeds(
+    setDoc(doc(asSeller(), 'products/new2'), productDoc({
+      measurements: { M: { chest: 50 } },
+      measurementType: 'tops',
+    }))
+  );
+});
+
+await test('VALID-2  wrong types are rejected on product create', async () => {
+  const db = asSeller();
+  await assertFails(setDoc(doc(db, 'products/bad1'), productDoc({ price: '650' })));
+  await assertFails(setDoc(doc(db, 'products/bad2'), productDoc({ stock: '5' })));
+  await assertFails(setDoc(doc(db, 'products/bad3'), productDoc({ name: 42 })));
+  await assertFails(setDoc(doc(db, 'products/bad4'), productDoc({ colors: 'brown' })));
+});
+
+await test('VALID-3  blank name, negative price, and extra fields are rejected', async () => {
+  const db = asSeller();
+  await assertFails(setDoc(doc(db, 'products/bad5'), productDoc({ name: '   ' })));
+  await assertFails(setDoc(doc(db, 'products/bad6'), productDoc({ price: -1 })));
+  await assertFails(setDoc(doc(db, 'products/bad7'), productDoc({ isFeatured: true })));
+  await assertFails(
+    setDoc(doc(db, 'products/bad8'), productDoc({ description: 'x'.repeat(2001) }))
+  );
+});
+
+await test('VALID-4  a product create cannot backdate createdAt', async () => {
+  await assertFails(
+    setDoc(doc(asSeller(), 'products/bad9'), productDoc({ createdAt: new Date('2020-01-01') }))
+  );
+});
+
+await test('VALID-5  a seller edit must leave well-typed data behind', async () => {
+  const db = asSeller();
+  await assertSucceeds(updateDoc(doc(db, 'products/p1'), { price: 700, stock: 3 }));
+  await assertFails(updateDoc(doc(db, 'products/p1'), { price: 'free' }));
+  await assertFails(updateDoc(doc(db, 'products/p1'), { stock: 'lots' }));
+});
+
+await test('VALID-6  a LEGACY product with unknown fields is still editable', async () => {
+  // The risk a strict key allowlist would introduce on update: products
+  // written by earlier versions of the app carry fields the current rule
+  // never mentions, and locking those out would make them uneditable.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'products/legacy'), {
+      name: 'Old Jacket', price: '900', stock: '2', legacyCategory: 'outerwear',
+    });
+  });
+  // Saving it the way AdminEditProductScreen does — full field set, with
+  // string price/stock migrated to numbers — must succeed despite the
+  // unknown legacyCategory field riding along.
+  await assertSucceeds(
+    updateDoc(doc(asSeller(), 'products/legacy'), {
+      name: 'Old Jacket', price: 900, type: 'Outerwear', stock: 2,
+      description: '', imageUrl: 'https://example.com/j.jpg', colors: [], sizes: [],
+    })
+  );
+});
+
+const supportDoc = (uid, overrides = {}) => ({
+  message: 'My order has not arrived.',
+  userId: uid,
+  userEmail: 'cathy@example.com',
+  status: 'open',
+  createdAt: serverTimestamp(),
+  ...overrides,
+});
+
+await test('VALID-7  a real support request succeeds', async () => {
+  await assertSucceeds(setDoc(doc(asCustomer(), 'supportRequests/s1'), supportDoc('customer1')));
+});
+
+await test('VALID-8  malformed support requests are rejected', async () => {
+  const db = asCustomer();
+  await assertFails(setDoc(doc(db, 'supportRequests/s2'), supportDoc('customer1', { message: '  ' })));
+  await assertFails(setDoc(doc(db, 'supportRequests/s3'), supportDoc('customer1', { message: 42 })));
+  await assertFails(
+    setDoc(doc(db, 'supportRequests/s4'), supportDoc('customer1', { message: 'x'.repeat(2001) }))
+  );
+  // Filing a request that arrives already resolved would keep it out of
+  // the Store Manager's open queue entirely.
+  await assertFails(setDoc(doc(db, 'supportRequests/s5'), supportDoc('customer1', { status: 'resolved' })));
+  await assertFails(setDoc(doc(db, 'supportRequests/s6'), supportDoc('customer2')));
+});
+
+await test('VALID-9  a seller may only move a request between open and resolved', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'supportRequests/s9'), {
+      message: 'Where is my order?', userId: 'customer1',
+      userEmail: 'cathy@example.com', status: 'open', createdAt: new Date(),
+    });
+  });
+  const db = asSeller();
+  await assertSucceeds(updateDoc(doc(db, 'supportRequests/s9'), { status: 'resolved' }));
+  // Rewriting the customer's own words is not part of working a request.
+  await assertFails(updateDoc(doc(db, 'supportRequests/s9'), { message: 'Never mind' }));
+  await assertFails(updateDoc(doc(db, 'supportRequests/s9'), { status: 'deleted' }));
 });
 
 // ---------------------------------------------------------------------------

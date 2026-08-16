@@ -9,12 +9,38 @@ first, internal/code-only details last).
 
 ## CATEGORY A — SRS promises it, the app does not do it
 
-### A1. "Strict data type enforcement on the backend to prevent XSS" — PARTIALLY RESOLVED
+### A1. "Strict data type enforcement on the backend to prevent XSS" — RESOLVED
 
-> **Update:** now implemented for `users` create (an exact key allowlist
-> with string and length checks) and for both activity log collections.
-> Still absent for `products` create and `supportRequests` create, which
-> remain unvalidated — the finding below is accurate for those two.
+> **Update:** implemented across every writable collection.
+>
+> - `users` create — exact key allowlist, string types, length caps, and
+>   `uid` bound to the caller.
+> - `products` create — exact key allowlist plus types, non-empty name,
+>   non-negative price/stock, list types for colors/sizes, and a
+>   server-set `createdAt`. Seller **updates** are validated too, against
+>   the merged result rather than the delta; deliberately without a key
+>   allowlist, so products written by earlier versions of the app don't
+>   become uneditable (covered by test VALID-6).
+> - `supportRequests` create — exact key allowlist, non-empty message
+>   capped at 2000 characters, and `status` forced to `'open'` so a
+>   request can't arrive pre-resolved and skip the queue. Seller updates
+>   are confined to the `status` field, so the customer's own message
+>   can't be rewritten.
+> - `activityLogs` / `accountLogs` — see A2.
+>
+> Fifteen tests in `scripts/test-rules.mjs` (VALID-1..9, plus the CREATE
+> group) cover this.
+>
+> **One honest qualification on the SRS's wording:** type and length
+> enforcement is what security rules can do, and it is what's implemented.
+> It bounds what can be stored but does not sanitise markup. The XSS the
+> SRS worries about has no execution path here regardless — React Native
+> renders strings through `<Text>`, which never interprets HTML, so this
+> app has no browser DOM for stored markup to execute in. The enforcement
+> is real and worth having; the specific XSS framing in the SRS is a
+> web-app concern that doesn't transfer to React Native.
+
+The original finding follows.
 
 
 **SRS (Security, p.29):**

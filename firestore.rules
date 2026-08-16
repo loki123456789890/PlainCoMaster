@@ -184,9 +184,65 @@ service cloud.firestore {
     match /{path=**}/orders/{orderId} {
       allow read: if isSeller();
     }
+    // Field validation for products, delivering the "strict data type
+    // enforcement on the backend" the SRS promises (Security, p.29).
+    //
+    // Takes the document as a parameter so the same checks cover both
+    // create (where the parameter is the new document) and update (where
+    // it's the MERGED result — Firestore hands rules the whole document
+    // after the write, not just the changed keys).
+    //
+    // Every field is read through .get() with a default that passes, so a
+    // field that simply isn't there can't fail the check. That matters on
+    // update: products created by earlier versions of this app may carry
+    // fields this rule never mentions, and a strict key allowlist would
+    // make those products uneditable. Create is where the allowlist
+    // belongs — see isNewProductShape() — because a new document is
+    // entirely under the app's control.
+    //
+    // On XSS specifically: type and length enforcement is what rules can
+    // do, and it's what's implemented here. It bounds what can be stored,
+    // but it doesn't sanitise markup — React Native's <Text> renders
+    // strings as text and never interprets HTML, so stored markup has no
+    // execution path in this app to begin with.
+    function productFieldsAreWellTyped(data) {
+      return data.get('name', 'x') is string &&
+        data.get('name', 'x').size() <= 120 &&
+        data.get('price', 0) is number &&
+        data.get('price', 0) >= 0 &&
+        data.get('stock', 0) is number &&
+        data.get('stock', 0) >= 0 &&
+        data.get('type', '') is string &&
+        data.get('type', '').size() <= 60 &&
+        data.get('description', '') is string &&
+        data.get('description', '').size() <= 2000 &&
+        data.get('imageUrl', '') is string &&
+        data.get('imageUrl', '').size() <= 2000 &&
+        data.get('colors', []) is list &&
+        data.get('sizes', []) is list;
+    }
+    // Create-only: the exact key set AdminAddProductScreen writes, with a
+    // non-empty name and a server-set createdAt. measurements and
+    // measurementType are optional — they're omitted entirely rather than
+    // written as null when the seller left the size guide blank.
+    function isNewProductShape() {
+      return request.resource.data.keys().hasOnly(
+          ['name', 'price', 'type', 'stock', 'description', 'imageUrl',
+           'colors', 'sizes', 'createdAt', 'measurements', 'measurementType']
+        ) &&
+        request.resource.data.keys().hasAll(
+          ['name', 'price', 'type', 'stock', 'description', 'imageUrl',
+           'colors', 'sizes', 'createdAt']
+        ) &&
+        request.resource.data.name.matches('.*\\S.*') &&
+        request.resource.data.createdAt == request.time;
+    }
     match /products/{productId} {
       allow read: if request.auth != null;
-      allow create, delete: if isSeller();
+      allow create: if isSeller() &&
+        isNewProductShape() &&
+        productFieldsAreWellTyped(request.resource.data);
+      allow delete: if isSeller();
       // Sellers can change anything. A signed-in, active customer can also
       // update a product doc, but ONLY as a stock decrement from checkout:
       // "stock" must be the sole field that changed, both the old and new
@@ -202,7 +258,16 @@ service cloud.firestore {
       // is number` is false for those until a seller re-saves them once
       // (via Edit Product) — until then this branch denies the decrement
       // for that specific product, same as if stock were insufficient.
-      allow update: if isSeller() ||
+      // A seller's edit must leave a well-typed document behind. Note this
+      // validates the RESULT, not the delta: AdminEditProductScreen sends
+      // every field on save (and migrates legacy string price/stock to
+      // numbers as it goes), so a legacy product becomes compliant the
+      // first time it's saved rather than being locked out.
+      //
+      // The customer branch below is untouched by this — it already
+      // constrains itself to a single numeric field, far more tightly
+      // than the seller branch ever could.
+      allow update: if (isSeller() && productFieldsAreWellTyped(request.resource.data)) ||
         (
           isActiveUser() &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']) &&
@@ -213,9 +278,38 @@ service cloud.firestore {
         );
     }
     match /supportRequests/{requestId} {
+      // Same treatment as products: an exact key allowlist plus types and
+      // length caps, matching what HelpScreen.js submits.
+      //
+      // status must be 'open' at creation — a customer cannot file a
+      // request that arrives pre-resolved and therefore never surfaces in
+      // the Store Manager's open queue.
+      //
+      // userEmail is allowed to be null, not just a string: HelpScreen
+      // writes auth.currentUser?.email, and a provider that supplied no
+      // email would store null there rather than omit the field.
       allow create: if request.auth != null &&
-        request.resource.data.userId == request.auth.uid;
-      allow read, update: if isSeller();
+        request.resource.data.keys().hasOnly(
+          ['message', 'userId', 'userEmail', 'status', 'createdAt']
+        ) &&
+        request.resource.data.keys().hasAll(
+          ['message', 'userId', 'status', 'createdAt']
+        ) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.message is string &&
+        request.resource.data.message.matches('.*\\S.*') &&
+        request.resource.data.message.size() <= 2000 &&
+        (request.resource.data.get('userEmail', '') is string ||
+         request.resource.data.userEmail == null) &&
+        request.resource.data.status == 'open' &&
+        request.resource.data.createdAt == request.time;
+      allow read: if isSeller();
+      // Working a request means moving it between exactly two states, and
+      // that is the only change this rule permits — a seller cannot edit
+      // the customer's message or reassign the request to another user.
+      allow update: if isSeller() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+        request.resource.data.status in ['open', 'resolved'];
       allow delete: if isSeller();
     }
     // Activity logging (SRS Constraint 2.4.5, "Audit Functions").
