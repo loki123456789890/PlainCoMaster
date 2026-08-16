@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -22,23 +22,34 @@ import Animated, {
   FadeIn,
   FadeInDown,
 } from 'react-native-reanimated';
+import { signOut } from 'firebase/auth';
 import { db, auth } from '../../firebaseConfig';
 import {
   collection,
   onSnapshot,
   doc,
   updateDoc,
-  getDocs,
 } from 'firebase/firestore';
+import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
 import EmptyState from '../../components/ui/EmptyState';
-import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import DialogButtonRow from '../../components/ui/DialogButtonRow';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
+import { ROLES, getRoleLabel, getPortalLabel, ROLE_PLATFORM_ADMIN } from '../../constants/roles';
+
+// The three roles Firestore recognizes (see firestore.rules) and their
+// user-facing names both come from constants/roles.js, so the picker, the
+// badges, and every other screen that names a role can't drift apart.
+// "admin" is not one of them — no document holds it and no rule grants it
+// anything. Note the stored value 'seller' displays as "Store Manager":
+// that's the job title the SRS and the customer-facing copy both use.
+const ROLE_OPTIONS = ROLES;
 
 // Shaped like a real user row so the loading state previews the content
 // that's about to arrive, instead of a spinner floating mid-screen.
@@ -60,6 +71,7 @@ function UserCardSkeleton() {
 }
 
 export default function AdminUsersScreen({ navigation }) {
+  const { logoutAsAdmin } = useAdmin();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [usersError, setUsersError] = useState(false);
@@ -69,7 +81,6 @@ export default function AdminUsersScreen({ navigation }) {
   const [showUserModal, setShowUserModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFormData, setEditFormData] = useState({
-    name: '',
     role: 'customer',
   });
   // Tracks which single user's activate/deactivate write is in flight, so
@@ -83,17 +94,46 @@ export default function AdminUsersScreen({ navigation }) {
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
 
+  // AdminUsersScreen is the root of the stack for a platformAdmin who just
+  // logged in (AdminLoginScreen reaches it via replace(), not navigate() —
+  // see AdminLoginScreen.js), so there's no screen underneath to pop back
+  // to. When that's the case, the header control can't go back at all; it
+  // has to actually exit the admin portal instead, the same way
+  // AdminDashboardScreen's logout button does.
+  const [logoutVisible, setLogoutVisible] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  // Explains where staff accounts come from. There is deliberately no
+  // "create account" form behind this: a client app can't create another
+  // person's Firebase Auth account (createUserWithEmailAndPassword signs
+  // the CALLER in as the new user, which would drop this admin's own
+  // session), and firestore.rules now forbids "role" from being set at
+  // document-creation time at all — so signing up can never mint a
+  // privileged account. Staff access is granted here, by promoting an
+  // existing customer, and this dialog is what makes that visible instead
+  // of folklore.
+  const [addStaffVisible, setAddStaffVisible] = useState(false);
+  // Focused when the dialog's action is taken, so "find the person" leads
+  // straight into the search rather than leaving the admin to hunt for it.
+  const searchInputRef = useRef(null);
+
   useEffect(() => {
     setLoading(true);
     setUsersError(false);
 
     const unsubscribe = onSnapshot(
       collection(db, 'users'),
-      async (snapshot) => {
+      (snapshot) => {
         // Base profile fields come straight from each users/{uid} doc.
         // role and isActive don't exist on most existing docs (only
-        // manually-set admin accounts have "role"), so missing values
-        // are defaulted here rather than left undefined.
+        // manually-set seller/platformAdmin accounts have "role"), so
+        // missing values are defaulted here rather than left undefined.
+        //
+        // Deliberately no per-user order stats here: platformAdmin has no
+        // read access to users/{uid}/orders under firestore.rules — that
+        // subcollection is a seller/owner concern (purchase history), not
+        // an account-management one. Account management does not include
+        // reading purchase histories.
         const baseUsers = snapshot.docs.map((docSnap) => {
           const data = docSnap.data();
           return {
@@ -103,38 +143,12 @@ export default function AdminUsersScreen({ navigation }) {
             role: data.role || 'customer',
             isActive: data.isActive !== false,
             createdAt: data.createdAt || null,
-            totalOrders: 0,
-            totalSpent: 0,
           };
         });
 
         setUsers(baseUsers);
         setUsersError(false);
         setLoading(false);
-
-        // Order stats live in each user's orders subcollection, not on
-        // the user doc itself, so they're fetched separately as a
-        // one-time read per user rather than part of the live listener.
-        const withStats = await Promise.all(
-          baseUsers.map(async (u) => {
-            try {
-              const ordersSnap = await getDocs(collection(db, 'users', u.id, 'orders'));
-              let totalSpent = 0;
-              ordersSnap.forEach((orderDoc) => {
-                const order = orderDoc.data();
-                if (order.status !== 'cancelled') {
-                  totalSpent += Number(order.total || 0);
-                }
-              });
-              return { ...u, totalOrders: ordersSnap.size, totalSpent };
-            } catch (err) {
-              console.error(`Error fetching orders for user ${u.id}:`, err);
-              return u;
-            }
-          })
-        );
-
-        setUsers(withStats);
       },
       (error) => {
         console.error('Error fetching users:', error);
@@ -147,6 +161,59 @@ export default function AdminUsersScreen({ navigation }) {
   }, [retryToken]);
 
   const handleRetry = () => setRetryToken((t) => t + 1);
+
+  // Reached from Profilescreen.js's staff-portal row via navigate(), which
+  // pushes on top of the customer stack — canGoBack() is true there, so a
+  // normal pop is correct. Reached from AdminLoginScreen via replace(), it
+  // isn't, and the same tap has to exit the portal instead — see
+  // confirmLogout below, copied from AdminDashboardScreen's logout.
+  const handleBackPress = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    Haptics.selectionAsync();
+    setLogoutVisible(true);
+  };
+
+  const handleOpenAddStaff = () => {
+    Haptics.selectionAsync();
+    setAddStaffVisible(true);
+  };
+
+  // Closing straight into a focused search field is the whole point of the
+  // dialog's action — the next step really is "find that person in this
+  // list", so the control does it instead of describing it.
+  const handleAddStaffFindUser = () => {
+    setAddStaffVisible(false);
+    searchInputRef.current?.focus();
+  };
+
+  const confirmLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await signOut(auth);
+      logoutAsAdmin();
+      // Reset the nav stack so "back" can't return to admin screens
+      // after the session is gone.
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'AdminLogin' }],
+      });
+    } catch (error) {
+      console.error('Error signing out:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setLoggingOut(false);
+      setLogoutVisible(false);
+      showAppAlert('Error', 'Could not log out. Please try again.');
+    }
+  };
+
+  // The signed-in platformAdmin's own document — firestore.rules blocks
+  // the platformAdmin write branch from ever targeting request.auth.uid,
+  // so role and isActive controls on this row must be disabled in the UI
+  // rather than let someone tap them and get a write denied on submit.
+  const isSelf = (userId) => userId === auth.currentUser?.uid;
 
   const filteredUsers = users.filter(
     (user) =>
@@ -161,34 +228,33 @@ export default function AdminUsersScreen({ navigation }) {
   };
 
   const handleEditUser = (user) => {
+    if (isSelf(user.id)) return; // Edit action is disabled on the self row; defensive no-op.
     Haptics.selectionAsync();
     setSelectedUser(user);
     setEditFormData({
-      name: user.name,
       role: user.role,
     });
     setShowEditModal(true);
   };
 
   const handleUpdateUser = async () => {
-    if (!editFormData.name.trim()) {
-      showAppAlert('Error', 'Please enter a name');
-      return;
-    }
-
-    if (selectedUser.id === auth.currentUser?.uid && editFormData.role !== 'admin') {
-      showAppAlert(
-        'Not Allowed',
-        "You can't remove your own admin role — that would lock you out of this dashboard. Have another admin make this change instead."
-      );
+    if (isSelf(selectedUser.id)) {
+      // Defensive — role chips and Save are disabled whenever the modal is
+      // open on the signed-in platformAdmin's own document (see
+      // editingSelf below), so this shouldn't be reachable. firestore.rules
+      // would deny the write either way: the platformAdmin branch never
+      // matches when the target document is the requester's own.
       return;
     }
 
     setUpdating(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
+      // Field-scoped update — only "role" is sent, matching the
+      // hasOnly(['role', 'isActive']) allowlist in firestore.rules for the
+      // platformAdmin branch. Name is edited by the account owner from
+      // their own Profile screen, not here.
       await updateDoc(doc(db, 'users', selectedUser.id), {
-        name: editFormData.name.trim(),
         role: editFormData.role,
       });
       setShowEditModal(false);
@@ -214,8 +280,10 @@ export default function AdminUsersScreen({ navigation }) {
   };
 
   const handleToggleUserStatus = (user) => {
-    if (user.id === auth.currentUser?.uid) {
-      showAppAlert('Not Allowed', "You can't deactivate your own account.");
+    if (isSelf(user.id)) {
+      // Defensive — the status toggle is disabled on the signed-in
+      // platformAdmin's own row; firestore.rules would deny this write
+      // either way.
       return;
     }
 
@@ -259,10 +327,13 @@ export default function AdminUsersScreen({ navigation }) {
   };
 
   const getRoleBadgeStyle = (role) => {
-    if (role === 'admin') {
+    if (role === 'platformAdmin') {
       return { backgroundColor: Colors.light.danger + '20', color: Colors.light.danger };
     }
-    return { backgroundColor: Colors.light.tint + '20', color: Colors.light.tint };
+    if (role === 'seller') {
+      return { backgroundColor: Colors.light.tint + '20', color: Colors.light.tint };
+    }
+    return { backgroundColor: Colors.light.border + '60', color: Colors.light.icon };
   };
 
   const getActiveBadgeStyle = (isActive) => {
@@ -284,29 +355,108 @@ export default function AdminUsersScreen({ navigation }) {
   const getStats = () => {
     const totalUsers = users.length;
     const activeUsers = users.filter((u) => u.isActive).length;
-    const adminUsers = users.filter((u) => u.role === 'admin').length;
-    const totalSpent = users.reduce((sum, u) => sum + (u.totalSpent || 0), 0);
+    const platformAdminUsers = users.filter((u) => u.role === 'platformAdmin').length;
 
-    return { totalUsers, activeUsers, adminUsers, totalSpent };
+    return { totalUsers, activeUsers, platformAdminUsers };
   };
 
   const stats = getStats();
+  // Guards the Edit User modal's role picker + Save button — see the
+  // comment above the picker for why this defensive check exists even
+  // though the modal's entry points are already gated.
+  const editingSelf = selectedUser ? isSelf(selectedUser.id) : false;
+  // Decides both the header control's behavior and what it looks like —
+  // see handleBackPress above.
+  const canGoBack = navigation.canGoBack();
 
   return (
     <SafeAreaView style={styles.container}>
+      <ConfirmDialog
+        visible={addStaffVisible}
+        onClose={() => setAddStaffVisible(false)}
+        title="Adding a staff member"
+        cancelLabel="Close"
+        confirmLabel="Find the user"
+        confirmVariant="primary"
+        onConfirm={handleAddStaffFindUser}
+      >
+        <Text style={styles.modalMessage}>
+          Staff accounts aren&apos;t created here — they&apos;re granted. Nobody can sign
+          up as a Store Manager or Platform Admin, which is what stops a
+          stranger from giving themselves access.
+        </Text>
+        <View style={styles.addStaffSteps}>
+          <Text style={styles.addStaffStep}>
+            <Text style={styles.addStaffStepNumber}>1. </Text>
+            Ask the person to sign up in the PlainCo app like any customer.
+          </Text>
+          <Text style={styles.addStaffStep}>
+            <Text style={styles.addStaffStepNumber}>2. </Text>
+            Find their account in this list.
+          </Text>
+          <Text style={styles.addStaffStep}>
+            <Text style={styles.addStaffStepNumber}>3. </Text>
+            Open Edit User and set their role to Store Manager or Platform Admin.
+          </Text>
+        </View>
+        <Text style={styles.addStaffFootnote}>
+          Granting roles is this account&apos;s job — no one else can do it.
+        </Text>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        visible={logoutVisible}
+        onClose={() => setLogoutVisible(false)}
+        title="Log Out"
+        confirmLabel="Log Out"
+        confirmVariant="primary"
+        onConfirm={confirmLogout}
+        loading={loggingOut}
+        confirmDisabled={loggingOut}
+        cancelDisabled={loggingOut}
+      >
+        <Text style={styles.modalMessage}>Are you sure you want to log out of the Platform Admin portal?</Text>
+      </ConfirmDialog>
+
       {/* Header */}
       <View style={styles.header}>
         <AnimatedPressable
-          onPress={() => navigation.goBack()}
+          onPress={handleBackPress}
           style={styles.backButton}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           accessibilityRole="button"
-          accessibilityLabel="Go back"
+          accessibilityLabel={canGoBack ? 'Go back' : 'Log out'}
         >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+          <Ionicons
+            name={canGoBack ? 'arrow-back' : 'log-out-outline'}
+            size={24}
+            color={canGoBack ? Colors.light.text : Colors.light.danger}
+          />
         </AnimatedPressable>
-        <Text style={styles.headerTitle} accessibilityRole="header">Manage Users</Text>
-        <View style={styles.placeholder} />
+        {/* The signed-in role is named in the header, not just implied by
+            which screen you happen to be on. Before the split there was
+            one "admin" and no reason to say which hat you were wearing;
+            now there are two non-overlapping ones, and "why can't I see
+            Products?" has a visible answer sitting at the top of the
+            screen. */}
+        <View style={styles.headerTitleGroup}>
+          <Text style={styles.headerTitle} accessibilityRole="header">Manage Users</Text>
+          <Text style={styles.headerRole}>{getPortalLabel(ROLE_PLATFORM_ADMIN)}</Text>
+        </View>
+        {/* Sits in the slot the layout already reserved for balance, so the
+            title stays centered. "Add staff" is the question every new
+            platform admin arrives with; answering it in the place they'd
+            look for a + button is cheaper than letting them conclude the
+            feature is missing. */}
+        <AnimatedPressable
+          onPress={handleOpenAddStaff}
+          style={styles.headerAction}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel="How to add a staff member"
+        >
+          <Ionicons name="person-add-outline" size={22} color={Colors.light.tint} />
+        </AnimatedPressable>
       </View>
 
       {!isConnected && (
@@ -337,12 +487,8 @@ export default function AdminUsersScreen({ navigation }) {
             <Text style={styles.statLabel}>Active {stats.activeUsers === 1 ? 'User' : 'Users'}</Text>
           </Card>
           <Card variant="flat" style={[styles.statCard, { backgroundColor: Colors.light.border + '60' }]}>
-            <Text style={styles.statValue}>{stats.adminUsers}</Text>
-            <Text style={styles.statLabel}>{stats.adminUsers === 1 ? 'Admin' : 'Admins'}</Text>
-          </Card>
-          <Card variant="flat" style={styles.statCard}>
-            <Text style={styles.statValue}>₱{stats.totalSpent.toFixed(2)}</Text>
-            <Text style={styles.statLabel}>Total Spent</Text>
+            <Text style={styles.statValue}>{stats.platformAdminUsers}</Text>
+            <Text style={styles.statLabel}>{stats.platformAdminUsers === 1 ? 'Platform Admin' : 'Platform Admins'}</Text>
           </Card>
         </ScrollView>
       </Animated.View>
@@ -354,6 +500,7 @@ export default function AdminUsersScreen({ navigation }) {
       >
         <Ionicons name="search-outline" size={20} color={Colors.light.icon} style={styles.searchIcon} />
         <TextInput
+          ref={searchInputRef}
           style={styles.searchInput}
           placeholder="Search by name or email..."
           placeholderTextColor={Colors.light.icon}
@@ -393,105 +540,118 @@ export default function AdminUsersScreen({ navigation }) {
             </View>
           </View>
         ) : filteredUsers.length > 0 ? (
-          filteredUsers.map((user, index) => (
-            <Animated.View
-              key={user.id}
-              entering={
-                reduceMotion
-                  ? undefined
-                  : FadeInDown.duration(240)
-                      .delay(80 + Math.min(index, 8) * 40)
-                      .easing(EASE_OUT_QUART)
-              }
-            >
-              <AnimatedPressable
-                onPress={() => handleViewUser(user)}
-                accessibilityRole="button"
-                accessibilityLabel={`${user.name}, ${user.role} role, ${user.isActive ? 'active' : 'inactive'}`}
-                accessibilityHint="Opens user details"
+          filteredUsers.map((user, index) => {
+            const selfRow = isSelf(user.id);
+            const editDisabled = selfRow;
+            const toggleDisabled = !isConnected || togglingUserId === user.id || selfRow;
+            return (
+              <Animated.View
+                key={user.id}
+                entering={
+                  reduceMotion
+                    ? undefined
+                    : FadeInDown.duration(240)
+                        .delay(80 + Math.min(index, 8) * 40)
+                        .easing(EASE_OUT_QUART)
+                }
               >
-                <Card variant="flat" style={styles.userCard}>
-                  <View style={styles.userAvatar}>
-                    <Text style={styles.userAvatarText}>
-                      {user.name.charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.userInfo}>
-                    <View style={styles.userNameRow}>
-                      <Text style={styles.userName} numberOfLines={1} ellipsizeMode="tail">
-                        {user.name}
+                <AnimatedPressable
+                  onPress={() => handleViewUser(user)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${user.name}, ${getRoleLabel(user.role)} role, ${user.isActive ? 'active' : 'inactive'}`}
+                  accessibilityHint="Opens user details"
+                >
+                  <Card variant="flat" style={styles.userCard}>
+                    <View style={styles.userAvatar}>
+                      <Text style={styles.userAvatarText}>
+                        {user.name.charAt(0).toUpperCase()}
                       </Text>
-                      <View style={[styles.roleBadge, getRoleBadgeStyle(user.role)]}>
-                        <Text style={[styles.roleText, { color: getRoleBadgeStyle(user.role).color }]}>
-                          {user.role.toUpperCase()}
+                    </View>
+                    <View style={styles.userInfo}>
+                      <View style={styles.userNameRow}>
+                        <Text style={styles.userName} numberOfLines={1} ellipsizeMode="tail">
+                          {user.name}
+                        </Text>
+                        <View style={[styles.roleBadge, getRoleBadgeStyle(user.role)]}>
+                          <Text style={[styles.roleText, { color: getRoleBadgeStyle(user.role).color }]}>
+                            {getRoleLabel(user.role).toUpperCase()}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.userEmailRow}>
+                        <Ionicons name="mail-outline" size={12} color={Colors.light.icon} />
+                        <Text style={styles.userEmail} numberOfLines={1} ellipsizeMode="tail">
+                          {user.email}
                         </Text>
                       </View>
+                      {selfRow && (
+                        <Text style={styles.selfRowHint}>
+                          This is you — role and status can&apos;t be changed here
+                        </Text>
+                      )}
                     </View>
-                    <View style={styles.userEmailRow}>
-                      <Ionicons name="mail-outline" size={12} color={Colors.light.icon} />
-                      <Text style={styles.userEmail} numberOfLines={1} ellipsizeMode="tail">
-                        {user.email}
-                      </Text>
-                    </View>
-                    <View style={styles.userStats}>
-                      <View style={styles.userStatsItem}>
-                        <Ionicons name="receipt-outline" size={11} color={Colors.light.icon} />
-                        <Text style={styles.userStatsText}>{user.totalOrders} orders</Text>
+                    <View style={styles.userActions}>
+                      <View style={[styles.statusBadge, getActiveBadgeStyle(user.isActive)]}>
+                        <Ionicons
+                          name={getStatusIcon(user.isActive)}
+                          size={11}
+                          color={getActiveBadgeStyle(user.isActive).color}
+                        />
+                        <Text style={[styles.statusText, { color: getActiveBadgeStyle(user.isActive).color }]}>
+                          {user.isActive ? 'ACTIVE' : 'INACTIVE'}
+                        </Text>
                       </View>
-                      <View style={styles.userStatsItem}>
-                        <Ionicons name="cash-outline" size={11} color={Colors.light.icon} />
-                        <Text style={styles.userStatsText}>₱{user.totalSpent.toFixed(2)}</Text>
-                      </View>
-                    </View>
-                  </View>
-                  <View style={styles.userActions}>
-                    <View style={[styles.statusBadge, getActiveBadgeStyle(user.isActive)]}>
-                      <Ionicons
-                        name={getStatusIcon(user.isActive)}
-                        size={11}
-                        color={getActiveBadgeStyle(user.isActive).color}
-                      />
-                      <Text style={[styles.statusText, { color: getActiveBadgeStyle(user.isActive).color }]}>
-                        {user.isActive ? 'ACTIVE' : 'INACTIVE'}
-                      </Text>
-                    </View>
-                    <View style={styles.actionButtons}>
-                      <AnimatedPressable
-                        style={styles.actionButton}
-                        onPress={() => handleEditUser(user)}
-                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Edit ${user.name}`}
-                      >
-                        <Ionicons name="create-outline" size={20} color={Colors.light.tint} />
-                      </AnimatedPressable>
-                      <AnimatedPressable
-                        style={styles.actionButton}
-                        onPress={() => handleToggleUserStatus(user)}
-                        disabled={!isConnected || togglingUserId === user.id}
-                        hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${user.isActive ? 'Deactivate' : 'Activate'} ${user.name}`}
-                      >
-                        {togglingUserId === user.id ? (
-                          <ActivityIndicator
-                            size="small"
-                            color={user.isActive ? Colors.light.danger : Colors.light.success}
-                          />
-                        ) : (
+                      <View style={styles.actionButtons}>
+                        <AnimatedPressable
+                          style={[styles.actionButton, editDisabled && styles.actionButtonDisabled]}
+                          onPress={() => handleEditUser(user)}
+                          disabled={editDisabled}
+                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={
+                            editDisabled ? "Edit disabled — this is your own account" : `Edit ${user.name}`
+                          }
+                          accessibilityState={{ disabled: editDisabled }}
+                        >
                           <Ionicons
-                            name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
+                            name="create-outline"
                             size={20}
-                            color={!isConnected ? Colors.light.border : (user.isActive ? Colors.light.danger : Colors.light.success)}
+                            color={editDisabled ? Colors.light.border : Colors.light.tint}
                           />
-                        )}
-                      </AnimatedPressable>
+                        </AnimatedPressable>
+                        <AnimatedPressable
+                          style={[styles.actionButton, toggleDisabled && styles.actionButtonDisabled]}
+                          onPress={() => handleToggleUserStatus(user)}
+                          disabled={toggleDisabled}
+                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                          accessibilityRole="button"
+                          accessibilityLabel={
+                            selfRow
+                              ? "Status change disabled — this is your own account"
+                              : `${user.isActive ? 'Deactivate' : 'Activate'} ${user.name}`
+                          }
+                          accessibilityState={{ disabled: toggleDisabled }}
+                        >
+                          {togglingUserId === user.id ? (
+                            <ActivityIndicator
+                              size="small"
+                              color={user.isActive ? Colors.light.danger : Colors.light.success}
+                            />
+                          ) : (
+                            <Ionicons
+                              name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
+                              size={20}
+                              color={toggleDisabled ? Colors.light.border : (user.isActive ? Colors.light.danger : Colors.light.success)}
+                            />
+                          )}
+                        </AnimatedPressable>
+                      </View>
                     </View>
-                  </View>
-                </Card>
-              </AnimatedPressable>
-            </Animated.View>
-          ))
+                  </Card>
+                </AnimatedPressable>
+              </Animated.View>
+            );
+          })
         ) : (
           <View style={styles.emptyStateWrap}>
             <EmptyState
@@ -551,7 +711,7 @@ export default function AdminUsersScreen({ navigation }) {
                   <Text style={styles.modalInfoLabel}>Role:</Text>
                   <View style={[styles.modalRoleBadge, getRoleBadgeStyle(selectedUser.role)]}>
                     <Text style={[styles.modalRoleText, { color: getRoleBadgeStyle(selectedUser.role).color }]}>
-                      {selectedUser.role.toUpperCase()}
+                      {getRoleLabel(selectedUser.role).toUpperCase()}
                     </Text>
                   </View>
                 </View>
@@ -575,57 +735,54 @@ export default function AdminUsersScreen({ navigation }) {
                   <Text style={styles.modalInfoValue}>{formatDate(selectedUser.createdAt)}</Text>
                 </View>
 
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Total Orders:</Text>
-                  <Text style={styles.modalInfoValue}>{selectedUser.totalOrders}</Text>
-                </View>
-
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Total Spent:</Text>
-                  <Text style={styles.modalInfoValue}>₱{selectedUser.totalSpent.toFixed(2)}</Text>
-                </View>
-
-                <View style={styles.modalButtons}>
-                  <View style={styles.modalButtonHalf}>
-                    <Button
-                      variant="primary"
-                      label="Edit User"
-                      onPress={() => {
-                        setShowUserModal(false);
-                        handleEditUser(selectedUser);
-                      }}
-                    />
+                {isSelf(selectedUser.id) ? (
+                  <Text style={styles.selfModalHint}>
+                    This is your account — role and status can&apos;t be changed from here.
+                    Ask another platform administrator to make this change.
+                  </Text>
+                ) : (
+                  <View style={styles.modalButtons}>
+                    <View style={styles.modalButtonHalf}>
+                      <Button
+                        variant="primary"
+                        label="Edit User"
+                        onPress={() => {
+                          setShowUserModal(false);
+                          handleEditUser(selectedUser);
+                        }}
+                      />
+                    </View>
+                    <View style={styles.modalButtonHalf}>
+                      <AnimatedPressable
+                        style={[
+                          styles.statusToggleButton,
+                          { backgroundColor: selectedUser.isActive ? Colors.light.danger : Colors.light.success },
+                          !isConnected && { opacity: 0.7 },
+                        ]}
+                        onPress={() => {
+                          setShowUserModal(false);
+                          handleToggleUserStatus(selectedUser);
+                        }}
+                        disabled={!isConnected}
+                        accessibilityRole="button"
+                        accessibilityLabel={
+                          !isConnected
+                            ? 'Offline, cannot change status'
+                            : `${selectedUser.isActive ? 'Deactivate' : 'Activate'} ${selectedUser.name}`
+                        }
+                      >
+                        <Text style={styles.statusButtonText}>
+                          {/* Shortened vs. the full "No Internet Connection" —
+                              this button shares a half-width row with Edit
+                              User, so the longer phrase wrapped awkwardly. */}
+                          {!isConnected
+                            ? 'Offline'
+                            : selectedUser.isActive ? 'Deactivate' : 'Activate'}
+                        </Text>
+                      </AnimatedPressable>
+                    </View>
                   </View>
-                  <View style={styles.modalButtonHalf}>
-                    <AnimatedPressable
-                      style={[
-                        styles.statusToggleButton,
-                        { backgroundColor: selectedUser.isActive ? Colors.light.danger : Colors.light.success },
-                        !isConnected && { opacity: 0.7 },
-                      ]}
-                      onPress={() => {
-                        setShowUserModal(false);
-                        handleToggleUserStatus(selectedUser);
-                      }}
-                      disabled={!isConnected}
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        !isConnected
-                          ? 'Offline, cannot change status'
-                          : `${selectedUser.isActive ? 'Deactivate' : 'Activate'} ${selectedUser.name}`
-                      }
-                    >
-                      <Text style={styles.statusButtonText}>
-                        {/* Shortened vs. the full "No Internet Connection" —
-                            this button shares a half-width row with Edit
-                            User, so the longer phrase wrapped awkwardly. */}
-                        {!isConnected
-                          ? 'Offline'
-                          : selectedUser.isActive ? 'Deactivate' : 'Activate'}
-                      </Text>
-                    </AnimatedPressable>
-                  </View>
-                </View>
+                )}
               </ScrollView>
             )}
           </View>
@@ -654,12 +811,15 @@ export default function AdminUsersScreen({ navigation }) {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
-              <Input
-                label="Name *"
-                value={editFormData.name}
-                onChangeText={(text) => setEditFormData({ ...editFormData, name: text })}
-                placeholder="Full name"
-              />
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Name</Text>
+                <View style={[styles.input, styles.inputDisabled]}>
+                  <Text style={styles.disabledInputText}>{selectedUser?.name}</Text>
+                </View>
+                <Text style={styles.inputHint}>
+                  Users change their own display name from Profile — it isn&apos;t an administrative action.
+                </Text>
+              </View>
 
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Email</Text>
@@ -667,74 +827,97 @@ export default function AdminUsersScreen({ navigation }) {
                   <Text style={styles.disabledInputText}>{selectedUser?.email}</Text>
                 </View>
                 <Text style={styles.inputHint}>
-                  Login email can't be changed here — it's tied to their Firebase Auth account.
+                  Login email can&apos;t be changed here — it&apos;s tied to their Firebase Auth account.
                 </Text>
               </View>
 
+              {/* editingSelf should never be true here in normal use — the Edit
+                  entry points on the list row and detail modal are already
+                  disabled for the signed-in platformAdmin's own account. Kept
+                  as a defensive guard anyway: firestore.rules denies this
+                  write regardless of how the modal was reached, and the UI
+                  must not present a control that's guaranteed to be denied. */}
+              {editingSelf && (
+                <Text style={styles.selfModalHint}>
+                  You can&apos;t change your own role — have another platform
+                  administrator make this change instead.
+                </Text>
+              )}
+
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Role</Text>
+                {/* Each option carries a one-line statement of what the role
+                    can and can't reach. Assigning roles is this account's
+                    entire job, so the consequence of the choice belongs next
+                    to the choice — three unlabeled pills ("Customer / Store
+                    Manager / Platform Admin") assume the reader already
+                    knows the boundary, which is exactly the assumption that
+                    made the old single "admin" role confusing. Stacked
+                    vertically rather than as a pill row because a sentence
+                    doesn't fit in a pill. */}
                 <View style={styles.roleSelector}>
-                  <AnimatedPressable
-                    style={[
-                      styles.roleOption,
-                      editFormData.role === 'customer' && styles.roleOptionActive,
-                    ]}
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      setEditFormData({ ...editFormData, role: 'customer' });
-                    }}
-                    accessibilityRole="radio"
-                    accessibilityState={{ checked: editFormData.role === 'customer' }}
-                    accessibilityLabel="Customer role"
-                  >
-                    <Text style={[
-                      styles.roleOptionText,
-                      editFormData.role === 'customer' && styles.roleOptionTextActive,
-                    ]}>
-                      Customer
-                    </Text>
-                  </AnimatedPressable>
-                  <AnimatedPressable
-                    style={[
-                      styles.roleOption,
-                      editFormData.role === 'admin' && styles.roleOptionActive,
-                    ]}
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      setEditFormData({ ...editFormData, role: 'admin' });
-                    }}
-                    accessibilityRole="radio"
-                    accessibilityState={{ checked: editFormData.role === 'admin' }}
-                    accessibilityLabel="Admin role"
-                  >
-                    <Text style={[
-                      styles.roleOptionText,
-                      editFormData.role === 'admin' && styles.roleOptionTextActive,
-                    ]}>
-                      Admin
-                    </Text>
-                  </AnimatedPressable>
+                  {ROLE_OPTIONS.map((option) => {
+                    const active = editFormData.role === option.value;
+                    return (
+                      <AnimatedPressable
+                        key={option.value}
+                        style={[
+                          styles.roleOption,
+                          active && styles.roleOptionActive,
+                          editingSelf && styles.roleOptionDisabled,
+                        ]}
+                        onPress={() => {
+                          if (editingSelf) return;
+                          Haptics.selectionAsync();
+                          setEditFormData({ ...editFormData, role: option.value });
+                        }}
+                        disabled={editingSelf}
+                        accessibilityRole="radio"
+                        accessibilityState={{ checked: active, disabled: editingSelf }}
+                        accessibilityLabel={`${option.label} role. ${option.capability}`}
+                      >
+                        <View style={styles.roleOptionCheck}>
+                          <Ionicons
+                            name={active ? 'radio-button-on' : 'radio-button-off'}
+                            size={18}
+                            color={active ? Colors.light.tint : Colors.light.icon}
+                          />
+                        </View>
+                        <View style={styles.roleOptionCopy}>
+                          <Text
+                            style={[
+                              styles.roleOptionText,
+                              active && styles.roleOptionTextActive,
+                            ]}
+                          >
+                            {option.label}
+                          </Text>
+                          <Text style={styles.roleOptionCapability}>{option.capability}</Text>
+                        </View>
+                      </AnimatedPressable>
+                    );
+                  })}
                 </View>
               </View>
 
-              <View style={styles.modalButtons}>
-                <View style={styles.modalButtonHalf}>
-                  <Button
-                    variant="secondary"
-                    label="Cancel"
-                    onPress={() => setShowEditModal(false)}
-                    disabled={updating}
-                  />
-                </View>
-                <View style={styles.modalButtonHalf}>
-                  <Button
-                    variant="primary"
-                    label={!isConnected ? 'Offline' : 'Save Changes'}
-                    onPress={handleUpdateUser}
-                    loading={updating}
-                    disabled={updating || !isConnected}
-                  />
-                </View>
+              <View style={styles.editModalButtons}>
+                <DialogButtonRow
+                  buttons={[
+                    {
+                      label: 'Cancel',
+                      variant: 'secondary',
+                      onPress: () => setShowEditModal(false),
+                      disabled: updating,
+                    },
+                    {
+                      label: !isConnected ? 'Offline' : 'Save Changes',
+                      variant: 'primary',
+                      onPress: handleUpdateUser,
+                      loading: updating,
+                      disabled: updating || !isConnected || editingSelf,
+                    },
+                  ]}
+                />
               </View>
             </ScrollView>
           </View>
@@ -765,13 +948,53 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  headerTitleGroup: {
+    alignItems: 'center',
+  },
   headerTitle: {
     fontSize: 17,
     fontWeight: '600',
     color: Colors.light.text,
   },
+  headerRole: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    color: Colors.light.icon,
+    marginTop: 2,
+  },
   placeholder: {
     width: 40,
+  },
+  // Same 40px footprint the balance spacer used, so swapping a control in
+  // doesn't shift the centered title.
+  headerAction: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addStaffSteps: {
+    alignSelf: 'stretch',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  addStaffStep: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: Colors.light.text,
+  },
+  addStaffStepNumber: {
+    fontWeight: '700',
+    color: Colors.light.tint,
+  },
+  addStaffFootnote: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: Colors.light.icon,
+    textAlign: 'center',
+    marginBottom: Spacing.md,
   },
   offlineBanner: {
     flexDirection: 'row',
@@ -784,6 +1007,7 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.light.danger + '40',
   },
   offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
+  modalMessage: { fontSize: 15, color: Colors.light.icon, textAlign: 'center', marginBottom: Spacing.lg },
   statsWrapper: {
     marginTop: 16,
   },
@@ -897,17 +1121,9 @@ const styles = StyleSheet.create({
     color: Colors.light.icon,
     flexShrink: 1,
   },
-  userStats: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  userStatsItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  userStatsText: {
+  selfRowHint: {
     fontSize: 11,
+    fontStyle: 'italic',
     color: Colors.light.icon,
   },
   userActions: {
@@ -936,6 +1152,16 @@ const styles = StyleSheet.create({
     height: 36,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  actionButtonDisabled: {
+    opacity: 0.4,
+  },
+  selfModalHint: {
+    fontSize: 13,
+    color: Colors.light.icon,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginTop: Spacing.md,
   },
   modalOverlay: {
     flex: 1,
@@ -1020,6 +1246,12 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   modalButtonHalf: { flex: 1 },
+  // Cancel/Save Changes render through DialogButtonRow, which keeps both
+  // buttons the same width and the same text size — this wrap just adds
+  // the top spacing above the row.
+  editModalButtons: {
+    marginTop: 20,
+  },
   statusToggleButton: {
     paddingVertical: 12,
     borderRadius: 12,
@@ -1063,27 +1295,52 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   roleSelector: {
-    flexDirection: 'row',
-    gap: 12,
+    gap: Spacing.sm,
   },
+  // Selection reads as a tinted outline rather than a solid Clay fill:
+  // the option now carries a description line, and white-on-Clay body copy
+  // at 12px would be the least legible text in the modal. Flat-by-default
+  // per DESIGN.md, with the fill reserved for the actual primary action
+  // (Save Changes) at the bottom of the same modal.
   roleOption: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    minHeight: 44,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    borderRadius: Radius.md,
     borderWidth: 1,
     borderColor: Colors.light.border,
-    alignItems: 'center',
     backgroundColor: Colors.light.background,
   },
   roleOptionActive: {
-    backgroundColor: Colors.light.tint,
+    backgroundColor: Colors.light.tint + '12',
     borderColor: Colors.light.tint,
+  },
+  roleOptionDisabled: {
+    opacity: 0.5,
+  },
+  roleOptionCheck: {
+    // Nudged down so the radio sits on the label's optical center rather
+    // than the top edge of a two-line block.
+    marginTop: 1,
+  },
+  roleOptionCopy: {
+    flex: 1,
   },
   roleOptionText: {
     fontSize: 14,
-    color: Colors.light.icon,
+    fontWeight: '600',
+    color: Colors.light.text,
   },
   roleOptionTextActive: {
-    color: '#fff',
+    color: Colors.light.tint,
+  },
+  roleOptionCapability: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: Colors.light.icon,
+    marginTop: 2,
   },
 });

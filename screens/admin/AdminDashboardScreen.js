@@ -66,10 +66,6 @@ export default function AdminDashboardScreen({ navigation }) {
   const [ordersLoading, setOrdersLoading] = useState(true);
   const [ordersError, setOrdersError] = useState(false);
 
-  const [userCount, setUserCount] = useState(0);
-  const [usersLoading, setUsersLoading] = useState(true);
-  const [usersError, setUsersError] = useState(false);
-
   // "Total Order Value" — deliberately not "Revenue"/"Sales". COD is the
   // primary payment method and there's no payment gateway integration
   // (per SRS), so an order's total isn't confirmed money collected, just
@@ -92,8 +88,6 @@ export default function AdminDashboardScreen({ navigation }) {
   useEffect(() => {
     setOrdersLoading(true);
     setOrdersError(false);
-    setUsersLoading(true);
-    setUsersError(false);
     setSupportLoading(true);
     setSupportError(false);
 
@@ -125,20 +119,6 @@ export default function AdminDashboardScreen({ navigation }) {
       }
     );
 
-    // Same top-level users collection AdminUsersScreen listens to.
-    const unsubscribeUsers = onSnapshot(
-      collection(db, 'users'),
-      (snapshot) => {
-        setUserCount(snapshot.size);
-        setUsersLoading(false);
-      },
-      (error) => {
-        console.error('Error fetching user count:', error);
-        setUsersError(true);
-        setUsersLoading(false);
-      }
-    );
-
     // Filtered server-side to only "open" requests — a dashboard count
     // card only needs the number, so there's no reason to also download
     // every already-resolved request just to filter them out client-side.
@@ -157,19 +137,22 @@ export default function AdminDashboardScreen({ navigation }) {
 
     return () => {
       unsubscribeOrders();
-      unsubscribeUsers();
       unsubscribeSupport();
     };
   }, [retryToken]);
 
   const handleRetry = () => setRetryToken((t) => t + 1);
 
-  // Neutral icon tiles by design: none of Products/Orders/Users/Support map
-  // to an existing semantic color (Clay = actions, Moss = success, Gold =
-  // money, Rust = danger), so coloring them arbitrarily would be decoration,
-  // not meaning. The Support tile still gets a real signal — a Rust count
+  // Neutral icon tiles by design: none of Products/Orders/Support map to an
+  // existing semantic color (Clay = actions, Moss = success, Gold = money,
+  // Rust = danger), so coloring them arbitrarily would be decoration, not
+  // meaning. The Support tile still gets a real signal — a Rust count
   // badge when requests are open — reusing the same overlay pattern as the
   // customer tab bar's cart-count badge, rather than inventing a new one.
+  //
+  // No "Users" tile: this dashboard is guarded to sellers only, and user
+  // account management is a platformAdmin-only screen per firestore.rules
+  // — a seller navigating there would just be bounced by the guard.
   const gridItems = [
     {
       title: 'Products',
@@ -187,15 +170,6 @@ export default function AdminDashboardScreen({ navigation }) {
       count: orderCount,
       loading: ordersLoading,
       error: ordersError,
-      onRetry: handleRetry,
-    },
-    {
-      title: 'Users',
-      icon: 'people-outline',
-      screen: 'AdminUsers',
-      count: userCount,
-      loading: usersLoading,
-      error: usersError,
       onRetry: handleRetry,
     },
     {
@@ -259,11 +233,19 @@ export default function AdminDashboardScreen({ navigation }) {
         confirmDisabled={loggingOut}
         cancelDisabled={loggingOut}
       >
-        <Text style={styles.modalMessage}>Are you sure you want to log out of the admin panel?</Text>
+        <Text style={styles.modalMessage}>Are you sure you want to log out of the Store Manager portal?</Text>
       </ConfirmDialog>
 
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Admin Dashboard</Text>
+        {/* "Admin Dashboard" named a role that no longer exists. This
+            screen is guarded to sellers only (App.js), so it says so —
+            and the subtitle states the boundary, which is the fastest
+            answer to "where did user management go?" for anyone who
+            remembers the old combined portal. */}
+        <View>
+          <Text style={styles.headerTitle}>Store Manager</Text>
+          <Text style={styles.headerSubtitle}>Products, orders, and support</Text>
+        </View>
         <AnimatedPressable
           onPress={handleLogout}
           style={styles.logoutButton}
@@ -430,6 +412,11 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '600',
     color: Colors.light.text,
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    color: Colors.light.icon,
+    marginTop: 2,
   },
   logoutButton: {
     width: 44,

@@ -8,7 +8,7 @@ import {
   ViewStyle,
   StyleProp,
 } from 'react-native';
-import { Colors, Spacing, Radius } from '../../constants/theme';
+import { Colors, Spacing, Radius, Typography } from '../../constants/theme';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'outline';
 
@@ -26,6 +26,11 @@ interface ButtonProps {
    * opt-in for call sites that want width to stop depending on whatever
    * View happens to wrap them. */
   fullWidth?: boolean;
+  /** Override the label's font size (defaults to Typography.button). Only
+   * meant for DialogButtonRow, which measures a paired label and passes
+   * down a shared shrink so two side-by-side dialog buttons never render
+   * their text at two different sizes. */
+  fontSize?: number;
   /** Escape hatch for one-off layout needs (width, flex, margin) on the
    * button's own root, without a wrapping View. Merged in after the
    * variant style, so it can override layout/sizing — it isn't meant for
@@ -64,6 +69,7 @@ export default function Button({
   disabled = false,
   loading = false,
   fullWidth = false,
+  fontSize,
   style,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
@@ -86,7 +92,7 @@ export default function Button({
         <ActivityIndicator color={textColor} />
       ) : (
         <Text
-          style={[styles.label, { color: textColor }]}
+          style={[styles.label, { color: textColor, fontSize: fontSize ?? Typography.button }]}
           numberOfLines={1}
           adjustsFontSizeToFit
         >
@@ -115,9 +121,9 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   label: {
-    fontSize: 19,
     fontWeight: '600',
     includeFontPadding: false,
     textAlignVertical: 'center',
+    textAlign: 'center',
   },
 });

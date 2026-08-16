@@ -125,7 +125,7 @@ export default function AdminLoginScreen({ navigation }) {
     const nextErrors = { email: '', password: '' };
 
     if (!email.trim()) {
-      nextErrors.email = 'Enter your admin email.';
+      nextErrors.email = 'Enter your staff email.';
     } else if (!EMAIL_PATTERN.test(email.trim())) {
       nextErrors.email = 'Enter a valid email address.';
     }
@@ -159,48 +159,56 @@ export default function AdminLoginScreen({ navigation }) {
       );
       const uid = userCredential.user.uid;
 
-      // Confirm this account is actually an admin before letting them in.
-      // This mirrors the isAdmin() check in firestore.rules, so a customer
-      // account can't reach the dashboard even if they know this screen exists.
+      // Confirm this account actually holds one of the two privileged
+      // roles before letting them in. This mirrors isSeller()/
+      // isPlatformAdmin() in firestore.rules, so a customer account can't
+      // reach either portal even if they know this screen exists. "admin"
+      // is not a valid role anymore — the role split replaced it with
+      // "seller" and "platformAdmin", and no document holds "admin".
       const userDocRef = doc(db, 'users', uid);
       const userDocSnap = await getDoc(userDocRef);
+      const role = userDocSnap.exists() ? userDocSnap.data().role : null;
+      const isPrivilegedRole = role === 'seller' || role === 'platformAdmin';
 
-      if (!userDocSnap.exists() || userDocSnap.data().role !== 'admin') {
+      if (!userDocSnap.exists() || !isPrivilegedRole) {
         await auth.signOut();
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         showAppAlert(
           'Access Denied',
-          'This account does not have admin privileges.'
+          'This account does not have Store Manager or Platform Admin privileges.'
         );
         setLoading(false);
         return;
       }
 
-      // Deactivation check — an admin account can be deactivated by another
-      // admin (AdminUsersScreen), and that flag needs to actually block
-      // sign-in here, not just hide the account in a list somewhere.
+      // Deactivation check — a privileged account can be deactivated by a
+      // platformAdmin (AdminUsersScreen), and that flag needs to actually
+      // block sign-in here, not just hide the account in a list somewhere.
       if (userDocSnap.data().isActive === false) {
         await auth.signOut();
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         showAppAlert(
           'Account Deactivated',
-          'This admin account has been deactivated.'
+          'This staff account has been deactivated.'
         );
         setLoading(false);
         return;
       }
 
       // Role confirmed server-side above — now reflect it in AdminContext
-      // so useAdmin().isAdmin actually tracks who's signed in, instead of
-      // always being false (nothing was calling this before).
-      loginAsAdmin();
+      // so useAdmin().role actually tracks who's signed in, instead of
+      // always being null (nothing was calling this before).
+      loginAsAdmin(role);
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setLoading(false);
-      navigation.replace('AdminDashboard');
+      // Platform administration is account/role management, not
+      // product/order operations — landing a platformAdmin on the seller
+      // dashboard they can't write to would be misleading.
+      navigation.replace(role === 'platformAdmin' ? 'AdminUsers' : 'AdminDashboard');
     } catch (error) {
       setLoading(false);
-      console.error('Admin login error:', error);
+      console.error('Staff login error:', error);
 
       // Firebase error codes -> friendly messages
       let message = 'Could not sign in. Please try again.';
@@ -281,8 +289,14 @@ export default function AdminLoginScreen({ navigation }) {
               <View style={styles.logo}>
                 <Ionicons name="shield-checkmark" size={56} color={Colors.light.tint} />
               </View>
-              <Text style={styles.title}>Admin Portal</Text>
-              <Text style={styles.subtitle}>Sign in to manage your store</Text>
+              {/* One login for both privileged roles, so it can't name
+                  either one — the old "Sign in to manage your store" was
+                  simply false for a Platform Admin, who has no store
+                  access at all. The account's own role decides where it
+                  lands (see the navigation.replace() below); this screen
+                  just says who it's for. */}
+              <Text style={styles.title}>Staff Portal</Text>
+              <Text style={styles.subtitle}>For store managers and platform admins</Text>
             </Animated.View>
 
             <Animated.View
@@ -291,7 +305,7 @@ export default function AdminLoginScreen({ navigation }) {
             >
               <Animated.View style={emailShakeStyle}>
                 <Input
-                  label="Admin Email"
+                  label="Staff Email"
                   value={email}
                   onChangeText={handleEmailChange}
                   placeholder="you@gmail.com"
@@ -303,8 +317,8 @@ export default function AdminLoginScreen({ navigation }) {
                   returnKeyType="next"
                   onSubmitEditing={() => passwordInputRef.current?.focus()}
                   error={errors.email}
-                  accessibilityLabel="Admin email"
-                  accessibilityHint="Enter the email address for your admin account"
+                  accessibilityLabel="Staff email"
+                  accessibilityHint="Enter the email address for your staff account"
                 />
               </Animated.View>
 
@@ -330,7 +344,7 @@ export default function AdminLoginScreen({ navigation }) {
                       returnKeyType="done"
                       onSubmitEditing={handleLogin}
                       accessibilityLabel="Password"
-                      accessibilityHint="Enter the password for your admin account"
+                      accessibilityHint="Enter the password for your staff account"
                     />
                     <PasswordToggle
                       visible={showPassword}

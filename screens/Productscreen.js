@@ -28,6 +28,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
+import SizeGuideModal from '../components/ui/SizeGuideModal';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // Falls back to a neutral gray swatch instead of crashing if a stored
@@ -96,6 +97,7 @@ export default function ProductScreen({ navigation, route }) {
   const [isAdding, setIsAdding] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  const [sizeGuideVisible, setSizeGuideVisible] = useState(false);
 
   const reduceMotion = useReducedMotion();
   const favoriteScale = useSharedValue(1);
@@ -133,6 +135,17 @@ export default function ProductScreen({ navigation, route }) {
   // blank — render nothing at all in either case rather than an empty
   // heading with no body text under it.
   const hasDescription = Boolean(product?.description && product.description.trim().length > 0);
+
+  // Ukay-ukay sizing is inconsistent, so the guide only earns its spot when
+  // there's real data — no disabled button, no modal that opens to an
+  // empty table. Legacy products (saved before this field existed) simply
+  // have no `measurements` key and fall through to false here.
+  const hasMeasurements = Boolean(
+    product?.measurements &&
+      Object.values(product.measurements).some(
+        (entry) => entry && Object.values(entry).some((value) => typeof value === 'string' && value.trim() !== '')
+      )
+  );
 
   useEffect(() => {
     if (product?.id) {
@@ -234,6 +247,11 @@ export default function ProductScreen({ navigation, route }) {
     if (size === selectedSize) return;
     Haptics.selectionAsync();
     setSelectedSize(size);
+  };
+
+  const handleOpenSizeGuide = () => {
+    Haptics.selectionAsync();
+    setSizeGuideVisible(true);
   };
 
   // Route params can arrive without a product (a stale deep link, a
@@ -429,6 +447,17 @@ export default function ProductScreen({ navigation, route }) {
               );
             })}
           </View>
+          {hasMeasurements && (
+            <TouchableOpacity
+              onPress={handleOpenSizeGuide}
+              style={styles.sizeGuideButton}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="View size guide"
+            >
+              <Text style={styles.sizeGuideButtonText}>View Size Guide</Text>
+            </TouchableOpacity>
+          )}
 
           {/* Quantity */}
           <Text style={styles.sectionTitle}>Quantity</Text>
@@ -485,6 +514,15 @@ export default function ProductScreen({ navigation, route }) {
           />
         </View>
       </View>
+
+      <SizeGuideModal
+        visible={sizeGuideVisible}
+        onClose={() => setSizeGuideVisible(false)}
+        measurements={product.measurements}
+        measurementType={product.measurementType}
+        sizes={productSizes}
+        selectedSize={selectedSize}
+      />
     </SafeAreaView>
   );
 }
@@ -570,6 +608,8 @@ const styles = StyleSheet.create({
   },
   sizeOption: { width: 50, height: 50, borderRadius: Radius.md, justifyContent: 'center', alignItems: 'center', marginRight: 16, marginBottom: 10 },
   sizeText: { fontSize: 16, fontWeight: '600' },
+  sizeGuideButton: { alignSelf: 'flex-start', marginTop: 4, marginBottom: 24 },
+  sizeGuideButtonText: { fontSize: 14, fontWeight: '600', color: Colors.light.tint },
   quantityContainer: { flexDirection: 'row', alignItems: 'center' },
   quantityButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.light.border, justifyContent: 'center', alignItems: 'center' },
   quantityIconDisabled: { opacity: 0.3 },

@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Pressable,
   ScrollView,
-  Modal,
   ActivityIndicator,
 } from 'react-native';
 import { showAppAlert } from '../utils/appAlert';
@@ -27,10 +26,13 @@ import { signOut } from 'firebase/auth';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import { useAdmin } from '../context/AdminContext';
+import { getPortalLabel } from '../constants/roles';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
+import { Colors, Spacing } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Input from '../components/ui/Input';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
@@ -94,61 +96,6 @@ function MenuRow({
   );
 }
 
-// Shared confirmation dialog for Logout and Deactivate. Rendered only while
-// `visible` so its entrance animation replays fresh every time it opens
-// (React Native's <Modal> keeps its children mounted even while hidden, so
-// a mount-triggered `entering` prop would otherwise only ever fire once).
-function ConfirmDialog({
-  visible,
-  onClose,
-  title,
-  children,
-  confirmLabel,
-  confirmVariant = 'primary',
-  onConfirm,
-  loading,
-  confirmDisabled,
-  cancelDisabled,
-  reduceMotion,
-}) {
-  if (!visible) return null;
-
-  return (
-    <Modal
-      transparent
-      visible
-      animationType="fade"
-      onRequestClose={() => {
-        if (!cancelDisabled) onClose();
-      }}
-    >
-      <View style={styles.modalOverlay}>
-        <Animated.View
-          style={styles.modalContent}
-          entering={reduceMotion ? undefined : FadeIn.duration(200).easing(EASE_OUT_QUART)}
-        >
-          <Text style={styles.modalTitle}>{title}</Text>
-          {children}
-          <View style={styles.modalButtons}>
-            <View style={styles.modalButtonWrap}>
-              <Button variant="secondary" label="Cancel" onPress={onClose} disabled={cancelDisabled} />
-            </View>
-            <View style={styles.modalButtonWrap}>
-              <Button
-                variant={confirmVariant}
-                label={confirmLabel}
-                onPress={onConfirm}
-                loading={loading}
-                disabled={confirmDisabled}
-              />
-            </View>
-          </View>
-        </Animated.View>
-      </View>
-    </Modal>
-  );
-}
-
 export default function ProfileScreen({ navigation }) {
   const [userData, setUserData] = useState({ name: '', email: '' });
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -156,7 +103,11 @@ export default function ProfileScreen({ navigation }) {
   const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
   const [deactivateVisible, setDeactivateVisible] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
-  const { isAdmin, adminLoading } = useAdmin();
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [savingName, setSavingName] = useState(false);
+  const { role, adminLoading } = useAdmin();
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
 
@@ -190,15 +141,82 @@ export default function ProfileScreen({ navigation }) {
     fetchUserData();
   }, []);
 
-  // Routes to the dashboard directly for a restored admin session, or to
-  // AdminLogin otherwise (guests and non-admins alike — this row stays
-  // reachable by everyone, see the row's own comment below). Guarded by
-  // `disabled={adminLoading}` on the row itself, so this can't fire while
-  // isAdmin is still unresolved — that's exactly the race that used to
-  // send a real admin back to AdminLogin.
+  const handleStartEditName = () => {
+    Haptics.selectionAsync();
+    setNameDraft(userData.name || '');
+    setNameError('');
+    setEditingName(true);
+  };
+
+  const handleCancelEditName = () => {
+    setEditingName(false);
+    setNameDraft('');
+    setNameError('');
+  };
+
+  const handleChangeNameDraft = (text) => {
+    setNameDraft(text);
+    if (nameError) setNameError('');
+  };
+
+  const handleSaveName = async () => {
+    const trimmed = nameDraft.trim();
+    if (!trimmed) {
+      setNameError('Name cannot be empty.');
+      return;
+    }
+    if (trimmed.length > 60) {
+      setNameError('Name must be 60 characters or fewer.');
+      return;
+    }
+    // Save is already disabled while offline — this is just a defensive
+    // no-op in case isConnected flips between render and press.
+    if (!isConnected) return;
+
+    setSavingName(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      // Field-scoped update — only "name" is sent, so no other field on
+      // the document can be touched by this write. Matches the allowlist
+      // in firestore.rules, which permits owners to change "name" alone.
+      await updateDoc(doc(db, "users", auth.currentUser.uid), { name: trimmed });
+      setUserData((prev) => ({ ...prev, name: trimmed }));
+      setEditingName(false);
+      setSavingName(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      setSavingName(false);
+      console.error("Error updating name:", error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+
+      const isNetworkError = !isConnected || error.code === 'unavailable';
+      if (isNetworkError) {
+        showAppAlert(
+          'No Internet Connection',
+          'Network connection lost. Please check your connection and try again.'
+        );
+      } else {
+        showAppAlert('Error', 'Could not update your name. Please try again.');
+      }
+    }
+  };
+
+  // Routes straight to the right portal for a restored privileged session —
+  // seller to the dashboard, platformAdmin to user management — or to
+  // AdminLogin otherwise (guests and unprivileged accounts alike, this row
+  // stays reachable by everyone, see the row's own comment below). Guarded
+  // by `disabled={adminLoading}` on the row itself, so this can't fire
+  // while role is still unresolved — that's exactly the race that used to
+  // send a real seller/platformAdmin back to AdminLogin.
   const handleAdminPortalPress = () => {
     Haptics.selectionAsync();
-    navigation.navigate(isAdmin ? 'AdminDashboard' : 'AdminLogin');
+    if (role === 'seller') {
+      navigation.navigate('AdminDashboard');
+    } else if (role === 'platformAdmin') {
+      navigation.navigate('AdminUsers');
+    } else {
+      navigation.navigate('AdminLogin');
+    }
   };
 
   const handleOpenLogout = () => {
@@ -270,7 +288,6 @@ export default function ProfileScreen({ navigation }) {
         confirmLabel="Logout"
         confirmVariant="primary"
         onConfirm={handleLogout}
-        reduceMotion={reduceMotion}
       >
         <Text style={styles.modalMessage}>Are you sure you want to log out?</Text>
       </ConfirmDialog>
@@ -290,7 +307,6 @@ export default function ProfileScreen({ navigation }) {
         loading={deactivating}
         confirmDisabled={deactivating || !isConnected}
         cancelDisabled={deactivating}
-        reduceMotion={reduceMotion}
       >
         <Text style={styles.deactivateModalMessage}>
           Your account will be disabled and you will be signed out. You will
@@ -345,7 +361,57 @@ export default function ProfileScreen({ navigation }) {
             <View style={styles.avatar}>
               <Ionicons name="person" size={56} color={Colors.light.tint} />
             </View>
-            <Text style={styles.name}>{userData.name}</Text>
+
+            {editingName ? (
+              <View style={styles.nameEditWrap}>
+                <Input
+                  value={nameDraft}
+                  onChangeText={handleChangeNameDraft}
+                  placeholder="Your name"
+                  maxLength={60}
+                  autoFocus
+                  editable={!savingName}
+                  error={
+                    nameError ||
+                    (!isConnected
+                      ? 'Network connection lost. Please check your connection and try again.'
+                      : '')
+                  }
+                  accessibilityLabel="Name"
+                />
+                <View style={styles.nameEditButtons}>
+                  <View style={styles.nameEditButtonWrap}>
+                    <Button
+                      variant="secondary"
+                      label="Cancel"
+                      onPress={handleCancelEditName}
+                      disabled={savingName}
+                    />
+                  </View>
+                  <View style={styles.nameEditButtonWrap}>
+                    <Button
+                      variant="primary"
+                      label={!isConnected ? 'Offline' : 'Save'}
+                      onPress={handleSaveName}
+                      loading={savingName}
+                      disabled={savingName || !isConnected}
+                    />
+                  </View>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.nameRow}>
+                <Text style={styles.name}>{userData.name}</Text>
+                <Pressable
+                  onPress={handleStartEditName}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Edit name"
+                >
+                  <Ionicons name="pencil" size={16} color={Colors.light.tint} />
+                </Pressable>
+              </View>
+            )}
             <Text style={styles.email}>{userData.email}</Text>
           </Animated.View>
         )}
@@ -389,22 +455,28 @@ export default function ProfileScreen({ navigation }) {
             reduceMotion={reduceMotion}
           />
 
-          {/* Stays visible and reachable for everyone, admin or not —
+          {/* Stays visible and reachable for everyone, staff or not —
               AdminLoginScreen has to remain the one in-app entry point to
-              the portal for a signed-out admin. A non-admin tapping this
-              still only ever lands on AdminLogin and can't get further;
-              that's already enforced by Firestore rules + withAdminGuard,
-              not by hiding this row. */}
+              the portal for a signed-out staff member. A customer tapping
+              this still only ever lands on AdminLogin and can't get
+              further; that's already enforced by Firestore rules +
+              withAdminGuard, not by hiding this row.
+
+              The label names the role for a restored privileged session
+              ("Store Manager" / "Platform Admin") and falls back to the
+              neutral "Staff Portal" for everyone else — so it always
+              matches the screen handleAdminPortalPress() is about to open,
+              and never promises a customer a portal they can't enter. */}
           <MenuRow
             index={3}
             icon="shield-checkmark"
             iconColor={Colors.light.tint}
             circleColor={Colors.light.tint + '15'}
-            label="Admin Portal"
+            label={getPortalLabel(role)}
             labelColor={Colors.light.tint}
             onPress={handleAdminPortalPress}
             disabled={adminLoading}
-            accessibilityHint="Opens the admin portal"
+            accessibilityHint={`Opens the ${getPortalLabel(role)}`}
             style={styles.adminCard}
             trailing={
               adminLoading ? (
@@ -502,6 +574,11 @@ const styles = StyleSheet.create({
   name: { fontSize: 19, fontWeight: '700', color: Colors.light.text },
   email: { fontSize: 14, color: Colors.light.icon, marginTop: 4 },
 
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  nameEditWrap: { width: '100%', paddingHorizontal: 20 },
+  nameEditButtons: { flexDirection: 'row', gap: 12, marginTop: Spacing.xs },
+  nameEditButtonWrap: { flex: 1 },
+
   avatarSkeleton: { width: 100, height: 100, borderRadius: 50, marginBottom: Spacing.md },
   skeletonLine: { height: 14, borderRadius: 4, marginTop: 6 },
   skeletonNameLine: { width: 140 },
@@ -531,17 +608,8 @@ const styles = StyleSheet.create({
   sessionSection: { marginTop: Spacing.lg },
   deactivateCard: { marginTop: 14, marginBottom: 0 },
 
-  // Confirmation dialogs
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: {
-    width: '85%',
-    backgroundColor: Colors.light.background,
-    borderRadius: Radius.xl,
-    padding: Spacing.lg,
-    alignItems: 'center',
-    ...Shadow.card,
-  },
-  modalTitle: { fontSize: 18, fontWeight: '700', marginBottom: 10, color: Colors.light.text },
+  // Confirmation dialogs (rendered through the shared ConfirmDialog component
+  // — only the message text styles below are local to this screen)
   modalMessage: { fontSize: 15, color: Colors.light.icon, textAlign: 'center', marginBottom: Spacing.lg },
   // Left-aligned and smaller than modalMessage — this dialog's copy is a
   // full paragraph the user actually needs to read and understand (privacy
@@ -555,6 +623,4 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
     alignSelf: 'stretch',
   },
-  modalButtons: { flexDirection: 'row', width: '100%', gap: 12 },
-  modalButtonWrap: { flex: 1 },
 });

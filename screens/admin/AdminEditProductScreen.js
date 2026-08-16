@@ -23,20 +23,74 @@ import Animated, {
   useReducedMotion,
   Easing,
   FadeIn,
+  LinearTransition,
 } from 'react-native-reanimated';
+import { deleteField } from 'firebase/firestore';
 import { useProducts } from '../../context/ProductContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
-import { COLOR_PALETTE, SIZE_OPTIONS } from '../../constants/productOptions';
+import {
+  COLOR_PALETTE,
+  SIZE_OPTIONS,
+  MEASUREMENT_TYPES,
+  MEASUREMENT_TYPE_OPTIONS,
+  emptyMeasurementEntry,
+  buildMeasurementsPayload,
+} from '../../constants/productOptions';
 import { Colors, Spacing, Radius } from '../../constants/theme';
+import { EASE_OUT_QUART } from '../../constants/motion';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
 
 const TYPE_OPTIONS = [
   { key: 'ready-to-wear', label: 'Ready to Wear' },
   { key: 'ukay-ukay', label: 'Ukay-Ukay' },
 ];
+
+// Builds one measurement entry per size already selected on the product,
+// filled in from product.measurements where present and blank otherwise —
+// correctly handles products saved before this field existed (no
+// `measurements` key at all) by defaulting every size to blank.
+//
+// Backward compatibility: products saved before measurementType existed
+// carry `measurements` with the old five keys (chest, length, shoulder,
+// sleeve, waist) and no `measurementType` at all. Those are preselected as
+// "tops" — the closest match — which only has room for four of the five old
+// keys; the legacy `waist` value has no home in tops and is silently
+// dropped on the next save (never hydrated into any field, so it can't
+// round-trip back out). A product with neither field just gets type: null,
+// same as a brand new product.
+const hydrateMeasurements = (product) => {
+  const type = product.measurementType || (product.measurements ? 'tops' : null);
+  const fields = type ? MEASUREMENT_TYPES[type]?.fields || [] : [];
+  const measurements = {};
+  (product.sizes || []).forEach((size) => {
+    const existing = product.measurements?.[size];
+    measurements[size] = existing
+      ? fields.reduce((acc, field) => {
+          acc[field.key] = existing[field.key] || '';
+          return acc;
+        }, {})
+      : emptyMeasurementEntry(type);
+  });
+  return { measurements, measurementType: type };
+};
+
+const measurementsEqual = (a, aType, b, bType) => {
+  if (aType !== bType) return false;
+  const fields = (aType && MEASUREMENT_TYPES[aType]?.fields) || [];
+  const sizesA = Object.keys(a);
+  const sizesB = Object.keys(b);
+  if (sizesA.length !== sizesB.length) return false;
+  return sizesA.every((size) => {
+    const entryB = b[size];
+    if (!entryB) return false;
+    const entryA = a[size];
+    return fields.every((field) => (entryA[field.key] || '') === (entryB[field.key] || ''));
+  });
+};
 
 export default function AdminEditProductScreen({ navigation, route }) {
   const { product } = route.params;
@@ -59,7 +113,10 @@ export default function AdminEditProductScreen({ navigation, route }) {
     // the admin has to make a real choice for them on next save.
     colors: product.colors || [],
     sizes: product.sizes || [],
+    ...hydrateMeasurements(product),
   });
+  const [measurementsExpanded, setMeasurementsExpanded] = useState(false);
+  const [pendingMeasurementType, setPendingMeasurementType] = useState(null);
   const [errors, setErrors] = useState({
     name: '',
     price: '',
@@ -86,6 +143,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
     imageUrl: product.imageUrl,
     colors: product.colors || [],
     sizes: product.sizes || [],
+    ...hydrateMeasurements(product),
   });
 
   // The existing photo is already a known-good URL, so it's shown
@@ -133,6 +191,19 @@ export default function AdminEditProductScreen({ navigation, route }) {
   const imageShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: imageShakeX.value }] }));
   const colorsShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: colorsShakeX.value }] }));
   const sizesShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: sizesShakeX.value }] }));
+
+  // Chevron rotation for the collapsible Measurements section — same
+  // rotate-on-expand treatment HelpScreen.js's FAQItem uses.
+  const measurementsChevronRotation = useSharedValue(0);
+  useEffect(() => {
+    measurementsChevronRotation.value = withTiming(measurementsExpanded ? 1 : 0, {
+      duration: 200,
+      easing: EASE_OUT_QUART,
+    });
+  }, [measurementsExpanded]);
+  const measurementsChevronStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${measurementsChevronRotation.value * 180}deg` }],
+  }));
 
   const triggerShake = (sharedValue) => {
     if (reduceMotion) return;
@@ -197,13 +268,90 @@ export default function AdminEditProductScreen({ navigation, route }) {
 
   const toggleSize = (size) => {
     Haptics.selectionAsync();
+    setFormData((prev) => {
+      const isSelected = prev.sizes.includes(size);
+      // Deselecting drops the size's measurement entry entirely, so it can
+      // never be written even if it had values loaded from the product.
+      const nextMeasurements = { ...prev.measurements };
+      if (isSelected) {
+        delete nextMeasurements[size];
+      } else {
+        nextMeasurements[size] = emptyMeasurementEntry(prev.measurementType);
+      }
+      return {
+        ...prev,
+        sizes: isSelected ? prev.sizes.filter((s) => s !== size) : [...prev.sizes, size],
+        measurements: nextMeasurements,
+      };
+    });
+    clearFieldError('sizes');
+  };
+
+  // True if any size has a non-empty value for any field, regardless of
+  // which type's keys those fields belong to — used to decide whether
+  // switching measurementType needs a confirmation (the field keys differ
+  // between types, so entered data can never carry over).
+  const hasMeasurementValues = (measurements) =>
+    Object.values(measurements || {}).some((entry) =>
+      Object.values(entry || {}).some((value) => typeof value === 'string' && value.trim() !== '')
+    );
+
+  // Re-keys every selected size's measurement entry to the new type's blank
+  // field set. Always safe to call directly when there's nothing to lose;
+  // routed through the confirm dialog otherwise (see handleMeasurementTypeChange).
+  const applyMeasurementType = (type) => {
+    setFormData((prev) => {
+      const nextMeasurements = {};
+      prev.sizes.forEach((size) => {
+        nextMeasurements[size] = emptyMeasurementEntry(type);
+      });
+      return { ...prev, measurementType: type, measurements: nextMeasurements };
+    });
+  };
+
+  const handleMeasurementTypeChange = (type) => {
+    if (formData.measurementType === type) return;
+    Haptics.selectionAsync();
+    if (hasMeasurementValues(formData.measurements)) {
+      setPendingMeasurementType(type);
+      return;
+    }
+    applyMeasurementType(type);
+  };
+
+  const confirmMeasurementTypeChange = () => {
+    if (pendingMeasurementType) applyMeasurementType(pendingMeasurementType);
+    setPendingMeasurementType(null);
+  };
+
+  const cancelMeasurementTypeChange = () => {
+    setPendingMeasurementType(null);
+  };
+
+  // Numeric-only at the input layer (measurements are optional and never
+  // block submission — see validate()), but decimals like 17.5" are valid
+  // garment measurements so a single "." is allowed through.
+  const sanitizeMeasurementInput = (text) => {
+    const cleaned = text.replace(/[^0-9.]/g, '');
+    const firstDot = cleaned.indexOf('.');
+    if (firstDot === -1) return cleaned;
+    return cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
+  };
+
+  const handleMeasurementChange = (size, fieldKey, text) => {
+    const sanitized = sanitizeMeasurementInput(text);
     setFormData((prev) => ({
       ...prev,
-      sizes: prev.sizes.includes(size)
-        ? prev.sizes.filter((s) => s !== size)
-        : [...prev.sizes, size],
+      measurements: {
+        ...prev.measurements,
+        [size]: { ...prev.measurements[size], [fieldKey]: sanitized },
+      },
     }));
-    clearFieldError('sizes');
+  };
+
+  const toggleMeasurementsExpanded = () => {
+    Haptics.selectionAsync();
+    setMeasurementsExpanded((prev) => !prev);
   };
 
   const original = originalRef.current;
@@ -217,7 +365,13 @@ export default function AdminEditProductScreen({ navigation, route }) {
     formData.colors.length !== original.colors.length ||
     formData.colors.some((c) => !original.colors.includes(c)) ||
     formData.sizes.length !== original.sizes.length ||
-    formData.sizes.some((s) => !original.sizes.includes(s));
+    formData.sizes.some((s) => !original.sizes.includes(s)) ||
+    !measurementsEqual(
+      formData.measurements,
+      formData.measurementType,
+      original.measurements,
+      original.measurementType
+    );
 
   const handleBack = () => {
     if (!isDirty) {
@@ -306,6 +460,8 @@ export default function AdminEditProductScreen({ navigation, route }) {
     setSaving(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+    const measurementsResult = buildMeasurementsPayload(formData.measurements, formData.measurementType);
+
     const result = await updateProduct(product.id, {
       name: formData.name,
       // Stored as a real number, same reasoning as stock below —
@@ -327,6 +483,13 @@ export default function AdminEditProductScreen({ navigation, route }) {
       imageUrl: formData.imageUrl,
       colors: formData.colors,
       sizes: formData.sizes,
+      // updateDoc (unlike addDoc) needs an explicit deleteField() to
+      // remove a field the product previously had — omitting the key here
+      // would silently leave a stale `measurements` map (or `measurementType`)
+      // in place. Both sentinels pass straight through updateProduct(),
+      // which forwards this object to updateDoc() untouched.
+      measurements: measurementsResult?.measurements || deleteField(),
+      measurementType: measurementsResult?.measurementType || deleteField(),
     });
 
     setSaving(false);
@@ -664,6 +827,100 @@ export default function AdminEditProductScreen({ navigation, route }) {
               </Animated.View>
             </View>
 
+            {/* Measurements */}
+            <Animated.View
+              style={styles.sectionWrap}
+              layout={reduceMotion ? undefined : LinearTransition.duration(200).easing(EASE_OUT_QUART)}
+            >
+              <AnimatedPressable
+                onPress={toggleMeasurementsExpanded}
+                style={styles.measurementsHeader}
+                accessibilityRole="button"
+                accessibilityLabel="Measurements (Optional)"
+                accessibilityHint={
+                  measurementsExpanded ? 'Collapses the measurement inputs' : 'Expands the measurement inputs'
+                }
+                accessibilityState={{ expanded: measurementsExpanded }}
+              >
+                <Text style={styles.sectionTitle}>Measurements (Optional)</Text>
+                <Animated.View style={measurementsChevronStyle}>
+                  <Ionicons name="chevron-down" size={20} color={Colors.light.icon} />
+                </Animated.View>
+              </AnimatedPressable>
+
+              {measurementsExpanded && (
+                <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(180).easing(EASE_OUT_QUART)}>
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>What kind of item is this?</Text>
+                    <View style={styles.sizeChipsRow}>
+                      {MEASUREMENT_TYPE_OPTIONS.map((option) => {
+                        const isActive = formData.measurementType === option.key;
+                        return (
+                          <AnimatedPressable
+                            key={option.key}
+                            onPress={() => handleMeasurementTypeChange(option.key)}
+                            style={[styles.sizeChip, isActive && styles.sizeChipActive]}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: isActive }}
+                            accessibilityLabel={option.label}
+                          >
+                            <Text style={[styles.sizeChipText, isActive && styles.sizeChipTextActive]}>
+                              {option.label}
+                            </Text>
+                          </AnimatedPressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  {!formData.measurementType ? (
+                    <Text style={styles.helperText}>Choose an item type to add measurements.</Text>
+                  ) : (
+                    <>
+                      <Text style={styles.helperText}>
+                        {MEASUREMENT_TYPES[formData.measurementType].helper}
+                      </Text>
+                      {formData.sizes.length === 0 ? (
+                        <Text style={styles.helperText}>Select at least one size to add measurements.</Text>
+                      ) : (
+                        SIZE_OPTIONS.filter((size) => formData.sizes.includes(size)).map((size) => (
+                          <View key={size} style={styles.measurementGroup}>
+                            <Text style={styles.measurementGroupTitle}>{size}</Text>
+                            <View style={styles.measurementInputsRow}>
+                              {MEASUREMENT_TYPES[formData.measurementType].fields.map((field) => (
+                                <View key={field.key} style={styles.measurementFieldWrap}>
+                                  <Input
+                                    label={`${field.label} (${MEASUREMENT_TYPES[formData.measurementType].unit})`}
+                                    value={formData.measurements[size]?.[field.key] ?? ''}
+                                    onChangeText={(text) => handleMeasurementChange(size, field.key, text)}
+                                    placeholder="0"
+                                    keyboardType="numeric"
+                                    accessibilityLabel={`${size} ${field.label} in ${MEASUREMENT_TYPES[formData.measurementType].unit}`}
+                                  />
+                                </View>
+                              ))}
+                            </View>
+                          </View>
+                        ))
+                      )}
+                    </>
+                  )}
+                </Animated.View>
+              )}
+            </Animated.View>
+
+            <ConfirmDialog
+              visible={Boolean(pendingMeasurementType)}
+              onClose={cancelMeasurementTypeChange}
+              title="Change item type?"
+              confirmLabel="Change Type"
+              onConfirm={confirmMeasurementTypeChange}
+            >
+              <Text style={styles.modalMessage}>
+                The measurements you&apos;ve entered will be cleared.
+              </Text>
+            </ConfirmDialog>
+
             {/* Submit Button */}
             <View style={styles.submitButtonWrap}>
               <Button
@@ -917,5 +1174,33 @@ const styles = StyleSheet.create({
   },
   submitButtonWrap: {
     marginTop: Spacing.sm,
+  },
+  measurementsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  measurementGroup: {
+    marginTop: Spacing.md,
+  },
+  measurementGroupTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.light.text,
+    marginBottom: Spacing.xs,
+  },
+  measurementInputsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  measurementFieldWrap: {
+    width: '47%',
+  },
+  modalMessage: {
+    fontSize: 15,
+    color: Colors.light.icon,
+    textAlign: 'center',
+    marginBottom: Spacing.lg,
   },
 });

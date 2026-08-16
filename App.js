@@ -43,17 +43,18 @@ LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
 const Stack = createNativeStackNavigator();
 
 // Every admin screen except AdminLoginScreen itself is wrapped so it can
-// only render for someone whose AdminContext isAdmin flag is true.
-// AdminLoginScreen is intentionally left unguarded — it has to stay
-// reachable by non-admins, since it's the screen that grants isAdmin
-// in the first place.
-const GuardedAdminDashboardScreen = withAdminGuard(AdminDashboardScreen);
-const GuardedAdminProductsScreen = withAdminGuard(AdminProductsScreen);
-const GuardedAdminAddProductScreen = withAdminGuard(AdminAddProductScreen);
-const GuardedAdminEditProductScreen = withAdminGuard(AdminEditProductScreen);
-const GuardedAdminOrdersScreen = withAdminGuard(AdminOrdersScreen);
-const GuardedAdminUsersScreen = withAdminGuard(AdminUsersScreen);
-const GuardedAdminSupportScreen = withAdminGuard(AdminSupportScreen);
+// only render for someone whose AdminContext role matches the role named
+// here — mirrors the product/order/support-request vs. user-account split
+// in firestore.rules exactly. AdminLoginScreen is intentionally left
+// unguarded — it has to stay reachable by non-admins, since it's the
+// screen that grants a role in the first place.
+const GuardedAdminDashboardScreen = withAdminGuard(AdminDashboardScreen, 'seller');
+const GuardedAdminProductsScreen = withAdminGuard(AdminProductsScreen, 'seller');
+const GuardedAdminAddProductScreen = withAdminGuard(AdminAddProductScreen, 'seller');
+const GuardedAdminEditProductScreen = withAdminGuard(AdminEditProductScreen, 'seller');
+const GuardedAdminOrdersScreen = withAdminGuard(AdminOrdersScreen, 'seller');
+const GuardedAdminUsersScreen = withAdminGuard(AdminUsersScreen, 'platformAdmin');
+const GuardedAdminSupportScreen = withAdminGuard(AdminSupportScreen, 'seller');
 
 export default function App() {
   return (

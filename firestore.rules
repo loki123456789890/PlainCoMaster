@@ -1,9 +1,19 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAdmin() {
+    // Role split: "admin" was replaced by two non-overlapping roles.
+    // isSeller() -> product/order/support-request duties.
+    // isPlatformAdmin() -> user-account/role management duties.
+    // Neither is a superset of the other.
+    function isSeller() {
       return request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'customer') == 'admin';
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'seller' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isActive', true) != false;
+    }
+    function isPlatformAdmin() {
+      return request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'platformAdmin' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isActive', true) != false;
     }
     function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
@@ -22,39 +32,143 @@ service cloud.firestore {
          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isActive', true) != false);
     }
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-      allow create: if isOwner(userId);
-      // An owner may never change their own role (isAdmin() reads role
-      // straight off this same document, so allowing that would be a
-      // client-side path to self-granting admin), and may only ever flip
-      // isActive to false, never back to true — self-deactivation is
-      // allowed, self-reactivation is not. Only an admin can do either.
+      allow read: if isOwner(userId) || isPlatformAdmin();
+      // Signup is CUSTOMER-ONLY provisioning, and this rule is what makes
+      // that true rather than merely conventional. The update rule below
+      // goes to real lengths to make role escalation impossible — but an
+      // unvalidated create bypasses all of it, because a client that sets
+      // role at creation time never performs an update at all. So create
+      // is constrained to exactly the shape Signupscreen.js writes, as an
+      // allowlist of keys (hasOnly) for the same reason the update shapes
+      // use one: a denylist silently admits any field invented later.
       //
-      // Both fields are read via .get() with a default: customer documents
+      // "role" and "isActive" are absent from that allowlist, so neither
+      // can be set at creation by anyone, at any value. A new account is
+      // therefore always an ordinary customer (both fields are read with
+      // .get() defaults everywhere — see AdminContext's
+      // resolvePrivilegedRole and AdminUsersScreen's snapshot mapping),
+      // and the ONLY path to a privileged role is a platformAdmin's
+      // update through the branch below. That is deliberate: staff
+      // accounts are granted, never self-registered.
+      //
+      // uid must match the authenticated caller so the document can't
+      // claim to belong to someone else. The three consent/timestamp
+      // fields are optional in shape but written together by signup.
+      allow create: if isOwner(userId) &&
+        request.resource.data.keys().hasOnly(
+          ['uid', 'name', 'email', 'createdAt', 'privacyConsentAccepted', 'privacyConsentTimestamp']
+        ) &&
+        request.resource.data.keys().hasAll(['uid', 'name', 'email']) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.name is string &&
+        request.resource.data.name.matches('.*\\S.*') &&
+        request.resource.data.name.size() <= 60 &&
+        request.resource.data.email is string &&
+        request.resource.data.email.matches('.*\\S.*');
+      // An owner may only touch their own document through one of three
+      // allowlisted shapes, expressed as the exact set of changed keys
+      // (affectedKeys().hasOnly(...)) rather than a per-field denylist —
+      // a denylist silently permits any field added later, an allowlist
+      // does not. Because no shape below includes "role", any write
+      // that changes role (e.g. a client-side self-promotion attempt)
+      // necessarily fails every hasOnly() check and is denied outright,
+      // regardless of what value is requested. Only a platformAdmin can
+      // change role, isActive back to true, email, consent fields, or
+      // timestamps.
+      //
+      // No delete rule exists for user documents, deliberately: SRS §2.4
+      // requires accounts to be deactivated (isActive: false), not
+      // deleted, so completed sales tied to that account stay auditable.
+      // This applies to every role, including platformAdmin.
+      //
+      // Shape 1 — display name edit: "name" must be the only changed key,
+      // a non-empty (non-whitespace-only, via regex — Rules has no trim())
+      // string of at most 60 characters.
+      //
+      // Shape 2 — self-deactivation: "isActive" and "deactivatedAt" must
+      // be the only changed keys, written together in one call (see
+      // ProfileScreen.js), and the new isActive value must be false —
+      // self-reactivation (isActive: true) is not a valid value here, so
+      // it's rejected the same way any other unlisted change would be.
+      //
+      // Shape 3 — delivery address: LocationScreen.js writes the whole
+      // address as one nested map, so "shippingAddress" is the only
+      // affected key at the document level and the inner keys have to be
+      // constrained separately — exactly the six form fields plus the
+      // updatedAt timestamp, with all six present as non-empty strings.
+      // SRS 2.5 Dependency 5 specifies one saved address per customer,
+      // which this shape enforces (a single map, not a collection).
+      //
+      // Fields are read via .get() with a default: customer documents
       // created at signup do NOT have a role field at all, and dot notation
       // on a missing field throws an error that Firestore surfaces as
       // "Missing or insufficient permissions" — indistinguishable from a
-      // real deny. The default 'customer' compares equal on both sides for
-      // a normal update, while an attempt to set role: 'admin' still fails
-      // the comparison and is denied.
-      allow update: if isAdmin() ||
+      // real deny.
+      //
+      // platformAdmin branch: a platformAdmin may update role and/or
+      // isActive on any user document EXCEPT their own — this branch
+      // cannot target the requester's own document at all. Without that
+      // exclusion, a platformAdmin could demote or deactivate themselves
+      // here and permanently lock the account role out of existence (no
+      // one left who can grant platformAdmin). Self-deactivation is still
+      // available to a platformAdmin the same way it is to any user: via
+      // the ordinary owner-branch shape below. isSeller() gets no write
+      // access here at all.
+      allow update: if
+        (
+          isPlatformAdmin() &&
+          !isOwner(userId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'isActive'])
+        )
+        ||
         (
           isOwner(userId) &&
-          request.resource.data.get('role', 'customer') ==
-            resource.data.get('role', 'customer') &&
           (
-            request.resource.data.get('isActive', true) ==
-              resource.data.get('isActive', true)
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+              request.resource.data.get('name', '') is string &&
+              request.resource.data.name.matches('.*\\S.*') &&
+              request.resource.data.name.size() <= 60
+            )
             ||
-            request.resource.data.get('isActive', true) == false
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isActive', 'deactivatedAt']) &&
+              request.resource.data.get('isActive', true) == false
+            )
+            ||
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['shippingAddress']) &&
+              request.resource.data.shippingAddress is map &&
+              request.resource.data.shippingAddress.keys().hasOnly(
+                ['fullName', 'phone', 'address', 'city', 'province', 'zipCode', 'updatedAt']
+              ) &&
+              request.resource.data.shippingAddress.keys().hasAll(
+                ['fullName', 'phone', 'address', 'city', 'province', 'zipCode']
+              ) &&
+              request.resource.data.shippingAddress.fullName is string &&
+              request.resource.data.shippingAddress.fullName.matches('.*\\S.*') &&
+              request.resource.data.shippingAddress.phone is string &&
+              request.resource.data.shippingAddress.phone.matches('.*\\S.*') &&
+              request.resource.data.shippingAddress.address is string &&
+              request.resource.data.shippingAddress.address.matches('.*\\S.*') &&
+              request.resource.data.shippingAddress.city is string &&
+              request.resource.data.shippingAddress.city.matches('.*\\S.*') &&
+              request.resource.data.shippingAddress.province is string &&
+              request.resource.data.shippingAddress.province.matches('.*\\S.*') &&
+              request.resource.data.shippingAddress.zipCode is string &&
+              request.resource.data.shippingAddress.zipCode.matches('.*\\S.*')
+            )
           )
         );
-      allow delete: if isAdmin();
       match /orders/{orderId} {
-        allow read: if isOwner(userId) || isAdmin();
+        // Read-only for the owning customer: order cancellation and
+        // customer-driven status changes are unsupported per the SRS, so
+        // only isSeller() may write here. Delete is intentionally absent
+        // for every role — order records are preserved for audit and
+        // transaction history per SRS §2.4.
+        allow read: if isOwner(userId) || isSeller();
         allow create: if isActiveOwner(userId);
-        allow update: if isOwner(userId) || isAdmin();
-        allow delete: if isAdmin();
+        allow update: if isSeller();
       }
       match /cart/{itemId} {
         allow read, write: if isActiveOwner(userId);
@@ -68,12 +182,12 @@ service cloud.firestore {
       }
     }
     match /{path=**}/orders/{orderId} {
-      allow read: if isAdmin();
+      allow read: if isSeller();
     }
     match /products/{productId} {
-      allow read: if true;
-      allow create, delete: if isAdmin();
-      // Admins can change anything. A signed-in, active customer can also
+      allow read: if request.auth != null;
+      allow create, delete: if isSeller();
+      // Sellers can change anything. A signed-in, active customer can also
       // update a product doc, but ONLY as a stock decrement from checkout:
       // "stock" must be the sole field that changed, both the old and new
       // values must be numbers, and the new value must be smaller (but
@@ -85,10 +199,10 @@ service cloud.firestore {
       // NOTE: AdminAddProductScreen/AdminEditProductScreen now save
       // "stock" as a real number, but any product created before that
       // change still has it stored as a string, and `resource.data.stock
-      // is number` is false for those until an admin re-saves them once
+      // is number` is false for those until a seller re-saves them once
       // (via Edit Product) — until then this branch denies the decrement
       // for that specific product, same as if stock were insufficient.
-      allow update: if isAdmin() ||
+      allow update: if isSeller() ||
         (
           isActiveUser() &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']) &&
@@ -101,8 +215,8 @@ service cloud.firestore {
     match /supportRequests/{requestId} {
       allow create: if request.auth != null &&
         request.resource.data.userId == request.auth.uid;
-      allow read, update: if isAdmin();
-      allow delete: if isAdmin();
+      allow read, update: if isSeller();
+      allow delete: if isSeller();
     }
   }
 }

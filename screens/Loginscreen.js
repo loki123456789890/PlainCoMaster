@@ -36,6 +36,7 @@ import useNetworkStatus from '../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../constants/theme';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
+import { getRoleLabel, ROLE_SELLER, ROLE_PLATFORM_ADMIN } from '../constants/roles';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -200,17 +201,25 @@ export default function LoginScreen({ navigation }) {
         return;
       }
 
-      // Admin accounts don't belong in the customer flow — Firebase Auth
+      // Staff accounts don't belong in the customer flow — Firebase Auth
       // itself has no concept of role, so this is the only place that can
-      // stop an admin credential from landing on the customer HomeScreen.
+      // stop a staff credential from landing on the customer HomeScreen.
       // Mirrors AdminLoginScreen's own role check, just in reverse.
-      if (userDocSnap.exists() && userDocSnap.data().role === 'admin') {
+      //
+      // This tested `role === 'admin'` until the role split, which left it
+      // comparing against a value no document holds any more — so it
+      // silently stopped matching anyone and both privileged roles fell
+      // straight through to HomeScreen. Checked against the same
+      // PRIVILEGED_ROLES list the rest of the app uses, so adding a role
+      // later can't reopen the same hole.
+      const signedInRole = userDocSnap.exists() ? userDocSnap.data().role : null;
+      if (signedInRole === ROLE_SELLER || signedInRole === ROLE_PLATFORM_ADMIN) {
         await auth.signOut();
         showAppAlert(
-          "Admin Account",
-          "This is an admin account. Please sign in through the Admin Portal instead.",
+          "Staff Account",
+          `This is a ${getRoleLabel(signedInRole)} account. Please sign in through the Staff Portal instead.`,
           [
-            { text: "Go to Admin Portal", onPress: () => navigation.navigate('AdminLogin') },
+            { text: "Go to Staff Portal", onPress: () => navigation.navigate('AdminLogin') },
             { text: "Cancel", style: "cancel" }
           ]
         );

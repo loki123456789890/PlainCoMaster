@@ -4,6 +4,7 @@ import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 import { Colors, Radius, Spacing, Shadow } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
 import Button, { ButtonVariant } from './Button';
+import DialogButtonRow from './DialogButtonRow';
 import { registerAlertHandler } from '../../utils/appAlert';
 
 interface AlertButton {
@@ -60,6 +61,7 @@ export default function AppAlertHost() {
   };
 
   const stacked = alert.buttons.length > 2;
+  const paired = alert.buttons.length === 2;
 
   return (
     <Modal transparent visible animationType="fade" onRequestClose={() => setAlert(null)}>
@@ -70,20 +72,38 @@ export default function AppAlertHost() {
         >
           <Text style={styles.title}>{alert.title}</Text>
           {alert.message ? <Text style={styles.message}>{alert.message}</Text> : null}
-          <View style={[styles.buttons, stacked && styles.buttonsStacked]}>
-            {alert.buttons.map((button, index) => (
-              <View
-                key={`${button.text ?? 'button'}-${index}`}
-                style={stacked ? styles.buttonStackedWrap : styles.buttonWrap}
-              >
-                <Button
-                  variant={variantForButton(button)}
-                  label={button.text || 'OK'}
-                  onPress={() => handlePress(button)}
-                />
-              </View>
-            ))}
-          </View>
+          {paired ? (
+            <DialogButtonRow
+              buttons={[
+                {
+                  label: alert.buttons[0].text || 'OK',
+                  variant: variantForButton(alert.buttons[0]),
+                  onPress: () => handlePress(alert.buttons[0]),
+                },
+                {
+                  label: alert.buttons[1].text || 'OK',
+                  variant: variantForButton(alert.buttons[1]),
+                  onPress: () => handlePress(alert.buttons[1]),
+                },
+              ]}
+            />
+          ) : (
+            <View style={[styles.buttons, stacked && styles.buttonsStacked]}>
+              {alert.buttons.map((button, index) => (
+                <View
+                  key={`${button.text ?? 'button'}-${index}`}
+                  style={stacked ? styles.buttonStackedWrap : styles.buttonWrap}
+                >
+                  <Button
+                    variant={variantForButton(button)}
+                    label={button.text || 'OK'}
+                    onPress={() => handlePress(button)}
+                    fullWidth
+                  />
+                </View>
+              ))}
+            </View>
+          )}
         </Animated.View>
       </View>
     </Modal>

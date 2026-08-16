@@ -21,6 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useProducts } from '../context/ProductContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { useCart } from '../context/CartContext';
@@ -153,29 +154,38 @@ export default function HomeScreen({ navigation }) {
   const [firstName, setFirstName] = React.useState('');
   const reduceMotion = useReducedMotion();
 
-  React.useEffect(() => {
-    const fetchUserName = async () => {
-      try {
-        const currentUser = auth.currentUser;
-        if (!currentUser) return;
+  // Refetch on every focus, not just on mount — this is how we pick up a
+  // freshly edited display name when the user comes back from Profilescreen.
+  useFocusEffect(
+    React.useCallback(() => {
+      let isActive = true;
 
-        const userDocRef = doc(db, 'users', currentUser.uid);
-        const userSnap = await getDoc(userDocRef);
+      const fetchUserName = async () => {
+        try {
+          const currentUser = auth.currentUser;
+          if (!currentUser) return;
 
-        if (userSnap.exists()) {
-          const userData = userSnap.data();
-          // Adjust these keys if your Signupscreen.js saves the name under a different field
-          const fullName = userData.name || userData.fullName || userData.firstName || '';
-          const first = fullName.trim().split(' ')[0];
-          setFirstName(first || '');
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          const userSnap = await getDoc(userDocRef);
+
+          if (userSnap.exists() && isActive) {
+            const userData = userSnap.data();
+            // Adjust these keys if your Signupscreen.js saves the name under a different field
+            const fullName = userData.name || userData.fullName || userData.firstName || '';
+            const first = fullName.trim().split(' ')[0];
+            setFirstName(first || '');
+          }
+        } catch (error) {
+          console.error('Error fetching user name:', error);
         }
-      } catch (error) {
-        console.error('Error fetching user name:', error);
-      }
-    };
+      };
 
-    fetchUserName();
-  }, []);
+      fetchUserName();
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
 
   // Take the most recently added products as "Featured Picks"
   // (falls back to first 6 if no createdAt field, e.g. seeded defaults)

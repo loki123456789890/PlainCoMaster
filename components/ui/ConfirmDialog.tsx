@@ -3,7 +3,8 @@ import { Modal, View, Text, StyleSheet } from 'react-native';
 import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 import { Colors, Radius, Spacing, Shadow } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
-import Button, { ButtonVariant } from './Button';
+import { ButtonVariant } from './Button';
+import DialogButtonRow from './DialogButtonRow';
 
 interface ConfirmDialogProps {
   visible: boolean;
@@ -61,20 +62,12 @@ export default function ConfirmDialog({
         >
           <Text style={styles.title}>{title}</Text>
           {children}
-          <View style={styles.buttons}>
-            <View style={styles.buttonWrap}>
-              <Button variant="secondary" label={cancelLabel} onPress={onClose} disabled={cancelDisabled} />
-            </View>
-            <View style={styles.buttonWrap}>
-              <Button
-                variant={confirmVariant}
-                label={confirmLabel}
-                onPress={onConfirm}
-                loading={loading}
-                disabled={confirmDisabled}
-              />
-            </View>
-          </View>
+          <DialogButtonRow
+            buttons={[
+              { label: cancelLabel, variant: 'secondary', onPress: onClose, disabled: cancelDisabled },
+              { label: confirmLabel, variant: confirmVariant, onPress: onConfirm, disabled: confirmDisabled, loading },
+            ]}
+          />
         </Animated.View>
       </View>
     </Modal>
@@ -92,6 +85,4 @@ const styles = StyleSheet.create({
     ...Shadow.card,
   },
   title: { fontSize: 18, fontWeight: '700', marginBottom: 10, color: Colors.light.text },
-  buttons: { flexDirection: 'row', width: '100%', gap: 12 },
-  buttonWrap: { flex: 1 },
 });

@@ -10,7 +10,8 @@ import {
   doc,
   serverTimestamp,
 } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, db } from '../firebaseConfig';
 
 const ProductContext = createContext();
 
@@ -29,42 +30,69 @@ export const ProductProvider = ({ children }) => {
   const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
-    setLoading(true);
-    setError(null);
+    // firestore.rules gates /products reads on `request.auth != null`, and
+    // this provider wraps the whole navigator — including Landing/Login/
+    // Signup, which render before anyone has signed in. Subscribing on mount
+    // therefore hit the rules unauthenticated and failed with
+    // permission-denied. Gate on onAuthStateChanged instead (same pattern,
+    // and same reasoning, as FavoritesContext): a plain one-time
+    // auth.currentUser check wouldn't work either, since this provider never
+    // remounts and so would never see the login that happens later.
+    let unsubscribeProducts = () => {};
 
-    const productsQuery = query(
-      collection(db, 'products'),
-      orderBy('createdAt', 'desc')
-    );
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      // Tear down the previous account's listener before starting the next,
+      // so a logout -> login switch doesn't leave a stale one running.
+      unsubscribeProducts();
 
-    const unsubscribe = onSnapshot(
-      productsQuery,
-      (snapshot) => {
-        const productList = snapshot.docs.map((docSnap) => ({
-          id: docSnap.id,
-          ...docSnap.data(),
-        }));
-        setProducts(productList);
+      if (!user) {
+        setProducts([]);
         setLoading(false);
         setError(null);
-      },
-      (err) => {
-        console.error('Error listening to products:', err.code, err.message);
-        setError(err);
-        setLoading(false);
+        unsubscribeProducts = () => {};
+        return;
       }
-    );
 
-    // Live listener replaces the old manual loadProducts() call —
-    // it fires immediately on mount and again on every change.
-    return () => unsubscribe();
+      setLoading(true);
+      setError(null);
+
+      const productsQuery = query(
+        collection(db, 'products'),
+        orderBy('createdAt', 'desc')
+      );
+
+      // Live listener replaces the old manual loadProducts() call —
+      // it fires immediately on subscribe and again on every change.
+      unsubscribeProducts = onSnapshot(
+        productsQuery,
+        (snapshot) => {
+          const productList = snapshot.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          }));
+          setProducts(productList);
+          setLoading(false);
+          setError(null);
+        },
+        (err) => {
+          console.error('Error listening to products:', err.code, err.message);
+          setError(err);
+          setLoading(false);
+        }
+      );
+    });
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeProducts();
+    };
   }, [retryToken]);
 
   const retryFetchProducts = () => setRetryToken((t) => t + 1);
 
   const addProduct = async (productData) => {
     try {
-      const docRef = await addDoc(collection(db, 'products'), {
+      const docData = {
         name: productData.name,
         price: productData.price,
         type: productData.type,
@@ -74,7 +102,19 @@ export const ProductProvider = ({ children }) => {
         colors: productData.colors || [],
         sizes: productData.sizes || [],
         createdAt: serverTimestamp(),
-      });
+      };
+      // Optional per-size measurement guide — omitted entirely (rather than
+      // written as undefined, which addDoc rejects) when the admin didn't
+      // fill any of it in. See constants/productOptions.js buildMeasurementsPayload.
+      // measurementType only ever accompanies measurements (never written
+      // alone), same as the caller's guarded spread in AdminAddProductScreen.
+      if (productData.measurements) {
+        docData.measurements = productData.measurements;
+      }
+      if (productData.measurementType) {
+        docData.measurementType = productData.measurementType;
+      }
+      const docRef = await addDoc(collection(db, 'products'), docData);
       return { success: true, product: { id: docRef.id, ...productData } };
     } catch (error) {
       console.error('Error adding product:', error.code, error.message);
