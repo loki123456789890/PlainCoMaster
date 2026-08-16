@@ -23,7 +23,16 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { auth, db } from '../firebaseConfig';
 import { signOut } from 'firebase/auth';
-import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  getDocs,
+} from 'firebase/firestore';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import { useAdmin } from '../context/AdminContext';
 import { getPortalLabel } from '../constants/roles';
@@ -103,6 +112,9 @@ export default function ProfileScreen({ navigation }) {
   const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
   const [deactivateVisible, setDeactivateVisible] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
+  // True only while the sole-platform-admin check in handleOpenDeactivate
+  // is in flight, so the row can't be tapped twice into two queries.
+  const [checkingSoleAdmin, setCheckingSoleAdmin] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [nameError, setNameError] = useState('');
@@ -235,7 +247,60 @@ export default function ProfileScreen({ navigation }) {
     }
   };
 
-  const handleOpenDeactivate = () => {
+  // Self-deactivation is permitted for every account by firestore.rules'
+  // owner branch, and for almost everyone that's fine — a customer who
+  // deactivates can be reactivated by a platform admin. The exception is
+  // the LAST active platform admin: only that role can set isActive back
+  // to true, so if the last one deactivates itself there is nobody left
+  // who can undo it, and account management can only be restored by
+  // editing the document in the Firebase console.
+  //
+  // firestore.rules already blocks a platform admin from deactivating
+  // themselves through AdminUsersScreen, for exactly this reason. This
+  // closes the other door into the same hole.
+  //
+  // A client-side check, deliberately: rules can't count documents, so
+  // this can't be enforced server-side. That's acceptable here because
+  // this guards against a mistake, not an attacker — someone determined to
+  // strand their own account has other ways, and no security property
+  // depends on stopping them.
+  const handleOpenDeactivate = async () => {
+    if (role === 'platformAdmin') {
+      setCheckingSoleAdmin(true);
+      try {
+        // Only a platform admin may read /users, which is also the only
+        // role this check applies to.
+        const adminsSnap = await getDocs(
+          query(collection(db, 'users'), where('role', '==', 'platformAdmin'))
+        );
+        const activeAdmins = adminsSnap.docs.filter(
+          (d) => d.data().isActive !== false
+        ).length;
+
+        if (activeAdmins <= 1) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          showAppAlert(
+            "You're the only Platform Admin",
+            'Deactivating this account would leave nobody able to manage user roles, and no one inside the app could restore it. Grant someone else the Platform Admin role first, then deactivate.'
+          );
+          return;
+        }
+      } catch (error) {
+        // Fails closed. Deactivation is irreversible from inside the app
+        // for this role, so proceeding on an unverified count risks the
+        // exact outcome this check exists to prevent — better to ask them
+        // to retry than to strand the account on a network blip.
+        console.error('Could not verify platform admin count:', error);
+        showAppAlert(
+          'Could not verify',
+          "We couldn't check whether another Platform Admin exists. Please try again when you're back online."
+        );
+        return;
+      } finally {
+        setCheckingSoleAdmin(false);
+      }
+    }
+
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     setDeactivateVisible(true);
   };
@@ -513,6 +578,7 @@ export default function ProfileScreen({ navigation }) {
               label="Deactivate My Account"
               labelColor={Colors.light.danger}
               onPress={handleOpenDeactivate}
+              disabled={checkingSoleAdmin}
               accessibilityHint="Opens a confirmation to deactivate your account"
               style={styles.deactivateCard}
               reduceMotion={reduceMotion}

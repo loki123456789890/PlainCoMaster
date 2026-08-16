@@ -378,12 +378,31 @@ export default function AdminUsersScreen({ navigation }) {
   const getStats = () => {
     const totalUsers = users.length;
     const activeUsers = users.filter((u) => u.isActive).length;
-    const platformAdminUsers = users.filter((u) => u.role === 'platformAdmin').length;
+    // Counts ACTIVE platform admins only. A deactivated one can't sign in
+    // (AdminLoginScreen refuses them) and resolves to no role at all
+    // (AdminContext.resolvePrivilegedRole), so counting them here would
+    // report cover that doesn't exist — and this number is what the
+    // single-admin warning below depends on.
+    const platformAdminUsers = users.filter(
+      (u) => u.role === 'platformAdmin' && u.isActive
+    ).length;
 
     return { totalUsers, activeUsers, platformAdminUsers };
   };
 
   const stats = getStats();
+  // The role can be locked out of the app entirely. firestore.rules stops
+  // a platform admin from deactivating themselves through THIS screen, but
+  // the ordinary owner branch still lets any account deactivate itself
+  // from Profile — and only a platform admin can set isActive back to
+  // true. So if the last active one deactivates, or simply loses access to
+  // their email, nothing inside the app can restore account management;
+  // recovery means editing the document in the Firebase console.
+  //
+  // Profilescreen blocks the self-deactivation half of that. This warning
+  // covers the rest: it names the risk while a second admin can still be
+  // appointed, which is the only cheap moment to fix it.
+  const isSolePlatformAdmin = !loading && !usersError && stats.platformAdminUsers <= 1;
   // Guards the Edit User modal's role picker + Save button — see the
   // comment above the picker for why this defensive check exists even
   // though the modal's entry points are already gated.
@@ -532,6 +551,23 @@ export default function AdminUsersScreen({ navigation }) {
           </Card>
         </ScrollView>
       </Animated.View>
+
+      {/* Highlight rather than danger: nothing is broken yet, and this is a
+          standing condition rather than a failure — Rust here would cry
+          wolf on every visit until a second admin exists. */}
+      {isSolePlatformAdmin && (
+        <Animated.View
+          style={styles.warningBanner}
+          entering={reduceMotion ? undefined : FadeIn.duration(220)}
+        >
+          <Ionicons name="warning-outline" size={16} color={Colors.light.highlight} />
+          <Text style={styles.warningText}>
+            You&apos;re the only active Platform Admin. If this account is lost or
+            deactivated, nobody can manage roles — grant a second person the
+            Platform Admin role to avoid that.
+          </Text>
+        </Animated.View>
+      )}
 
       {/* Search Bar */}
       <Animated.View
@@ -1057,6 +1093,25 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.danger + '40',
+  },
+  warningBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    backgroundColor: Colors.light.highlight + '18',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.highlight + '40',
+    marginHorizontal: 16,
+    marginTop: 16,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 10,
+  },
+  warningText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    color: Colors.light.text,
   },
   offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
   modalMessage: { fontSize: 15, color: Colors.light.icon, textAlign: 'center', marginBottom: Spacing.lg },
