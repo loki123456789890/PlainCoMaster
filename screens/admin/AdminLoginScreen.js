@@ -359,7 +359,7 @@ export default function AdminLoginScreen({ navigation }) {
               <View style={styles.signInButtonWrap}>
                 <Button
                   variant="primary"
-                  label={!isConnected ? 'No Internet Connection' : 'Login as Admin'}
+                  label={!isConnected ? 'No Internet Connection' : 'Sign In'}
                   onPress={handleLogin}
                   disabled={loading || !isConnected}
                   loading={loading}
@@ -368,7 +368,7 @@ export default function AdminLoginScreen({ navigation }) {
 
               <View style={styles.trustRow}>
                 <Ionicons name="lock-closed-outline" size={13} color={Colors.light.icon} />
-                <Text style={styles.trustText}>Restricted to authorized store staff</Text>
+                <Text style={styles.trustText}>Restricted to authorized staff accounts</Text>
               </View>
             </Animated.View>
 
@@ -385,7 +385,7 @@ export default function AdminLoginScreen({ navigation }) {
                   accessibilityElementsHidden
                 />
                 <Text style={styles.infoText}>
-                  This portal is for administrators only.{' '}
+                  This portal is for store managers and platform admins.{' '}
                   <Text
                     style={styles.infoLink}
                     onPress={handleCustomerLogin}

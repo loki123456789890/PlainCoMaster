@@ -279,7 +279,10 @@ export default function StoreManagerDashboardScreen({ navigation }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220)}>
-          <Text style={styles.welcomeText}>{getTimeGreeting()}, Admin</Text>
+          {/* Just the greeting — the header two lines up already says
+              "Store Manager", so naming the role again here would repeat
+              it rather than tell anyone anything. */}
+          <Text style={styles.welcomeText}>{getTimeGreeting()}</Text>
           <Text style={styles.subtext}>Manage your store from here</Text>
         </Animated.View>
 
