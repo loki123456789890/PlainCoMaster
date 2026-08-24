@@ -1,0 +1,93 @@
+rules_version = '2';
+
+// Cloud Storage rules for PlainCo.
+//
+// firebaseConfig.js has always declared a storageBucket, but nothing in
+// this repo governed it — whatever rules the bucket carried came from a
+// console default that no review ever saw. This file puts the bucket under
+// the same version control as firestore.rules, and mirrors its role model:
+// product photography is store content, so writing it is the Store
+// Manager's job (isSeller), exactly as products/, orders/, support
+// requests and review moderation are. A platformAdmin manages accounts and
+// has no business writing store content, so this file grants that role
+// nothing — the same split firestore.rules draws.
+//
+// Everything not matched below is denied. There is no catch-all allow.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Mirrors isSeller() in firestore.rules, reading the same user
+    // document and the same two fields, so a deactivated seller loses
+    // upload access at the same moment they lose everything else.
+    //
+    // Written with an `in` guard rather than firestore.rules' preferred
+    // .data.get('role', '') form: the two-argument map get() is something
+    // I could not verify is available in the Storage rules dialect, and a
+    // rule that errors at evaluation time is indistinguishable from a
+    // deny — which would silently break uploads with no way to tell why.
+    // The `in` check is equivalent here and unambiguous. Customer
+    // documents genuinely have no role field, so the guard is load-bearing
+    // rather than defensive.
+    function isSeller() {
+      return request.auth != null &&
+        'role' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'seller' &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get('isActive', true) != false;
+    }
+
+    // 5 MB, against a phone camera original that routinely exceeds it —
+    // the picker is expected to compress before handing the file over, and
+    // this is the backstop for when it doesn't rather than the intended
+    // working size. The audience is on mobile data in both directions:
+    // every byte a manager uploads is a byte a shopper later downloads.
+    //
+    // Format is pinned to the three the app can actually render on both
+    // OSes. HEIC is deliberately absent even though iOS produces it by
+    // default: React Native's Image renders it on iOS and not on Android,
+    // so accepting it here would let a manager upload a photo that looks
+    // fine on their phone and is broken for half the customers. The picker
+    // converts to JPEG instead.
+    function isValidImage() {
+      return request.resource.size < 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    match /products/{imageId} {
+      // Same audience as /products in firestore.rules: any signed-in user.
+      //
+      // HONEST LIMITATION, because this rule reads stricter than it
+      // behaves: getDownloadURL() mints a URL carrying its own access
+      // token, and that URL serves the object to anyone holding it,
+      // signed in or not, without consulting this rule at all. The token
+      // is a capability, and the product documents that store these URLs
+      // are themselves readable by every signed-in user. So this read rule
+      // governs direct SDK/gs:// access, not the URLs the app hands out.
+      //
+      // That is acceptable for what is stored here — public catalog
+      // photography of items for sale, which the shop wants seen. It would
+      // NOT be acceptable for anything private, and any future path
+      // holding customer-supplied images (a return photo, an ID) must not
+      // assume this rule is what protects it.
+      allow read: if request.auth != null;
+
+      // create and update are stated separately from delete because
+      // request.resource does not exist on a delete — folding them into
+      // one `allow write` would make isValidImage() evaluate against
+      // nothing and refuse every deletion. Same reason firestore.rules
+      // splits read from create on the activity log collections.
+      allow create, update: if isSeller() && isValidImage();
+
+      // Unconditioned on the object's shape: a seller removing a photo
+      // that a product no longer uses is ordinary housekeeping, and there
+      // is nothing to validate about the absence of a file.
+      //
+      // Note that no cleanup is automatic. Replacing a product's image
+      // leaves the old object in the bucket, because the delete would have
+      // to be issued by the client and a client that crashes between the
+      // two calls orphans the file anyway. Reaping those is a server-side
+      // job (the same Cloud Functions boundary firestore.rules keeps
+      // drawing) rather than something to fake here.
+      allow delete: if isSeller();
+    }
+  }
+}
