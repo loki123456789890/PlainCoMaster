@@ -41,6 +41,7 @@ import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
+import { getPaymentLabel, getPaymentIcon } from '../../constants/payment';
 
 const STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
 
@@ -142,27 +143,6 @@ const getStatusIcon = (status) => {
 };
 
 const getStatusLabel = (status) => (status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Unknown');
-
-// Mirrors CheckoutScreen's paymentOptions list. Orders placed before this
-// field existed won't have paymentMethod set at all — that's expected for
-// historical data, not a bug, so both helpers fall back gracefully instead
-// of guessing a method that was never actually selected.
-const PAYMENT_METHOD_LABELS = {
-  gcash: 'GCash',
-  maya: 'Maya',
-  card: 'Card',
-  cod: 'Cash on Delivery',
-};
-
-const PAYMENT_METHOD_ICONS = {
-  gcash: 'cash-outline',
-  maya: 'wallet-outline',
-  card: 'card-outline',
-  cod: 'cube-outline',
-};
-
-const getPaymentLabel = (method) => PAYMENT_METHOD_LABELS[method] || 'Not specified';
-const getPaymentIcon = (method) => PAYMENT_METHOD_ICONS[method] || 'help-circle-outline';
 
 // Shaped like a real order card so the loading state previews the content
 // that's about to arrive, instead of a spinner floating mid-screen.

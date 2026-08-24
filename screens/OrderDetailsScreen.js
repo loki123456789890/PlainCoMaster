@@ -29,6 +29,7 @@ import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import StarRating from '../components/ui/StarRating';
 import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
+import { getPaymentLabel, getPaymentIcon } from '../constants/payment';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // "Pending" and "processing" share one visual status — an order is
@@ -89,25 +90,6 @@ const getTimelineStepIndex = (status) => {
     default: return 0;
   }
 };
-
-// Mirrors AdminOrdersScreen's PAYMENT_METHOD_LABELS/ICONS and Checkoutscreen's
-// paymentOptions. Orders placed before this field existed won't have
-// paymentMethod set — that's expected for historical data, so both helpers
-// fall back gracefully instead of guessing a method that was never selected.
-const PAYMENT_METHOD_LABELS = {
-  gcash: 'GCash',
-  maya: 'Maya',
-  card: 'Card',
-  cod: 'Cash on Delivery',
-};
-const PAYMENT_METHOD_ICONS = {
-  gcash: 'cash-outline',
-  maya: 'wallet-outline',
-  card: 'card-outline',
-  cod: 'cube-outline',
-};
-const getPaymentLabel = (method) => PAYMENT_METHOD_LABELS[method] || 'Not specified';
-const getPaymentIcon = (method) => PAYMENT_METHOD_ICONS[method] || 'help-circle-outline';
 
 // A short, human order number instead of the raw Firestore document id —
 // same slice(0, 8).toUpperCase() convention AdminOrdersScreen already uses,
