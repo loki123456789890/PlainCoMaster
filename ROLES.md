@@ -8,7 +8,7 @@ values never change; only their display labels do (see
 | Stored value | Shown as | Can do | Cannot do |
 |---|---|---|---|
 | *(absent)* / `customer` | Customer | Browse, order, favorite, send support requests | Reach any staff screen |
-| `seller` | **Store Manager** | Products, orders, support requests | Read or modify user accounts |
+| `seller` | **Store Manager** | Products, orders, support requests, review moderation | Read or modify user accounts |
 | `platformAdmin` | **Platform Admin** | User accounts: change roles, activate/deactivate | Touch products, orders, or support |
 
 The two privileged roles are **siblings, not a hierarchy**. Neither is a

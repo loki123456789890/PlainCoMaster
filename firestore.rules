@@ -167,8 +167,79 @@ service cloud.firestore {
         // for every role — order records are preserved for audit and
         // transaction history per SRS §2.4.
         allow read: if isOwner(userId) || isSeller();
-        allow create: if isActiveOwner(userId);
-        allow update: if isSeller();
+        // Create is the customer's own write (CheckoutScreen), and it is
+        // shape-validated for one reason above all: "status" is what the
+        // reviews collection treats as proof of purchase. Left unvalidated,
+        // a client could create an order that arrives already 'delivered',
+        // naming any product it liked — minting its own verified-purchase
+        // credential without ever buying anything. So creation is pinned to
+        // 'pending', and the ONLY path to 'delivered' is the seller-only
+        // update branch below.
+        //
+        // Same allowlist reasoning as users/{userId} create: an exact key
+        // set, because a denylist silently admits any field invented later.
+        //
+        // "productIds" is the flat list of product ids appearing in items,
+        // written by CheckoutScreen from the same map it decrements stock
+        // through. It is denormalised rather than derived because rules
+        // cannot iterate a list of maps — there is no way to ask whether
+        // any element of items[] has productId == X. The reviews rule needs
+        // exactly that question answered, and `X in productIds` is the only
+        // form Firestore can evaluate. See /reviews/{reviewId}.
+        allow create: if isActiveOwner(userId) &&
+          request.resource.data.keys().hasOnly(
+            ['customerId', 'customerEmail', 'items', 'productIds', 'subtotal',
+             'shipping', 'total', 'paymentMethod', 'shippingAddress',
+             'status', 'createdAt']
+          ) &&
+          request.resource.data.keys().hasAll(
+            ['customerId', 'items', 'productIds', 'total', 'status', 'createdAt']
+          ) &&
+          request.resource.data.customerId == request.auth.uid &&
+          request.resource.data.items is list &&
+          request.resource.data.productIds is list &&
+          request.resource.data.total is number &&
+          request.resource.data.total >= 0 &&
+          request.resource.data.get('subtotal', 0) is number &&
+          request.resource.data.get('shipping', 0) is number &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.createdAt == request.time;
+        // Working an order means moving it between statuses, and that is
+        // the only change this rule permits — the same treatment
+        // supportRequests gets. A Store Manager cannot rewrite the total,
+        // the line items, or the address the customer submitted, which
+        // also means the quantities that a cancellation restores stock
+        // from cannot be edited upward first.
+        //
+        // The transition to 'cancelled' is restricted further, because
+        // cancelling is the one status change with an inventory
+        // consequence: AdminOrdersScreen restores each line's quantity to
+        // its product's stock in the same transaction as this write. Only
+        // an order that hasn't shipped may take that path — past that
+        // point the goods are with the courier or the customer, and
+        // restoring stock would invent inventory that doesn't exist.
+        //
+        // Note what the same clause does for a SECOND cancellation:
+        // 'cancelled' is not itself in the allowed set, so re-cancelling
+        // an already-cancelled order is denied here, and the paired stock
+        // restore — atomic with this write — is rolled back with it.
+        // Double-restoration is therefore impossible at the backend, not
+        // merely guarded against by the client that usually performs it.
+        // A stale screen, a double tap, and two managers racing each other
+        // all land on the same denial.
+        //
+        // Read through .get() with a default: orders written before this
+        // field was mandatory may not carry a status at all, and dot
+        // notation on a missing field errors out as a permission denial
+        // that can't be told apart from a real one.
+        allow update: if isSeller() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+          request.resource.data.status in
+            ['pending', 'processing', 'shipped', 'delivered', 'cancelled'] &&
+          (
+            request.resource.data.status != 'cancelled' ||
+            resource.data.get('status', 'pending') in ['pending', 'processing']
+          );
       }
       match /cart/{itemId} {
         allow read, write: if isActiveOwner(userId);
@@ -267,6 +338,37 @@ service cloud.firestore {
       // The customer branch below is untouched by this — it already
       // constrains itself to a single numeric field, far more tightly
       // than the seller branch ever could.
+      //
+      // ON THE CANCELLATION STOCK RESTORE: cancelling an order writes an
+      // INCREMENTED stock here, in the same transaction as the order's
+      // status change. No new branch was added for it and nothing was
+      // loosened — the existing seller branch already permits it, because
+      // adjusting stock is the Store Manager's ordinary job (that is what
+      // AdminEditProductScreen does), and the result still has to be a
+      // well-typed, non-negative number. The customer branch is untouched
+      // and still admits decrements only, so the restore path is not
+      // reachable by a customer.
+      //
+      // HONEST LIMITATION, and the reason no narrower rule is attempted:
+      // rules cannot tie this write to the order write it travels with.
+      // Each write in a transaction is evaluated on its own, against its
+      // own document — a rule on products/{productId} has no view of the
+      // sibling order write and no way to learn which order it belongs to,
+      // so "this must equal the quantity on the order being cancelled" is
+      // not expressible here. It is enforced instead by the two properties
+      // that ARE enforceable: the transaction computes the amount from the
+      // order's own line items (never from client input), and the order
+      // rule above admits at most one pending/processing -> cancelled
+      // transition per order. A repeat or out-of-state cancellation is
+      // denied on the ORDER document, and because the two writes are
+      // atomic, the stock increment dies with it.
+      //
+      // What remains outside that fence is a Store Manager editing stock
+      // directly through Edit Product, which is a granted power of the
+      // role rather than a hole in this path, and which the activity log
+      // records. Closing it would take a server-side trigger (Cloud
+      // Functions), which this project doesn't use — same boundary the
+      // activityLogs comment draws.
       allow update: if (isSeller() && productFieldsAreWellTyped(request.resource.data)) ||
         (
           isActiveUser() &&
@@ -276,6 +378,151 @@ service cloud.firestore {
           request.resource.data.stock >= 0 &&
           request.resource.data.stock < resource.data.stock
         );
+    }
+    // Product reviews, restricted to verified purchases.
+    //
+    // WHY THIS COLLECTION EXISTS AT ALL, since "reviews" in a marketplace
+    // usually means something else: PlainCo is a SINGLE store, not a
+    // multi-vendor marketplace — the 'seller' role is this store's own
+    // manager, and products carry no sellerId. So there is no seller to
+    // rate (one seller, one number, nothing to compare it against) and no
+    // customer to rate (the store accepts every order, so a buyer score
+    // would feed no decision, and it would publish reputation data about
+    // consumers). The trust problem PlainCo actually has is the one stated
+    // in PRODUCT.md: shoppers must believe the condition of secondhand
+    // clothing they are buying sight-unseen. That is a claim about an
+    // ITEM, and this is where it is recorded.
+    //
+    // THE VERIFIED-PURCHASE CHAIN, which is the entire claim this feature
+    // makes, and the reason it lives in rules rather than in the client:
+    //
+    //   1. users/{uid}/orders create pins status to 'pending' (above).
+    //   2. Only isSeller() may move an order to 'delivered' (above).
+    //   3. create below demands the caller's OWN order, in status
+    //      'delivered', containing the product being reviewed.
+    //
+    // Every link is a rule, so "verified purchase" is a property of the
+    // stored data rather than a label the UI prints beside a review. Break
+    // any one link and the badge becomes decoration — which is why the
+    // order create rule was tightened in the same change as this one.
+    //
+    // ONE REVIEW PER ORDER LINE is structural, not a client convention:
+    // the document id is derived — orderId + '_' + productId — and the
+    // rule below requires it to match the fields inside. A second review
+    // of the same line is therefore a create against a document that
+    // already exists, which Firestore refuses on its own; and a create
+    // under any other id fails the id check. Buying the same item again on
+    // a later order does earn a second review, which is correct — that is
+    // a second purchase, and the id differs by orderId.
+    //
+    // Reads three documents, plus the two isActiveUser() spends: five,
+    // inside the ten-access ceiling a single-document request allows.
+    function isDeliveredPurchase(orderId, productId) {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId))
+          .data.get('status', '') == 'delivered' &&
+        productId in
+          get(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId))
+            .data.get('productIds', []);
+    }
+    match /reviews/{reviewId} {
+      // Any signed-in user, matching /products — a review the next shopper
+      // cannot read does not do the one job it has.
+      //
+      // HONEST LIMITATION on hidden reviews: rules cannot inspect a
+      // query's filters, only allow or deny the read as a whole, so a
+      // moderated review is still fetchable by a client that queries this
+      // collection directly. The app filters hidden === true out of every
+      // list it renders. What the rules DO guarantee is that hiding is the
+      // only moderation available (there is no delete, for anyone), that
+      // the text survives exactly as its author wrote it, and that the
+      // Store Manager who hid it is named in activityLogs. Enforcing the
+      // filter itself would take a server-side read path (Cloud
+      // Functions), which this project doesn't use — the same boundary the
+      // activityLogs comment draws.
+      allow read: if request.auth != null;
+
+      // hidden must be written false at creation, for the same reason a
+      // supportRequest must be created 'open': a review that could arrive
+      // pre-hidden is a review that never has to pass through moderation
+      // to disappear, which turns the flag into a way to stage content
+      // outside the queue rather than a record of a decision.
+      //
+      // userName is a display-name snapshot, deliberately copied rather
+      // than joined at read time: /users is readable only by its owner and
+      // a platformAdmin (see above), so a shopper reading someone else's
+      // review could never resolve the author's name from the user doc.
+      // productName is copied for the same reason the Store Manager's
+      // moderation queue needs it — to name the item without a second read
+      // per row.
+      allow create: if isActiveUser() &&
+        request.resource.data.keys().hasOnly(
+          ['orderId', 'productId', 'productName', 'userId', 'userName',
+           'rating', 'matchedDescription', 'text', 'hidden', 'createdAt']
+        ) &&
+        request.resource.data.keys().hasAll(
+          ['orderId', 'productId', 'userId', 'rating', 'matchedDescription',
+           'hidden', 'createdAt']
+        ) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.orderId is string &&
+        request.resource.data.productId is string &&
+        reviewId == request.resource.data.orderId + '_' + request.resource.data.productId &&
+        request.resource.data.rating is int &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        request.resource.data.matchedDescription is bool &&
+        request.resource.data.get('text', '') is string &&
+        request.resource.data.get('text', '').size() <= 1000 &&
+        request.resource.data.get('productName', '') is string &&
+        request.resource.data.get('productName', '').size() <= 120 &&
+        request.resource.data.get('userName', '') is string &&
+        request.resource.data.get('userName', '').size() <= 60 &&
+        request.resource.data.hidden == false &&
+        request.resource.data.createdAt == request.time &&
+        isDeliveredPurchase(request.resource.data.orderId, request.resource.data.productId);
+
+      // Two disjoint branches, neither able to reach the other's fields.
+      //
+      // Author branch: the person who wrote it may revise what they said.
+      // orderId, productId and userId are absent from the allowlist, so a
+      // revision cannot re-point a review at a different product or a
+      // different author — which matters, because those three fields are
+      // exactly what create verified against a real delivered order.
+      // Without that exclusion a review earned on one purchase could be
+      // walked onto any other product afterwards, and the chain above
+      // would be worth nothing.
+      //
+      // Seller branch: 'hidden', and nothing else. A Store Manager cannot
+      // rewrite a customer's rating or text, the same way they cannot
+      // rewrite a support request's message or an order's line items.
+      // Moderation here means suppressing abuse, not editing opinion.
+      allow update: if
+        (
+          isActiveUser() &&
+          resource.data.userId == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['rating', 'matchedDescription', 'text', 'updatedAt']) &&
+          request.resource.data.rating is int &&
+          request.resource.data.rating >= 1 &&
+          request.resource.data.rating <= 5 &&
+          request.resource.data.matchedDescription is bool &&
+          request.resource.data.get('text', '') is string &&
+          request.resource.data.get('text', '').size() <= 1000 &&
+          request.resource.data.updatedAt == request.time
+        )
+        ||
+        (
+          isSeller() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hidden']) &&
+          request.resource.data.hidden is bool
+        );
+
+      // No delete rule, for any role — deliberately, and for the same
+      // reason accounts are deactivated rather than deleted (SRS §2.4). A
+      // store that can erase a review can erase the ones it dislikes, and
+      // no reader can tell a clean record apart from a cleaned one. Hiding
+      // leaves the document, its author, and its text intact.
     }
     match /supportRequests/{requestId} {
       // Same treatment as products: an exact key allowlist plus types and

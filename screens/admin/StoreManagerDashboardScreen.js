@@ -183,6 +183,19 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       badge: openSupportCount > 0,
     },
     {
+      // No count, deliberately, even though a "didn't match" tally would fit
+      // the badge pattern above: producing it means reading every recent
+      // review on dashboard load, and this dashboard opens on mobile data
+      // many times a shift. The queue itself sorts that out on arrival — it
+      // opens on the mismatch tab.
+      title: 'Reviews',
+      icon: 'star-outline',
+      screen: 'AdminReviews',
+      caption: 'Moderate',
+      loading: false,
+      error: false,
+    },
+    {
       // No count: the other tiles count things needing attention, while an
       // activity log only ever grows. A number here would read as a queue
       // to clear rather than a history to consult.

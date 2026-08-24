@@ -186,6 +186,12 @@ export default function OrdersScreen({ navigation }) {
           status: data.status || 'processing',
           itemCount: items.length,
           items: items,
+          // Carried through to OrderDetailsScreen so it can offer "Write a
+          // review" on exactly the lines firestore.rules will accept one
+          // for — the review rule tests membership of this same list. An
+          // order placed before the field existed maps to [], and its lines
+          // get no button rather than a button that fails on submit.
+          productIds: data.productIds || [],
           image: firstItem.image || firstItem.imageUrl || null,
           shippingAddress: data.shippingAddress || null,
           paymentMethod: data.paymentMethod || null,

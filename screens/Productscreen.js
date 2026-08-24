@@ -19,17 +19,40 @@ import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
+import { onSnapshot, getDocs } from 'firebase/firestore';
+
 import { useFavorites } from '../context/FavoritesContext';
 import { useCart } from '../context/CartContext';
+import { auth } from '../firebaseConfig';
 import { COLOR_PALETTE, DEFAULT_COLORS, DEFAULT_SIZES } from '../constants/productOptions';
 import { Colors, Radius } from '../constants/theme';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import Card from '../components/ui/Card';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
 import SizeGuideModal from '../components/ui/SizeGuideModal';
+import StarRating from '../components/ui/StarRating';
+import {
+  productReviewsQuery,
+  recentStoreReviewsQuery,
+  mapReviewDoc,
+  visibleReviews,
+  sortByNewest,
+  summarizeReviews,
+  formatAverage,
+  matchedDescriptionSentence,
+  reviewCountLabel,
+} from '../utils/reviews';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+
+// How many reviews render before the "Show all" toggle appears. Three is
+// enough to read the room without turning a product page into a feed.
+const REVIEW_PREVIEW_COUNT = 3;
+
+const formatReviewDate = (date) =>
+  date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 
 // Falls back to a neutral gray swatch instead of crashing if a stored
 // color name doesn't match anything in COLOR_PALETTE (e.g. the palette
@@ -98,6 +121,14 @@ export default function ProductScreen({ navigation, route }) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
   const [sizeGuideVisible, setSizeGuideVisible] = useState(false);
+  const [reviews, setReviews] = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [reviewsFailed, setReviewsFailed] = useState(false);
+  const [showAllReviews, setShowAllReviews] = useState(false);
+  // Null means "not looked up"; a summary object with count 0 means "looked
+  // up, and the store genuinely has no reviews". The fallback copy differs
+  // between those two, so they can't collapse into one state.
+  const [storeSummary, setStoreSummary] = useState(null);
 
   const reduceMotion = useReducedMotion();
   const favoriteScale = useSharedValue(1);
@@ -147,6 +178,11 @@ export default function ProductScreen({ navigation, route }) {
       )
   );
 
+  // Recomputed on render rather than memoised: `reviews` is a handful of
+  // documents, and the arithmetic is a sum and a filter over them.
+  const reviewSummary = summarizeReviews(reviews);
+  const visibleReviewList = showAllReviews ? reviews : reviews.slice(0, REVIEW_PREVIEW_COUNT);
+
   useEffect(() => {
     if (product?.id) {
       setIsFavoriteState(isFavorite(product.id));
@@ -165,6 +201,80 @@ export default function ProductScreen({ navigation, route }) {
     }
     previousCartCount.current = cartCount;
   }, [cartCount]);
+
+  // This product's reviews, live — one posted from another device should
+  // appear without a reload, and the query is a single equality filter over
+  // a small set, so the listener is cheap.
+  //
+  // Gated on a signed-in user because firestore.rules requires auth to read
+  // /reviews, exactly as it does for /products. Firing it for a guest would
+  // produce a permission denial that isn't a real error, and the error path
+  // below would then tell an honest user something is broken.
+  useEffect(() => {
+    if (!product?.id || !auth.currentUser) {
+      setReviewsLoading(false);
+      return undefined;
+    }
+
+    setReviewsLoading(true);
+    const unsubscribe = onSnapshot(
+      productReviewsQuery(product.id),
+      (snapshot) => {
+        // Hidden reviews are filtered here rather than in the query: an
+        // equality filter on hidden plus this one would need a composite
+        // index, and moderation is rare enough that the documents cost
+        // nothing to fetch and drop. See utils/reviews.js.
+        setReviews(sortByNewest(visibleReviews(snapshot.docs.map((d) => mapReviewDoc(d)))));
+        setReviewsLoading(false);
+        setReviewsFailed(false);
+      },
+      (error) => {
+        console.error('Error loading product reviews:', error);
+        setReviewsLoading(false);
+        setReviewsFailed(true);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [product?.id]);
+
+  // The ukay-ukay fallback, and the reason this feature works at all on a
+  // catalogue of one-of-a-kind items: a piece with stock 1 sells once and
+  // can never gather more than a single review, so an empty reviews section
+  // would be the permanent state of much of the store. "Did it match the
+  // description?" is the same question about every listing, so it
+  // aggregates across all of them and says something useful about THIS item
+  // even when nobody has reviewed it.
+  //
+  // Fetched once, and only when this product has nothing of its own to
+  // show — there is no reason to spend the read otherwise.
+  useEffect(() => {
+    if (reviewsLoading || reviews.length > 0 || storeSummary !== null || !auth.currentUser) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const snapshot = await getDocs(recentStoreReviewsQuery());
+        if (cancelled) return;
+        setStoreSummary(summarizeReviews(snapshot.docs.map((d) => mapReviewDoc(d))));
+      } catch (error) {
+        console.error('Error loading store review summary:', error);
+        // Recorded as "looked up, nothing to show" so the effect doesn't
+        // retry on every render — the section falls back to its plainest
+        // copy, which is true regardless.
+        if (!cancelled) {
+          setStoreSummary({ count: 0, average: null, matchedCount: 0, matchedPercent: null });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reviewsLoading, reviews.length, storeSummary]);
 
   const handleToggleFavorite = async () => {
     if (!product) return;
@@ -369,6 +479,20 @@ export default function ProductScreen({ navigation, route }) {
           <Text style={styles.productName}>{productName}</Text>
           <Text style={styles.productPrice}>{formattedPrice}</Text>
 
+          {/* A compact rating line sits with the price because that is
+              where the buy/don't-buy decision is actually made — the full
+              reviews section further down is for someone who has already
+              decided to look closer. Rendered only when there is something
+              to report: an empty star row next to the price would read as a
+              zero rating rather than as an absence of ratings. */}
+          {reviewSummary.count > 0 && (
+            <View style={styles.ratingRow}>
+              <StarRating rating={reviewSummary.average} size={15} label={productName} />
+              <Text style={styles.ratingRowValue}>{formatAverage(reviewSummary.average)}</Text>
+              <Text style={styles.ratingRowCount}>({reviewCountLabel(reviewSummary.count)})</Text>
+            </View>
+          )}
+
           {/* Product Type Badge */}
           <View style={styles.typeBadgeRow}>
             {productType === 'ukay-ukay' ? (
@@ -491,6 +615,105 @@ export default function ProductScreen({ navigation, route }) {
               <Text style={styles.maxStockText}>Max stock reached</Text>
             ) : null}
           </View>
+
+          {/* Reviews.
+              Only from people whose order containing this item reached
+              'delivered' — enforced by firestore.rules, not by this screen,
+              so "verified buyers" below is a statement about the data
+              rather than a claim the UI is making on its behalf. */}
+          <Text style={styles.sectionTitle}>Reviews</Text>
+
+          {reviewsLoading ? (
+            <View style={styles.reviewsSkeletonWrap}>
+              <SkeletonBlock style={{ width: '50%', height: 16, borderRadius: Radius.sm, marginBottom: 10 }} />
+              <SkeletonBlock style={{ width: '85%', height: 13, borderRadius: Radius.sm }} />
+            </View>
+          ) : reviewsFailed ? (
+            <Text style={styles.reviewsErrorText}>
+              {"Reviews couldn't be loaded right now. Everything else on this page is up to date."}
+            </Text>
+          ) : reviewSummary.count > 0 ? (
+            <>
+              <Card variant="flat" style={styles.reviewSummaryCard}>
+                <View style={styles.reviewSummaryTop}>
+                  <Text style={styles.reviewSummaryAverage}>
+                    {formatAverage(reviewSummary.average)}
+                  </Text>
+                  <View style={styles.reviewSummaryTextWrap}>
+                    <StarRating rating={reviewSummary.average} size={16} label={productName} />
+                    <Text style={styles.reviewSummaryCount}>
+                      {reviewCountLabel(reviewSummary.count)} from verified buyers
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.reviewSummaryDivider} />
+                <View style={styles.matchedRow}>
+                  <Ionicons name="checkmark-circle-outline" size={16} color={Colors.light.secondary} />
+                  <Text style={styles.matchedText}>{matchedDescriptionSentence(reviewSummary)}</Text>
+                </View>
+              </Card>
+
+              {visibleReviewList.map((review) => (
+                <View
+                  key={review.id}
+                  style={styles.reviewItem}
+                  accessible
+                  accessibilityLabel={`${review.rating} stars from ${review.userName}. ${
+                    review.matchedDescription
+                      ? 'Matched the description.'
+                      : "Didn't match the description."
+                  } ${review.text}`}
+                >
+                  <View style={styles.reviewItemHeader}>
+                    <StarRating rating={review.rating} size={13} />
+                    <Text style={styles.reviewItemAuthor} numberOfLines={1}>{review.userName}</Text>
+                    <Text style={styles.reviewItemDate}>{formatReviewDate(review.createdAt)}</Text>
+                  </View>
+                  {/* Shown on every review, not only the negative ones: an
+                      answer that appears only when it's bad turns its
+                      absence into a second, unlabelled signal. */}
+                  <Badge
+                    label={
+                      review.matchedDescription
+                        ? 'Matched the description'
+                        : "Didn't match the description"
+                    }
+                    color={review.matchedDescription ? Colors.light.secondary : Colors.light.danger}
+                  />
+                  {review.text ? <Text style={styles.reviewItemText}>{review.text}</Text> : null}
+                </View>
+              ))}
+
+              {reviews.length > REVIEW_PREVIEW_COUNT && (
+                <TouchableOpacity
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setShowAllReviews((shown) => !shown);
+                  }}
+                  style={styles.showAllButton}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.showAllButtonText}>
+                    {showAllReviews ? 'Show fewer reviews' : `Show all ${reviews.length} reviews`}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </>
+          ) : (
+            <Card variant="flat" style={styles.noReviewsCard}>
+              <Text style={styles.noReviewsTitle}>No reviews for this item yet</Text>
+              {storeSummary && storeSummary.count > 0 ? (
+                <Text style={styles.noReviewsBody}>
+                  {`Secondhand pieces are often one of a kind, so most have no reviews of their own. Across PlainCo's last ${storeSummary.count} reviews, ${matchedDescriptionSentence(storeSummary).toLowerCase()}`}
+                </Text>
+              ) : (
+                <Text style={styles.noReviewsBody}>
+                  Buyers can review an item once their order has been delivered.
+                </Text>
+              )}
+            </Card>
+          )}
         </View>
       </ScrollView>
 
@@ -619,6 +842,44 @@ const styles = StyleSheet.create({
   // under the stepper (fragile — broke the moment the row above resized).
   quantityHelperRow: { minHeight: 24, justifyContent: 'center', marginTop: 8, marginBottom: 24 },
   maxStockText: { color: Colors.light.danger, fontSize: 12 },
+
+  // Reviews. The compact line under the price pulls up into the price's
+  // own 24pt bottom margin rather than adding a third gap between the two.
+  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: -16, marginBottom: 20 },
+  ratingRowValue: { fontSize: 14, fontWeight: '700', color: Colors.light.text },
+  ratingRowCount: { fontSize: 13, color: Colors.light.icon },
+
+  reviewsSkeletonWrap: { marginBottom: 24 },
+  reviewsErrorText: { fontSize: 13, color: Colors.light.icon, lineHeight: 19, marginBottom: 24 },
+
+  reviewSummaryCard: { marginBottom: 16 },
+  reviewSummaryTop: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  // Gold, the same accent the stars use — this is the one number on the
+  // screen besides the price that a shopper scans for.
+  reviewSummaryAverage: { fontSize: 34, fontWeight: '700', color: Colors.light.highlight },
+  reviewSummaryTextWrap: { flex: 1, gap: 4 },
+  reviewSummaryCount: { fontSize: 12, color: Colors.light.icon },
+  reviewSummaryDivider: { height: 1, backgroundColor: Colors.light.border, marginVertical: 12 },
+  matchedRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  matchedText: { flex: 1, fontSize: 13, color: Colors.light.text, lineHeight: 18 },
+
+  reviewItem: {
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+    gap: 8,
+  },
+  reviewItemHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  reviewItemAuthor: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.text },
+  reviewItemDate: { fontSize: 11, color: Colors.light.icon },
+  reviewItemText: { fontSize: 14, color: Colors.light.text, lineHeight: 20 },
+
+  showAllButton: { alignSelf: 'flex-start', paddingVertical: 12, marginBottom: 12 },
+  showAllButtonText: { fontSize: 14, fontWeight: '600', color: Colors.light.tint },
+
+  noReviewsCard: { marginBottom: 24, gap: 6 },
+  noReviewsTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
+  noReviewsBody: { fontSize: 13, color: Colors.light.icon, lineHeight: 19 },
   missingProductState: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
   shopNowButtonWrap: { marginTop: 20, width: 200 },
   actionContainer: { flexDirection: 'row', paddingHorizontal: 20, paddingVertical: 16, borderTopWidth: 1, borderTopColor: Colors.light.border, backgroundColor: Colors.light.background, gap: 12 },

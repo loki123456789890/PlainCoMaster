@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -19,10 +19,16 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { auth, db } from '../firebaseConfig';
 import { Colors, Spacing, Radius } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
+import AnimatedPressable from '../components/ui/AnimatedPressable';
+import StarRating from '../components/ui/StarRating';
+import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // "Pending" and "processing" share one visual status — an order is
@@ -192,8 +198,58 @@ export default function OrderDetailsScreen({ navigation, route }) {
     }
   }, [order?.status]);
 
+  // Reviews this customer has already written against this order, keyed by
+  // product id, so each line can offer "Write a review" or "Edit your
+  // review" rather than a single guess for the whole order.
+  //
+  // A one-shot read rather than a live listener, re-run on focus: the only
+  // thing that changes this map is the customer coming back from
+  // WriteReviewScreen, and a permanent subscription for a fact that changes
+  // once per visit is a listener held open on mobile data for nothing.
+  const [reviewsByProductId, setReviewsByProductId] = useState({});
+
+  useEffect(() => {
+    const orderId = order?.id;
+    if (!orderId || !isOrderReviewable(order) || !auth.currentUser) return undefined;
+
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const snapshot = await getDocs(
+          query(collection(db, REVIEWS_COLLECTION), where('orderId', '==', orderId))
+        );
+        if (cancelled) return;
+        const byProduct = {};
+        snapshot.docs.forEach((docSnap) => {
+          const review = mapReviewDoc(docSnap);
+          byProduct[review.productId] = review;
+        });
+        setReviewsByProductId(byProduct);
+      } catch (error) {
+        // Non-fatal by design: losing this read only means the row reads
+        // "Write a review" when it could have said "Edit your review".
+        // WriteReviewScreen loads the authoritative answer on open and
+        // switches itself into edit mode, so nothing is lost or duplicated.
+        console.error('Could not load reviews for this order:', error);
+      }
+    };
+
+    load();
+    const unsubscribeFocus = navigation.addListener('focus', load);
+    return () => {
+      cancelled = true;
+      unsubscribeFocus();
+    };
+  }, [order?.id, order?.status, navigation]);
+
   const handleContactSupport = () => {
     navigation.navigate('Help');
+  };
+
+  const handleWriteReview = (item) => {
+    Haptics.selectionAsync();
+    navigation.navigate('WriteReview', { orderId: order.id, item });
   };
 
   if (!order) {
@@ -231,6 +287,12 @@ export default function OrderDetailsScreen({ navigation, route }) {
 
   const statusLabel = (order.status || '').charAt(0).toUpperCase() + (order.status || '').slice(1);
   const timelineIndex = getTimelineStepIndex(order.status);
+  // Exactly the lines firestore.rules will accept a review for: a delivered
+  // order, and a product listed in that order's own productIds. Orders
+  // placed before productIds existed yield an empty set and show no review
+  // row at all — an absent button beats one that fails on submit.
+  const canReviewThisOrder = isOrderReviewable(order);
+  const reviewableProductIds = new Set(order.productIds || []);
   const shippingAddress = order.shippingAddress;
   const paymentMethod = order.paymentMethod;
   const paymentLabel = getPaymentLabel(paymentMethod);
@@ -315,36 +377,79 @@ export default function OrderDetailsScreen({ navigation, route }) {
         {items.length === 0 ? (
           <Text style={styles.emptyItemsText}>No item details available for this order.</Text>
         ) : (
-          items.map((item, index) => (
-            <Animated.View
-              key={index}
-              entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index, 8) * 40).duration(220).easing(EASE_OUT_QUART)}
-              accessible
-              accessibilityLabel={`${item.name}${item.size ? `, size ${item.size}` : ''}${item.color ? `, color ${item.color}` : ''}, quantity ${item.quantity || 1}, ₱${(Number(item.price) * (item.quantity || 1)).toFixed(2)}`}
-            >
-              <Card variant="flat" style={styles.itemCard}>
-                {item.image ? (
-                  <Image source={{ uri: item.image }} style={styles.itemImage} />
-                ) : (
-                  <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
-                    <Ionicons name="shirt-outline" size={24} color={Colors.light.icon} />
+          items.map((item, index) => {
+            const existingReview = reviewsByProductId[item.productId];
+            const showReviewRow =
+              canReviewThisOrder && item.productId && reviewableProductIds.has(item.productId);
+
+            return (
+              <Animated.View
+                key={index}
+                entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index, 8) * 40).duration(220).easing(EASE_OUT_QUART)}
+              >
+                <Card variant="flat" style={styles.itemCard}>
+                  {/* The line itself stays one accessible unit; the review
+                      row below is a separate control, so it must not be
+                      swallowed into the same accessible container. */}
+                  <View
+                    style={styles.itemRow}
+                    accessible
+                    accessibilityLabel={`${item.name}${item.size ? `, size ${item.size}` : ''}${item.color ? `, color ${item.color}` : ''}, quantity ${item.quantity || 1}, ₱${(Number(item.price) * (item.quantity || 1)).toFixed(2)}`}
+                  >
+                    {item.image ? (
+                      <Image source={{ uri: item.image }} style={styles.itemImage} />
+                    ) : (
+                      <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
+                        <Ionicons name="shirt-outline" size={24} color={Colors.light.icon} />
+                      </View>
+                    )}
+                    <View style={styles.itemDetails}>
+                      <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
+                      <Text style={styles.itemSpecs}>
+                        {item.size ? `Size: ${item.size}` : ''}
+                        {item.size && item.color ? '  ·  ' : ''}
+                        {item.color ? `Color: ${item.color}` : ''}
+                      </Text>
+                      <Text style={styles.itemQty}>Qty: {item.quantity || 1}</Text>
+                    </View>
+                    <Text style={styles.itemPrice}>
+                      ₱{(Number(item.price) * (item.quantity || 1)).toFixed(2)}
+                    </Text>
                   </View>
-                )}
-                <View style={styles.itemDetails}>
-                  <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
-                  <Text style={styles.itemSpecs}>
-                    {item.size ? `Size: ${item.size}` : ''}
-                    {item.size && item.color ? '  ·  ' : ''}
-                    {item.color ? `Color: ${item.color}` : ''}
-                  </Text>
-                  <Text style={styles.itemQty}>Qty: {item.quantity || 1}</Text>
-                </View>
-                <Text style={styles.itemPrice}>
-                  ₱{(Number(item.price) * (item.quantity || 1)).toFixed(2)}
-                </Text>
-              </Card>
-            </Animated.View>
-          ))
+
+                  {/* Asking for the review here, on the delivered order,
+                      rather than in a push or an email: this is the one
+                      screen a customer opens already holding the item. */}
+                  {showReviewRow && (
+                    <AnimatedPressable
+                      style={styles.reviewRow}
+                      onPress={() => handleWriteReview(item)}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        existingReview
+                          ? `Edit your ${existingReview.rating}-star review of ${item.name}`
+                          : `Write a review of ${item.name}`
+                      }
+                    >
+                      <Ionicons
+                        name={existingReview ? 'create-outline' : 'star-outline'}
+                        size={16}
+                        color={Colors.light.tint}
+                      />
+                      <Text style={styles.reviewRowText}>
+                        {existingReview ? 'Edit your review' : 'Write a review'}
+                      </Text>
+                      {existingReview ? (
+                        <StarRating rating={existingReview.rating} size={13} />
+                      ) : (
+                        <Ionicons name="chevron-forward" size={16} color={Colors.light.icon} />
+                      )}
+                    </AnimatedPressable>
+                  )}
+                </Card>
+              </Animated.View>
+            );
+          })
         )}
 
         {/* Delivery Address */}
@@ -492,12 +597,30 @@ const styles = StyleSheet.create({
   timelineLabelActive: { color: Colors.light.text, fontWeight: '600' },
 
   emptyItemsText: { fontSize: 13, color: Colors.light.icon, marginBottom: 20 },
+  // The card is now a column (line, then optional review row); the
+  // horizontal layout it used to own moved down to itemRow.
   itemCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
     padding: 12,
     marginBottom: 12,
   },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  // A quiet in-card row, not a Button: asking for a review should not
+  // compete with "Contact Support" at the bottom of the screen, and Clay is
+  // spent here on the text rather than on a filled block.
+  reviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+  },
+  reviewRowText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.tint },
   itemImage: { width: 60, height: 60, borderRadius: 8, backgroundColor: Colors.light.border },
   itemImagePlaceholder: { justifyContent: 'center', alignItems: 'center' },
   itemDetails: { flex: 1, marginLeft: 12 },

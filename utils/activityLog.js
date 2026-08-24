@@ -28,6 +28,10 @@ export const ACTIONS = {
   PRODUCT_UPDATED: 'product.updated',
   PRODUCT_DELETED: 'product.deleted',
   ORDER_STATUS: 'order.status',
+  // One action for hide and unhide alike: the summary says which way it
+  // went, and splitting them would imply the two are different kinds of
+  // event when they are the same decision revisited.
+  REVIEW_MODERATED: 'review.moderated',
   USER_ROLE: 'user.role',
   USER_STATUS: 'user.status',
 };

@@ -101,7 +101,22 @@ the SRS only documents Registration and Login/Logout; password reset is
 never mentioned anywhere in the document, even though `HelpScreen.js`'s own
 FAQ (`a1`, line 138) tells users to use it.
 
-### B2. Admin can set an order status of "Cancelled"
+### B2. Admin can set an order status of "Cancelled" — STOCK GAP RESOLVED
+
+> **Update:** the missing compensating transaction now exists. Cancelling
+> restores each line's quantity to its product's stock in the *same*
+> transaction that writes the new status, so checkout's decrement and the
+> cancellation's restore are symmetric and neither can land without the
+> other. Cancellation is permitted only from `pending` or `processing` —
+> once an order has shipped, the goods are no longer the shop's to put
+> back — and `cancelled` is not itself a permitted source status, which is
+> what makes a repeat cancellation a no-op rather than a second restore.
+> Both restrictions are enforced in `firestore.rules`, not just in the
+> screen. See section 4a of [SRS_UPDATE_NOTES.md](SRS_UPDATE_NOTES.md).
+>
+> The documentation half of this finding stands: the SRS still describes
+> neither staff cancellation nor its inventory effect.
+
 [AdminOrdersScreen.js:42](screens/admin/AdminOrdersScreen.js#L42) —
 `STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled']`,
 with a dedicated "Cancelled" stat card, tab, and color treatment, and

@@ -59,6 +59,9 @@ const ACTION_META = {
   [ACTIONS.PRODUCT_UPDATED]: { icon: 'create-outline', tone: 'neutral' },
   [ACTIONS.PRODUCT_DELETED]: { icon: 'trash-outline', tone: 'danger' },
   [ACTIONS.ORDER_STATUS]: { icon: 'cube-outline', tone: 'neutral' },
+  // Neutral, not danger: this one action covers hiding a review AND
+  // restoring it, and half of that is not a destructive act.
+  [ACTIONS.REVIEW_MODERATED]: { icon: 'eye-off-outline', tone: 'neutral' },
   [ACTIONS.USER_ROLE]: { icon: 'shield-checkmark-outline', tone: 'neutral' },
   [ACTIONS.USER_STATUS]: { icon: 'person-outline', tone: 'neutral' },
 };

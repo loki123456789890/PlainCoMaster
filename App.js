@@ -28,6 +28,7 @@ import LocationScreen from './screens/LocationScreen';
 import HelpScreen from './screens/HelpScreen';
 import OrdersScreen from './screens/OrdersScreen';
 import OrderDetailsScreen from './screens/OrderDetailsScreen'; // <-- NEW IMPORT
+import WriteReviewScreen from './screens/WriteReviewScreen';
 
 import AdminLoginScreen from './screens/admin/AdminLoginScreen';
 import StoreManagerDashboardScreen from './screens/admin/StoreManagerDashboardScreen';
@@ -37,6 +38,7 @@ import AdminEditProductScreen from './screens/admin/AdminEditProductScreen';
 import AdminOrdersScreen from './screens/admin/AdminOrdersScreen';
 import AdminUsersScreen from './screens/admin/AdminUsersScreen';
 import AdminSupportScreen from './screens/admin/AdminSupportScreen';
+import AdminReviewsScreen from './screens/admin/AdminReviewsScreen';
 import AdminActivityScreen from './screens/admin/AdminActivityScreen';
 
 LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
@@ -56,6 +58,11 @@ const GuardedAdminEditProductScreen = withRoleGuard(AdminEditProductScreen, 'sel
 const GuardedAdminOrdersScreen = withRoleGuard(AdminOrdersScreen, 'seller');
 const GuardedAdminUsersScreen = withRoleGuard(AdminUsersScreen, 'platformAdmin');
 const GuardedAdminSupportScreen = withRoleGuard(AdminSupportScreen, 'seller');
+// Reviews are store content, so moderating them is the Store Manager's job,
+// not the Platform Admin's — same side of the split as products, orders and
+// support requests. firestore.rules agrees: only isSeller() may write the
+// `hidden` flag.
+const GuardedAdminReviewsScreen = withRoleGuard(AdminReviewsScreen, 'seller');
 // The one screen both roles may open, and the exception that proves the
 // rule: it shows each role its OWN activity log and nothing else, because
 // it picks the collection from the signed-in role and firestore.rules
@@ -115,7 +122,8 @@ export default function App() {
                   <Stack.Screen name="Location" component={LocationScreen} />
                   <Stack.Screen name="Help" component={HelpScreen} />
                   <Stack.Screen name="Orders" component={OrdersScreen} />
-                  <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} /> 
+                  <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} />
+                  <Stack.Screen name="WriteReview" component={WriteReviewScreen} />
 
                   {/* Admin Screens */}
                   <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
@@ -126,6 +134,7 @@ export default function App() {
                   <Stack.Screen name="AdminOrders" component={GuardedAdminOrdersScreen} />
                   <Stack.Screen name="AdminUsers" component={GuardedAdminUsersScreen} />
                   <Stack.Screen name="AdminSupport" component={GuardedAdminSupportScreen} />
+                  <Stack.Screen name="AdminReviews" component={GuardedAdminReviewsScreen} />
                   <Stack.Screen name="AdminActivity" component={GuardedAdminActivityScreen} />
                 </Stack.Navigator>
               </NavigationContainer>

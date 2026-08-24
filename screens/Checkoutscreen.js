@@ -25,6 +25,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { db, auth } from '../firebaseConfig';
 import { collection, doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
 import useNetworkStatus from '../hooks/useNetworkStatus';
+import { parseStock, totalQuantityByProductId } from '../utils/stock';
 import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -40,14 +41,6 @@ const parsePrice = (price) => {
     return parseFloat(cleaned) || 0;
   }
   return 0;
-};
-
-// Some existing products may still have "stock" stored as a string left
-// over from before AdminAddProductScreen/AdminEditProductScreen started
-// saving it as a number — parse defensively so old and new data both work.
-const parseStock = (stock) => {
-  const parsed = parseInt(stock, 10);
-  return Number.isNaN(parsed) ? 0 : parsed;
 };
 
 // UI-only, matching the SRS's "payment options are included in the UI
@@ -228,18 +221,18 @@ export default function CheckoutScreen({ navigation, route }) {
 
     // Cart lines don't dedupe by product — the same product can appear as
     // several separate lines with different size/color (see CartContext's
-    // addToCart). Stock has to be checked/decremented per unique product
-    // using the combined quantity across all of that product's lines, or
-    // two lines of the same product could each pass a stock check
-    // individually while together requesting more than what's in stock —
-    // and worse, two transaction.update() calls to the same doc would
-    // silently drop one of the decrements (last write wins).
-    const quantityByProductId = new Map();
-    orderItems.forEach((item) => {
-      const productId = item.productId || item.id;
-      const qty = item.quantity || 1;
-      quantityByProductId.set(productId, (quantityByProductId.get(productId) || 0) + qty);
-    });
+    // addToCart), so stock is decremented per unique product using the
+    // combined quantity across all of that product's lines. See
+    // totalQuantityByProductId for why that matters in both directions.
+    //
+    // A cart line's own `id` is its CART document id; the product it points
+    // at is in `productId`. A Buy Now item is a raw spread of the product,
+    // so its `id` IS the product id and it has no `productId` at all —
+    // hence the fallback, in that order.
+    const quantityByProductId = totalQuantityByProductId(
+      orderItems,
+      (item) => item.productId || item.id
+    );
     const productIds = Array.from(quantityByProductId.keys());
 
     setSubmitting(true);
@@ -306,7 +299,15 @@ export default function CheckoutScreen({ navigation, route }) {
           customerId: auth.currentUser.uid,
           customerEmail: auth.currentUser.email || 'unknown',
           items: orderItems.map((item) => ({
-            productId: item.id || item.productId || 'unknown',
+            // `item.productId || item.id`, in that order, and NOT the other
+            // way round: for a cart-sourced line `item.id` is the cart
+            // document's own auto-id, so preferring it stored a cart id here
+            // and left the line pointing at nothing (the cart doc is deleted
+            // at the end of this same transaction). Nothing read this field
+            // until cancellation needed to restore stock through it, which
+            // is why the mismatch went unnoticed. Same precedence as the
+            // decrement above, so the id restored to is the id taken from.
+            productId: item.productId || item.id || 'unknown',
             name: item.name,
             price: parsePrice(item.price),
             quantity: item.quantity || 1,
@@ -314,6 +315,19 @@ export default function CheckoutScreen({ navigation, route }) {
             color: item.selectedColor || item.color || null,
             image: item.image || item.imageUrl || null,
           })),
+          // The same ids the stock decrement above was computed from,
+          // denormalised onto the order because firestore.rules cannot
+          // derive them: rules have no way to read a field out of each map
+          // in a list, so "is this product on this order?" is unanswerable
+          // against items[] alone. The reviews rule needs exactly that
+          // question answered before it will accept a review as a verified
+          // purchase — see the /reviews/{reviewId} block in
+          // firestore.rules. Orders written before this field existed
+          // simply have no productIds, and the rule's .get() default of []
+          // means their lines cannot be reviewed; that is the safe
+          // direction to fail, and a backfill is a one-off script rather
+          // than a loosened rule.
+          productIds,
           subtotal,
           shipping,
           total,

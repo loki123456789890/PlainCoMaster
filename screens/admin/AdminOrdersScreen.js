@@ -28,9 +28,11 @@ import {
   query,
   orderBy,
   onSnapshot,
-  updateDoc,
+  doc,
+  runTransaction,
 } from 'firebase/firestore';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { parseStock, totalQuantityByProductId } from '../../utils/stock';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
 import EmptyState from '../../components/ui/EmptyState';
@@ -41,6 +43,37 @@ import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
 
 const STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
+
+// Which statuses an order may be cancelled FROM.
+//
+// Cancelling restores the stock that checkout decremented, so the question
+// "can this be cancelled?" is really "are the goods still ours?". Up to and
+// including Processing they are: nothing has left the shop, and putting the
+// item back on the shelf is exactly right. Once an order is Shipped the item
+// is in transit and may already be with the customer — restoring stock there
+// would invent inventory that doesn't physically exist, and a returned parcel
+// is a returns/restocking flow, not a cancellation. Delivered is the same
+// case, more so.
+//
+// Cancelled is absent from this list on purpose, and that absence is the
+// idempotency guard: a second cancellation of an already-cancelled order is
+// a transition FROM 'cancelled', so it fails this check and no stock is
+// restored twice. Enforced identically in firestore.rules, so a stale screen,
+// a double tap, or a second manager racing the first is refused by the
+// backend and not merely by this component.
+const CANCELLABLE_FROM = ['pending', 'processing'];
+
+// Marks a transaction abort that carries a message worth showing the manager
+// verbatim — a refused transition, not a fault. Throwing out of the
+// transaction callback is what rolls the whole thing back, and Firestore
+// does not retry a callback that threw for its own reasons.
+const statusError = (message) => {
+  const error = new Error(message);
+  error.statusMessage = message;
+  return error;
+};
+
+const canCancelFrom = (status) => CANCELLABLE_FROM.includes(status || 'pending');
 
 const HOUR_MS = 60 * 60 * 1000;
 const ATTENTION_THRESHOLD_HOURS = 24;
@@ -234,22 +267,111 @@ export default function AdminOrdersScreen({ navigation }) {
     setUpdating(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      const previousStatus = selectedOrder.status;
-      await updateDoc(selectedOrder.ref, { status: newStatus });
+      const orderRef = selectedOrder.ref;
+      // Read back out of the transaction rather than taken from
+      // selectedOrder: the log should record what the document actually
+      // said at write time, not what this screen last rendered.
+      let previousStatus = selectedOrder.status;
+      let restoredUnits = 0;
+
+      await runTransaction(db, async (transaction) => {
+        // Reset per attempt — runTransaction re-runs the whole callback on
+        // contention, and a retry that restores nothing must not inherit a
+        // count from the attempt that lost the race.
+        restoredUnits = 0;
+
+        const orderSnap = await transaction.get(orderRef);
+        if (!orderSnap.exists()) {
+          throw statusError('This order no longer exists.');
+        }
+
+        const orderData = orderSnap.data();
+        const currentStatus = orderData.status || 'pending';
+        previousStatus = currentStatus;
+
+        // The screen's copy of the order came from a snapshot listener and
+        // may be seconds stale. Everything below decides on currentStatus,
+        // read inside the transaction, so a concurrent change by another
+        // manager is seen rather than overwritten.
+        if (currentStatus === newStatus) {
+          throw statusError(
+            `This order is already ${getStatusLabel(newStatus)}. Nothing was changed.`
+          );
+        }
+
+        if (newStatus !== 'cancelled') {
+          transaction.update(orderRef, { status: newStatus });
+          return;
+        }
+
+        if (!canCancelFrom(currentStatus)) {
+          throw statusError(
+            `A ${getStatusLabel(currentStatus).toLowerCase()} order can't be cancelled — ` +
+              'the items have already left the shop. Only pending and processing orders ' +
+              'can be cancelled.'
+          );
+        }
+
+        // Cancelling gives back exactly what checkout took: the same
+        // per-product totals, computed the same way. Reads first — a
+        // Firestore transaction allows no read after its first write.
+        const quantityByProductId = totalQuantityByProductId(
+          orderData.items,
+          (item) => item.productId
+        );
+        const productIds = Array.from(quantityByProductId.keys());
+        const productRefs = productIds.map((id) => doc(db, 'products', id));
+        const productSnaps = await Promise.all(
+          productRefs.map((ref) => transaction.get(ref))
+        );
+
+        productSnaps.forEach((snap, index) => {
+          // A product deleted since the order was placed has nothing to
+          // restore onto, and transaction.update() on a missing document
+          // would fail the whole transaction — blocking the cancellation
+          // over a product that no longer exists. Skipped instead, so the
+          // order can still be cancelled.
+          if (!snap.exists()) return;
+          const restoreQty = quantityByProductId.get(productIds[index]);
+          restoredUnits += restoreQty;
+          // Written as a real number for the same reason checkout does:
+          // firestore.rules requires a product to be left well-typed.
+          transaction.update(productRefs[index], {
+            stock: parseStock(snap.data().stock) + restoreQty,
+          });
+        });
+
+        // Last, and in this same transaction — if any restore above fails,
+        // the status never moves, and if the status write is refused, no
+        // stock is restored. The two cannot come apart.
+        transaction.update(orderRef, { status: newStatus });
+      });
+
       // Records the transition, not just the new value — "who moved this
       // order to cancelled, and what was it before?" is the question the
-      // SRS's audit clause exists to answer.
+      // SRS's audit clause exists to answer. The restored quantity rides
+      // along on a cancellation, since that is the part with an inventory
+      // consequence someone may later need to account for.
+      const restoreNote =
+        newStatus === 'cancelled' && restoredUnits > 0
+          ? `, ${restoredUnits} item(s) returned to stock`
+          : '';
       logStoreActivity({
         action: ACTIONS.ORDER_STATUS,
         targetId: selectedOrder.id,
         targetLabel: `Order #${selectedOrder.orderNumber || selectedOrder.id}`,
         summary:
           `Order #${selectedOrder.orderNumber || selectedOrder.id} — status ` +
-          `${getStatusLabel(previousStatus)} → ${getStatusLabel(newStatus)}`,
+          `${getStatusLabel(previousStatus)} → ${getStatusLabel(newStatus)}${restoreNote}`,
       });
       setShowStatusModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert('Success', `Order status updated to ${getStatusLabel(newStatus)}`);
+      showAppAlert(
+        'Success',
+        `Order status updated to ${getStatusLabel(newStatus)}${
+          restoredUnits > 0 ? `. ${restoredUnits} item(s) returned to stock.` : ''
+        }`
+      );
     } catch (error) {
       console.error('Error updating order status:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -260,6 +382,14 @@ export default function AdminOrdersScreen({ navigation }) {
           'No Internet Connection',
           'Network connection lost. Please check your connection and try again.'
         );
+        return;
+      }
+
+      // A rejected transition is a normal outcome with a specific reason,
+      // not a failure the manager should read as "try again" — say which
+      // rule stopped it.
+      if (error.statusMessage) {
+        showAppAlert('Status Not Changed', error.statusMessage);
         return;
       }
 
@@ -296,6 +426,8 @@ export default function AdminOrdersScreen({ navigation }) {
   ];
 
   const noResultsFromFilter = Boolean(searchQuery) || activeTab !== 'all';
+
+  const cancellationAllowed = canCancelFrom(selectedOrder?.status);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -655,21 +787,31 @@ export default function AdminOrdersScreen({ navigation }) {
 
             {STATUS_OPTIONS.map((status) => {
               const isSelected = newStatus === status;
+              // Offering a choice the transaction will refuse is worse than
+              // not offering it — the option is shown but disabled, so the
+              // rule is visible rather than discovered by an error alert.
+              const isBlocked = status === 'cancelled' && !cancellationAllowed;
               return (
                 <AnimatedPressable
                   key={status}
                   style={[
                     styles.statusOption,
                     isSelected && styles.statusOptionActive,
+                    isBlocked && styles.statusOptionDisabled,
                     { borderColor: getStatusColor(status) },
                   ]}
                   onPress={() => {
+                    if (isBlocked) return;
                     Haptics.selectionAsync();
                     setNewStatus(status);
                   }}
+                  disabled={isBlocked}
                   accessibilityRole="radio"
-                  accessibilityState={{ checked: isSelected }}
+                  accessibilityState={{ checked: isSelected, disabled: isBlocked }}
                   accessibilityLabel={getStatusLabel(status)}
+                  accessibilityHint={
+                    isBlocked ? 'Unavailable — only pending and processing orders can be cancelled' : undefined
+                  }
                 >
                   <View style={[styles.statusDot, { backgroundColor: getStatusColor(status) }]} />
                   <Text style={[styles.statusOptionText, isSelected && styles.statusOptionTextActive]}>
@@ -679,6 +821,19 @@ export default function AdminOrdersScreen({ navigation }) {
                 </AnimatedPressable>
               );
             })}
+
+            {cancellationAllowed ? (
+              newStatus === 'cancelled' && (
+                <Text style={styles.statusNote}>
+                  Cancelling returns this order&apos;s items to stock.
+                </Text>
+              )
+            ) : (
+              <Text style={styles.statusNote}>
+                Only pending and processing orders can be cancelled — the items on this one
+                have already left the shop.
+              </Text>
+            )}
 
             <View style={styles.modalButtons}>
               <View style={styles.modalButtonHalf}>
@@ -876,6 +1031,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   statusOptionActive: { backgroundColor: Colors.light.border + '40', borderWidth: 2 },
+  statusOptionDisabled: { opacity: 0.4 },
+  statusNote: { fontSize: 12, color: Colors.light.icon, lineHeight: 17, marginTop: 2 },
   statusDot: { width: 12, height: 12, borderRadius: 6 },
   statusOptionText: { flex: 1, fontSize: 14, color: Colors.light.text },
   statusOptionTextActive: { fontWeight: '600' },
