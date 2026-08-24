@@ -55,8 +55,12 @@ design or a server.
       configured but ungoverned by anything in this repo
 - [x] Storage SDK init and `utils/imageUpload.js` (no schema change —
       the download URL goes in the existing `imageUrl` field)
-- [ ] **BLOCKED on `npm install expo-image-picker`** — picker UI in
-      AdminAddProductScreen and AdminEditProductScreen
+- [x] Picker UI in AdminAddProductScreen and AdminEditProductScreen —
+      take/choose a photo, added alongside the URL field so products
+      hosted elsewhere keep working
+- [ ] Untested on device. Needs a real run on both iOS and Android:
+      permission prompts, that iOS actually yields JPEG rather than
+      HEIC, and that storage.rules accepts the upload
 - [ ] Storage rules have no emulator coverage; `npm run test:rules` is
       Firestore-only
 - [ ] Live product subscription on Productscreen (currently a frozen
