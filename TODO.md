@@ -58,12 +58,17 @@ design or a server.
 - [x] Picker UI in AdminAddProductScreen and AdminEditProductScreen —
       take/choose a photo, added alongside the URL field so products
       hosted elsewhere keep working
-- [ ] **Enable Cloud Storage in the Firebase console** — the bucket has
-      never been provisioned, so `storage:deploy` fails until it is.
-      See the README section; the location choice is permanent.
-- [ ] Untested on device. Needs a real run on both iOS and Android:
-      permission prompts, that iOS actually yields JPEG rather than
-      HEIC, and that storage.rules accepts the upload
+- [x] Cloud Storage provisioned (US-EAST1, the no-cost location) and
+      `storage.rules` deployed. The cross-service IAM grant the CLI
+      prompts for is required — `isSeller()` reads the Firestore user
+      doc, and without it every upload fails.
+- [x] Verified on device: permissions, upload, progress, and the
+      resulting URL rendering in the preview all work.
+- [ ] Confirm on the second platform. HEIC is iOS-specific, so if the
+      device test was Android only, whether iOS actually yields JPEG is
+      still unverified.
+- [ ] Storage rules still have no emulator coverage; `npm run
+      test:rules` is Firestore-only.
 - [ ] Storage rules have no emulator coverage; `npm run test:rules` is
       Firestore-only
 - [ ] Live product subscription on Productscreen (currently a frozen
