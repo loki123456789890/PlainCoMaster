@@ -22,7 +22,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { auth, db } from '../firebaseConfig';
-import { signOut } from 'firebase/auth';
+import { signOut, updateProfile } from 'firebase/auth';
 import {
   doc,
   getDoc,
@@ -192,6 +192,24 @@ export default function ProfileScreen({ navigation }) {
       // the document can be touched by this write. Matches the allowlist
       // in firestore.rules, which permits owners to change "name" alone.
       await updateDoc(doc(db, "users", auth.currentUser.uid), { name: trimmed });
+
+      // The Firestore document is the source of truth for display, but it
+      // is not the only place the name is stored: Signupscreen writes it
+      // to the Auth profile as well, and WriteReviewScreen stamps
+      // auth.currentUser.displayName onto every review it creates. This
+      // screen used to update only the Firestore half, so a customer who
+      // renamed themselves kept publishing reviews under the name they
+      // signed up with.
+      //
+      // Not awaited as part of the success path, and its failure is not
+      // surfaced: the Firestore write above has already succeeded, the
+      // name the user is looking at is already correct, and telling them
+      // the rename failed because a secondary mirror did not update would
+      // be false. Logged so it is diagnosable.
+      updateProfile(auth.currentUser, { displayName: trimmed }).catch((error) => {
+        console.error('Name saved, but Auth displayName did not sync:', error?.code, error?.message);
+      });
+
       setUserData((prev) => ({ ...prev, name: trimmed }));
       setEditingName(false);
       setSavingName(false);

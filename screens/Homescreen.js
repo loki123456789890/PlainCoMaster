@@ -187,14 +187,21 @@ export default function HomeScreen({ navigation }) {
     }, [])
   );
 
-  // Take the most recently added products as "Featured Picks"
-  // (falls back to first 6 if no createdAt field, e.g. seeded defaults)
-  const featuredProducts = [...products]
-    .sort((a, b) => {
-      if (!a.createdAt || !b.createdAt) return 0;
-      return new Date(b.createdAt) - new Date(a.createdAt);
-    })
-    .slice(0, 6);
+  // The six most recently added products.
+  //
+  // No sort here on purpose: ProductContext's query is already
+  // orderBy('createdAt', 'desc'), so `products` arrives in exactly this
+  // order. The sort that used to sit here did nothing anyway —
+  // `createdAt` is a Firestore Timestamp, and `new Date(timestamp)` is
+  // Invalid Date, so every comparison returned NaN and the comparator
+  // never reordered anything. It only looked correct because the query
+  // had already done the work.
+  //
+  // Its "falls back to first 6 if no createdAt" comment described a case
+  // that cannot reach this screen either: Firestore omits documents
+  // missing the orderBy field from the result set entirely, so a product
+  // without createdAt is never in `products` to begin with.
+  const featuredProducts = products.slice(0, 6);
 
   const ukayCount = products.filter((p) => p.type === 'ukay-ukay').length;
 
