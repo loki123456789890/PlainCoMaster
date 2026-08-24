@@ -75,6 +75,41 @@ const statusError = (message) => {
 
 const canCancelFrom = (status) => CANCELLABLE_FROM.includes(status || 'pending');
 
+// The forward progression an order moves through. 'cancelled' is
+// deliberately absent: it is an exit from the sequence rather than a step
+// in it, and it has its own guard above.
+const STATUS_SEQUENCE = ['pending', 'processing', 'shipped', 'delivered'];
+
+// A move to an EARLIER point in that sequence — Delivered back to Shipped,
+// say.
+//
+// These are PERMITTED rather than blocked, and the reasoning is worth
+// stating because forward-only is the obvious alternative:
+//
+//   - The one transition with a physical consequence is cancellation,
+//     which restores stock, and it is already constrained here and in
+//     firestore.rules. Every other move is a label with no inventory
+//     effect.
+//   - A manager working a queue on a phone will eventually tap Delivered
+//     when they meant Shipped. Under forward-only that customer reads
+//     "Delivered — we hope you love it" for a parcel still in transit,
+//     permanently, with no remedy anywhere in the app.
+//   - Forward-only would not protect the verified-purchase chain either,
+//     which is the only real argument for it. Reviews are written by
+//     customers and never by staff, so marking an order delivered early
+//     lets a real buyer review early rather than manufacturing anything.
+//
+// What makes a step backwards safe is not a restriction but a record: the
+// activity log captures the transition and who made it, and the
+// confirmation in confirmStatusUpdate() below makes it deliberate. The
+// picker otherwise treats a correction and queue progress identically,
+// which is what makes the mis-tap easy in the first place.
+const isBackwardTransition = (from, to) => {
+  const fromIndex = STATUS_SEQUENCE.indexOf(from);
+  const toIndex = STATUS_SEQUENCE.indexOf(to);
+  return fromIndex !== -1 && toIndex !== -1 && toIndex < fromIndex;
+};
+
 const HOUR_MS = 60 * 60 * 1000;
 const ATTENTION_THRESHOLD_HOURS = 24;
 
@@ -262,7 +297,7 @@ export default function AdminOrdersScreen({ navigation }) {
     setShowStatusModal(true);
   };
 
-  const confirmStatusUpdate = async () => {
+  const applyStatusUpdate = async () => {
     if (!selectedOrder?.ref || newStatus === selectedOrder.status) return;
     setUpdating(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -397,6 +432,37 @@ export default function AdminOrdersScreen({ navigation }) {
     } finally {
       setUpdating(false);
     }
+  };
+
+  // The gate in front of applyStatusUpdate(). Moving an order FORWARD is
+  // ordinary queue work and applies on the single tap it always did;
+  // moving it backwards is a correction, so it asks first. Same
+  // showAppAlert confirmation pattern AdminUsersScreen uses before
+  // activating or deactivating an account.
+  //
+  // Deliberately not a hard block — see isBackwardTransition above for why
+  // forward-only would trade a rare abuse that isn't actually possible for
+  // a common mistake that would be permanent.
+  const confirmStatusUpdate = () => {
+    if (!selectedOrder?.ref || newStatus === selectedOrder.status) return;
+
+    if (!isBackwardTransition(selectedOrder.status, newStatus)) {
+      applyStatusUpdate();
+      return;
+    }
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    showAppAlert(
+      'Move this order back?',
+      `Order #${selectedOrder.orderNumber} is currently ${getStatusLabel(selectedOrder.status)}. ` +
+        `Setting it to ${getStatusLabel(newStatus)} moves it backwards, which normally means ` +
+        `correcting a mistake — the customer sees this change too. It will be recorded in the ` +
+        `activity log either way.`,
+      [
+        { text: 'Keep it as is', style: 'cancel' },
+        { text: `Set to ${getStatusLabel(newStatus)}`, onPress: applyStatusUpdate },
+      ]
+    );
   };
 
   const formatDate = (date) => {
@@ -791,6 +857,11 @@ export default function AdminOrdersScreen({ navigation }) {
               // not offering it — the option is shown but disabled, so the
               // rule is visible rather than discovered by an error alert.
               const isBlocked = status === 'cancelled' && !cancellationAllowed;
+              // Marked, not disabled: a step backwards is allowed (see
+              // isBackwardTransition), it just isn't queue progress, and
+              // the picker gave no way to tell the two apart.
+              const isBackward =
+                !!selectedOrder && isBackwardTransition(selectedOrder.status, status);
               return (
                 <AnimatedPressable
                   key={status}
@@ -810,13 +881,20 @@ export default function AdminOrdersScreen({ navigation }) {
                   accessibilityState={{ checked: isSelected, disabled: isBlocked }}
                   accessibilityLabel={getStatusLabel(status)}
                   accessibilityHint={
-                    isBlocked ? 'Unavailable — only pending and processing orders can be cancelled' : undefined
+                    isBlocked
+                      ? 'Unavailable — only pending and processing orders can be cancelled'
+                      : isBackward
+                        ? 'Moves this order backwards. You will be asked to confirm.'
+                        : undefined
                   }
                 >
                   <View style={[styles.statusDot, { backgroundColor: getStatusColor(status) }]} />
                   <Text style={[styles.statusOptionText, isSelected && styles.statusOptionTextActive]}>
                     {getStatusLabel(status)}
                   </Text>
+                  {isBackward && !isSelected && (
+                    <Text style={styles.statusOptionBackNote}>Step back</Text>
+                  )}
                   {isSelected && <Ionicons name="checkmark-circle" size={20} color={getStatusColor(status)} />}
                 </AnimatedPressable>
               );
@@ -1035,5 +1113,8 @@ const styles = StyleSheet.create({
   statusNote: { fontSize: 12, color: Colors.light.icon, lineHeight: 17, marginTop: 2 },
   statusDot: { width: 12, height: 12, borderRadius: 6 },
   statusOptionText: { flex: 1, fontSize: 14, color: Colors.light.text },
+  // Ash, not Rust: a step back is unusual, not dangerous. Rust here would
+  // read as a warning about the order rather than a note about the move.
+  statusOptionBackNote: { fontSize: 11, color: Colors.light.icon, marginRight: Spacing.xs },
   statusOptionTextActive: { fontWeight: '600' },
 });
