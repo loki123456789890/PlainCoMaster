@@ -12,7 +12,7 @@ design or a server.
 - [x] Brand the `withRoleGuard` loading screen (was iOS blue on white)
 - [x] Commit `firestore.indexes.json` + wire into `firebase.json`
 - [x] Rewrite README; document the first-Platform-Admin bootstrap
-- [ ] `npm install` to resync `package-lock.json`
+- [x] `npm install` to resync `package-lock.json`
 
 ## Batch 2 — user-facing bugs ✅
 
@@ -41,10 +41,13 @@ design or a server.
       deactivated since their last launch, since a persisted session
       bypasses the login check. Needs AdminContext to expose
       account-active state; belongs with session revocation below.
-- [ ] **Deferred, needs a decision:** order status transitions are
-      unconstrained apart from cancel. Should a Store Manager be able to
-      walk `delivered` back to `pending` to undo a mis-tap, or should
-      transitions be forward-only?
+- [x] Order status transitions: decided to keep backward moves allowed
+      and make them deliberate instead. Forward-only would have made a
+      one-tap mis-tap permanent, and it protects nothing — the only
+      transition with a physical consequence (cancel) was already
+      constrained, and staff cannot write reviews. Backward moves now
+      confirm first and are marked "Step back" in the picker; the
+      activity log is what makes them accountable.
 
 ## Batch 4 — Tier 1 features (in progress)
 
