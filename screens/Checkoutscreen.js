@@ -253,21 +253,60 @@ export default function CheckoutScreen({ navigation, route }) {
         );
 
         const insufficient = [];
+        // Products the backend will refuse to decrement no matter how much
+        // stock they have — see the typeof check below.
+        const unsellable = [];
+
         productSnaps.forEach((snap, index) => {
           const productId = productIds[index];
           const requestedQty = quantityByProductId.get(productId);
-          const availableStock = snap.exists() ? parseStock(snap.data().stock) : 0;
+          const matchingItem = orderItems.find(
+            (item) => (item.productId || item.id) === productId
+          );
+          const name = matchingItem?.name || 'This item';
+
+          if (!snap.exists()) {
+            insufficient.push({ name, available: 0, requested: requestedQty });
+            return;
+          }
+
+          const rawStock = snap.data().stock;
+          // The customer branch of the products rule permits this decrement
+          // only when the STORED value is already a number
+          // (`resource.data.stock is number`). Products saved before the
+          // admin forms started writing stock numerically still hold it as
+          // a string — and parseStock('10') happily returns 10, so the
+          // sufficiency check below passed, the transaction was then
+          // refused server-side, and the customer got the catch-all "Could
+          // not place your order. Please try again." A retry can never
+          // succeed, so that message sent them into a loop with no way out
+          // and nothing naming the real problem.
+          //
+          // Caught here instead, against the raw stored value rather than
+          // the parsed one, so the message can name the item and say what
+          // actually fixes it: a Store Manager re-saving that product once
+          // (AdminEditProductScreen writes every field, which migrates the
+          // legacy string to a number as it goes).
+          if (typeof rawStock !== 'number') {
+            unsellable.push(name);
+            return;
+          }
+
+          const availableStock = parseStock(rawStock);
           if (availableStock < requestedQty) {
-            const matchingItem = orderItems.find(
-              (item) => (item.productId || item.id) === productId
-            );
-            insufficient.push({
-              name: matchingItem?.name || 'This item',
-              available: availableStock,
-              requested: requestedQty,
-            });
+            insufficient.push({ name, available: availableStock, requested: requestedQty });
           }
         });
+
+        // Checked before the stock comparison's own failure, because this
+        // one is not the customer's to resolve — telling someone an item is
+        // out of stock when the real problem is a malformed listing sends
+        // them to wait for a restock that was never the issue.
+        if (unsellable.length > 0) {
+          const error = new Error('One or more items cannot be checked out.');
+          error.unsellableItems = unsellable;
+          throw error;
+        }
 
         if (insufficient.length > 0) {
           const error = new Error('Insufficient stock for one or more items.');
@@ -366,6 +405,18 @@ export default function CheckoutScreen({ navigation, route }) {
     } catch (error) {
       console.error('Error placing order:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+
+      if (error.unsellableItems) {
+        const detail = error.unsellableItems.map((name) => `• ${name}`).join('\n');
+        showAppAlert(
+          "Item(s) Can't Be Checked Out",
+          `There's a problem with the listing for:\n\n${detail}\n\n` +
+            'This needs the store to fix it, and retrying now would fail again. ' +
+            'Please remove these from your cart to check out the rest, or reach ' +
+            'us through the Help Center.'
+        );
+        return;
+      }
 
       if (error.insufficientItems) {
         const detail = error.insufficientItems
