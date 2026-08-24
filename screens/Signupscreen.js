@@ -297,7 +297,14 @@ export default function SignupScreen({ navigation }) {
         uid: user.uid,
         name: trimmedName,
         email: trimmedEmail,
-        createdAt: new Date().toISOString(),
+        // serverTimestamp(), like every other createdAt in the app. A
+        // client-supplied date is whatever the device's clock says — a
+        // wrong timezone, a skewed clock, or a deliberately set one — and
+        // it does not sort against the Timestamps every other collection
+        // stores. The users create rule allows the field without
+        // constraining its type, so this was accepted; it was just the
+        // one place still writing a string.
+        createdAt: serverTimestamp(),
         // Auditable consent record for the Philippine Data Privacy Act —
         // the checkbox above is just a UI gate, this is what actually
         // proves consent was given, and when.
@@ -354,7 +361,7 @@ export default function SignupScreen({ navigation }) {
         <View style={styles.offlineBanner}>
           <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
           <Text style={styles.offlineBannerText}>
-            No internet connection — account creation will be unavailable until you're back online.
+            No internet connection — account creation will be unavailable until you&apos;re back online.
           </Text>
         </View>
       )}

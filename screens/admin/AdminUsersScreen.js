@@ -370,7 +370,13 @@ export default function AdminUsersScreen({ navigation }) {
 
   const formatDate = (dateInput) => {
     if (!dateInput) return 'Unknown';
-    const date = new Date(dateInput);
+    // Two shapes reach this. Accounts created from now on carry a
+    // Firestore Timestamp; accounts created before Signupscreen switched
+    // to serverTimestamp() carry an ISO string. new Date(timestamp) is
+    // Invalid Date, so handling only the string form would have turned
+    // every new account's join date into "Unknown" the moment signup
+    // changed — which is why the two moved together.
+    const date = dateInput?.toDate ? dateInput.toDate() : new Date(dateInput);
     if (isNaN(date.getTime())) return 'Unknown';
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
