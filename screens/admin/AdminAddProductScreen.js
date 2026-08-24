@@ -36,6 +36,7 @@ import {
 } from '../../constants/productOptions';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
+import { pickAndUploadProductImage, uploadErrorMessage } from '../../utils/imageUpload';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
@@ -89,6 +90,13 @@ export default function AdminAddProductScreen({ navigation }) {
   const [previewUri, setPreviewUri] = useState('');
   const [imageLoading, setImageLoading] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+
+  // Upload runs alongside the URL field rather than replacing it: products
+  // created before Storage existed carry an external URL, and a manager
+  // who already has a hosted image shouldn't be made to re-upload it.
+  // Both paths end in the same `imageUrl` string.
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const scrollRef = useRef(null);
 
@@ -160,6 +168,39 @@ export default function AdminAddProductScreen({ navigation }) {
   const handleClearImage = () => {
     Haptics.selectionAsync();
     setFormData((prev) => ({ ...prev, imageUrl: '' }));
+  };
+
+  // Pick and upload, then write the resulting download URL into the same
+  // imageUrl field a pasted link goes into — so the debounced preview,
+  // validate(), and handleSubmit() all keep working untouched.
+  const handleUploadImage = async (source) => {
+    if (uploading) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    setUploading(true);
+    setUploadProgress(0);
+
+    const result = await pickAndUploadProductImage({
+      source,
+      onProgress: setUploadProgress,
+    });
+
+    setUploading(false);
+    setUploadProgress(0);
+
+    // Backing out of the picker is a decision, not a failure — saying
+    // nothing is the correct response to it.
+    if (result.cancelled) return;
+
+    if (!result.success) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showAppAlert('Upload Failed', uploadErrorMessage(result.error));
+      return;
+    }
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setFormData((prev) => ({ ...prev, imageUrl: result.url }));
+    clearFieldError('imageUrl');
   };
 
   const handleNameChange = (text) => {
@@ -472,6 +513,54 @@ export default function AdminAddProductScreen({ navigation }) {
             {/* Product Photo */}
             <View style={styles.sectionWrap}>
               <Text style={styles.sectionTitle}>Product Photo</Text>
+
+              {/* Upload sits above the URL field because it is the path
+                  almost every listing will take — a manager photographs
+                  the item in front of them. The URL field stays for the
+                  products already hosted elsewhere and for anyone who
+                  prefers it; both write the same imageUrl string. */}
+              <View style={styles.uploadRow}>
+                <AnimatedPressable
+                  style={[styles.uploadButton, (uploading || !isConnected) && styles.uploadButtonDisabled]}
+                  onPress={() => handleUploadImage('camera')}
+                  disabled={uploading || !isConnected}
+                  accessibilityRole="button"
+                  accessibilityLabel="Take a photo"
+                  accessibilityState={{ disabled: uploading || !isConnected }}
+                >
+                  <Ionicons name="camera-outline" size={18} color={Colors.light.tint} />
+                  <Text style={styles.uploadButtonText}>Take Photo</Text>
+                </AnimatedPressable>
+
+                <AnimatedPressable
+                  style={[styles.uploadButton, (uploading || !isConnected) && styles.uploadButtonDisabled]}
+                  onPress={() => handleUploadImage('library')}
+                  disabled={uploading || !isConnected}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose a photo from your library"
+                  accessibilityState={{ disabled: uploading || !isConnected }}
+                >
+                  <Ionicons name="images-outline" size={18} color={Colors.light.tint} />
+                  <Text style={styles.uploadButtonText}>Choose Photo</Text>
+                </AnimatedPressable>
+              </View>
+
+              {uploading && (
+                <View style={styles.uploadProgressWrap} accessibilityLiveRegion="polite">
+                  <View style={styles.uploadProgressTrack}>
+                    <View
+                      style={[
+                        styles.uploadProgressFill,
+                        { width: `${Math.round(uploadProgress * 100)}%` },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.uploadProgressText}>
+                    Uploading… {Math.round(uploadProgress * 100)}%
+                  </Text>
+                </View>
+              )}
+
               <Animated.View style={imageShakeStyle}>
                 <Input
                   label="Image URL *"
@@ -856,6 +945,37 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     marginBottom: Spacing.sm,
   },
+  uploadRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  // Outline treatment rather than a filled Clay button: these sit above a
+  // form whose one filled primary action is Save. Two Clay buttons here
+  // would compete with it, which DESIGN.md's one-accent rule rules out.
+  uploadButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    paddingVertical: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+    backgroundColor: 'transparent',
+  },
+  uploadButtonDisabled: { opacity: 0.5 },
+  uploadButtonText: { fontSize: 14, fontWeight: '600', color: Colors.light.tint },
+  uploadProgressWrap: { marginBottom: Spacing.md, gap: Spacing.xs },
+  uploadProgressTrack: {
+    height: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.light.border,
+    overflow: 'hidden',
+  },
+  uploadProgressFill: { height: '100%', backgroundColor: Colors.light.tint },
+  uploadProgressText: { fontSize: 12, color: Colors.light.icon },
   imagePreview: {
     width: '100%',
     height: 200,

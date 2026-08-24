@@ -38,6 +38,7 @@ import {
 } from '../../constants/productOptions';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
+import { pickAndUploadProductImage, uploadErrorMessage } from '../../utils/imageUpload';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
@@ -153,6 +154,14 @@ export default function AdminEditProductScreen({ navigation, route }) {
   const [imageLoading, setImageLoading] = useState(Boolean(product.imageUrl));
   const [imageFailed, setImageFailed] = useState(false);
 
+  // Upload runs alongside the URL field rather than replacing it. That
+  // matters more on this screen than on Add: every product edited here
+  // predates Storage and carries an external URL, and opening the editor
+  // must not imply that URL is now invalid. Both paths write the same
+  // imageUrl string, so replacing a photo is a normal edit like any other.
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -228,6 +237,44 @@ export default function AdminEditProductScreen({ navigation, route }) {
   const handleClearImage = () => {
     Haptics.selectionAsync();
     setFormData((prev) => ({ ...prev, imageUrl: '' }));
+  };
+
+  // Writes the download URL into the same imageUrl field a pasted link
+  // goes into, so the debounced preview, the isDirty comparison against
+  // `original`, validate(), and handleSave() all keep working untouched.
+  //
+  // Note the old photo is deliberately NOT deleted when one replaces it:
+  // nothing has been saved yet at this point, the manager may still back
+  // out, and a product that keeps pointing at a file we removed is worse
+  // than an orphan in the bucket. See the note in storage.rules about
+  // reaping those being a server-side job.
+  const handleUploadImage = async (source) => {
+    if (uploading) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    setUploading(true);
+    setUploadProgress(0);
+
+    const result = await pickAndUploadProductImage({
+      source,
+      onProgress: setUploadProgress,
+    });
+
+    setUploading(false);
+    setUploadProgress(0);
+
+    // Backing out of the picker is a decision, not a failure.
+    if (result.cancelled) return;
+
+    if (!result.success) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showAppAlert('Upload Failed', uploadErrorMessage(result.error));
+      return;
+    }
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setFormData((prev) => ({ ...prev, imageUrl: result.url }));
+    clearFieldError('imageUrl');
   };
 
   const handleNameChange = (text) => {
@@ -602,6 +649,54 @@ export default function AdminEditProductScreen({ navigation, route }) {
             {/* Product Photo */}
             <View style={styles.sectionWrap}>
               <Text style={styles.sectionTitle}>Product Photo</Text>
+
+              {/* Replacing a photo is the common edit here, so upload
+                  leads. The URL field stays because every product that
+                  predates Storage carries an external link, and opening
+                  this screen must not suggest that link has stopped
+                  working. Both write the same imageUrl string. */}
+              <View style={styles.uploadRow}>
+                <AnimatedPressable
+                  style={[styles.uploadButton, (uploading || !isConnected) && styles.uploadButtonDisabled]}
+                  onPress={() => handleUploadImage('camera')}
+                  disabled={uploading || !isConnected}
+                  accessibilityRole="button"
+                  accessibilityLabel="Take a new photo"
+                  accessibilityState={{ disabled: uploading || !isConnected }}
+                >
+                  <Ionicons name="camera-outline" size={18} color={Colors.light.tint} />
+                  <Text style={styles.uploadButtonText}>Take Photo</Text>
+                </AnimatedPressable>
+
+                <AnimatedPressable
+                  style={[styles.uploadButton, (uploading || !isConnected) && styles.uploadButtonDisabled]}
+                  onPress={() => handleUploadImage('library')}
+                  disabled={uploading || !isConnected}
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose a new photo from your library"
+                  accessibilityState={{ disabled: uploading || !isConnected }}
+                >
+                  <Ionicons name="images-outline" size={18} color={Colors.light.tint} />
+                  <Text style={styles.uploadButtonText}>Choose Photo</Text>
+                </AnimatedPressable>
+              </View>
+
+              {uploading && (
+                <View style={styles.uploadProgressWrap} accessibilityLiveRegion="polite">
+                  <View style={styles.uploadProgressTrack}>
+                    <View
+                      style={[
+                        styles.uploadProgressFill,
+                        { width: `${Math.round(uploadProgress * 100)}%` },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.uploadProgressText}>
+                    Uploading… {Math.round(uploadProgress * 100)}%
+                  </Text>
+                </View>
+              )}
+
               <Animated.View style={imageShakeStyle}>
                 <Input
                   label="Image URL *"
@@ -992,6 +1087,37 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
     marginBottom: Spacing.sm,
   },
+  uploadRow: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+    marginBottom: Spacing.md,
+  },
+  // Outline rather than filled Clay, matching AdminAddProductScreen: the
+  // one filled primary action on this form is Save, and two Clay buttons
+  // above it would compete with it.
+  uploadButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.xs,
+    paddingVertical: 12,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+    backgroundColor: 'transparent',
+  },
+  uploadButtonDisabled: { opacity: 0.5 },
+  uploadButtonText: { fontSize: 14, fontWeight: '600', color: Colors.light.tint },
+  uploadProgressWrap: { marginBottom: Spacing.md, gap: Spacing.xs },
+  uploadProgressTrack: {
+    height: 4,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.light.border,
+    overflow: 'hidden',
+  },
+  uploadProgressFill: { height: '100%', backgroundColor: Colors.light.tint },
+  uploadProgressText: { fontSize: 12, color: Colors.light.icon },
   imagePreview: {
     width: '100%',
     height: 200,

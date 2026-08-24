@@ -15,6 +15,7 @@
 // CartContext): resolves to { success, ... } rather than throwing, so call
 // sites branch instead of wrapping every call in try/catch.
 import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
+import * as ImagePicker from 'expo-image-picker';
 import { storage } from '../firebaseConfig';
 
 export const PRODUCT_IMAGE_PATH = 'products';
@@ -47,9 +48,11 @@ function generateImageName(mimeType) {
  * @param {string} uri        local file URI from the image picker
  * @param {object} [options]
  * @param {(progress: number) => void} [options.onProgress]  0..1
+ * @param {string} [options.mimeType]  the picker's own reported type, which
+ *   is more trustworthy than the blob's — see the note at the fallback below
  * @returns {Promise<{success: boolean, url?: string, path?: string, error?: string}>}
  */
-export async function uploadProductImage(uri, { onProgress } = {}) {
+export async function uploadProductImage(uri, { onProgress, mimeType: declaredType } = {}) {
   if (!uri) return { success: false, error: 'no-uri' };
 
   try {
@@ -68,10 +71,15 @@ export async function uploadProductImage(uri, { onProgress } = {}) {
       return { success: false, error: 'too-large' };
     }
 
-    // blob.type can come back empty for some URI schemes, in which case
-    // the picker's own JPEG output is the safe assumption — storage.rules
-    // is the authority either way and will refuse anything else.
-    const mimeType = ACCEPTED_MIME.test(blob.type || '') ? blob.type : 'image/jpeg';
+    // Preference order: what the picker declared, then what the blob
+    // reports, then JPEG. blob.type comes back empty for some URI schemes
+    // on both platforms, and the picker's own mimeType is the more
+    // reliable of the two. Anything unrecognised falls back to JPEG
+    // because that is what pickProductImage() forces the picker to
+    // produce; storage.rules is the authority either way and refuses
+    // anything outside the three accepted types.
+    const candidate = declaredType || blob.type || '';
+    const mimeType = ACCEPTED_MIME.test(candidate) ? candidate : 'image/jpeg';
 
     const path = `${PRODUCT_IMAGE_PATH}/${generateImageName(mimeType)}`;
     const storageRef = ref(storage, path);
@@ -98,6 +106,97 @@ export async function uploadProductImage(uri, { onProgress } = {}) {
     // someone to retry — same reasoning as the unsellable-listing branch
     // in Checkoutscreen.
     return { success: false, error: error?.code || 'upload-failed' };
+  }
+}
+
+// Picker options shared by both sources.
+//
+// `quality` and `allowsEditing` are not cosmetic here — they are what
+// forces iOS to re-encode to JPEG. iOS shoots HEIC by default, which
+// React Native's Image renders on iOS and NOT on Android, so a HEIC
+// upload would look correct to the manager who made it and be broken for
+// half the customers. storage.rules refuses the type outright, so without
+// this the upload would simply fail on an iPhone.
+//
+// 0.7 rather than 1: the whole file is read into memory as a blob (see
+// uploadProductImage), the manager is usually on mobile data, and every
+// byte uploaded is a byte a shopper downloads later. A square crop also
+// matches how the catalog grid and product page already frame photos.
+const PICKER_OPTIONS = {
+  mediaTypes: ['images'],
+  quality: 0.7,
+  allowsEditing: true,
+  aspect: [1, 1],
+};
+
+/**
+ * Pick a product photo and upload it in one step.
+ *
+ * Returns the same { success, url, path, error } shape as
+ * uploadProductImage, plus `cancelled: true` when the manager backed out
+ * of the picker — which is not a failure and must not be reported as one.
+ *
+ * @param {object} [options]
+ * @param {'library'|'camera'} [options.source]
+ * @param {(progress: number) => void} [options.onProgress]  0..1
+ */
+export async function pickAndUploadProductImage({ source = 'library', onProgress } = {}) {
+  try {
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    // Distinguished from a generic failure because the remedy is
+    // different and lives outside the app: the caller tells them to grant
+    // it in Settings rather than to try again.
+    if (!permission.granted) {
+      return { success: false, error: 'permission-denied' };
+    }
+
+    const result =
+      source === 'camera'
+        ? await ImagePicker.launchCameraAsync(PICKER_OPTIONS)
+        : await ImagePicker.launchImageLibraryAsync(PICKER_OPTIONS);
+
+    if (result.canceled) return { success: false, cancelled: true };
+
+    const asset = result.assets?.[0];
+    if (!asset?.uri) return { success: false, error: 'no-asset' };
+
+    // Belt and braces over PICKER_OPTIONS above: if a platform ever hands
+    // back a type the app cannot render, refuse it here with something a
+    // manager can act on rather than letting storage.rules reject it
+    // after the upload has already spent their data.
+    if (asset.mimeType && !ACCEPTED_MIME.test(asset.mimeType)) {
+      return { success: false, error: 'unsupported-format' };
+    }
+
+    return uploadProductImage(asset.uri, { onProgress, mimeType: asset.mimeType });
+  } catch (error) {
+    console.error('Error picking product image:', error?.code, error?.message);
+    return { success: false, error: error?.code || 'picker-failed' };
+  }
+}
+
+// Turns any of the above failure codes into something worth showing a
+// Store Manager. Centralised so both product screens say the same thing
+// about the same failure, rather than drifting into two vocabularies for
+// one set of outcomes.
+export function uploadErrorMessage(code) {
+  switch (code) {
+    case 'permission-denied':
+      return 'PlainCo needs permission to use your photos or camera. You can grant it in your device Settings.';
+    case 'too-large':
+      return 'That photo is too large. Please choose one under 5 MB.';
+    case 'unsupported-format':
+      return 'That image format isn’t supported. Please use a JPEG, PNG, or WebP.';
+    case 'storage/unauthorized':
+      return 'Your account doesn’t have permission to upload product photos. Check with a Platform Admin that your Store Manager access is still active.';
+    case 'storage/retry-limit-exceeded':
+      return 'The upload timed out. Please check your connection and try again.';
+    default:
+      return 'Could not upload that photo. Please try again.';
   }
 }
 
