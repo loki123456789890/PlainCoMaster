@@ -23,6 +23,7 @@ import { onSnapshot, getDocs } from 'firebase/firestore';
 
 import { useFavorites } from '../context/FavoritesContext';
 import { useCart } from '../context/CartContext';
+import { useProducts } from '../context/ProductContext';
 import { auth } from '../firebaseConfig';
 import { COLOR_PALETTE, DEFAULT_COLORS, DEFAULT_SIZES } from '../constants/productOptions';
 import { Colors, Radius } from '../constants/theme';
@@ -97,9 +98,41 @@ const parsePrice = (price) => {
 };
 
 export default function ProductScreen({ navigation, route }) {
-  const { product } = route.params || {};
+  // What the navigation carried: a snapshot of the product taken when the
+  // customer tapped it, which is where every field on this screen used to
+  // come from. Stock, price and availability were therefore frozen at that
+  // moment — a shopper could read "Only 2 left" long after the item sold
+  // out, and only discover otherwise at checkout. On a catalog where much
+  // of the stock is one-of-a-kind ukay-ukay, that is the ordinary case
+  // rather than an edge one.
+  const routeProduct = route.params?.product;
   const { toggleFavorite, isFavorite } = useFavorites();
   const { addToCart, cartCount } = useCart();
+  // ProductContext already holds a live listener on the whole collection,
+  // so reading through it costs no extra listener and no extra read — the
+  // document this screen wants is already arriving.
+  const { products, loading: productsLoading } = useProducts();
+
+  const liveProduct = routeProduct?.id
+    ? products.find((p) => p.id === routeProduct.id)
+    : undefined;
+
+  // The same lesson as Cartscreen's availability check: "not in the list"
+  // and "the list hasn't arrived" are different answers, and only one of
+  // them means the product is gone. Until the catalog has loaded, the
+  // snapshot navigation carried stands in.
+  //
+  // Gated on a signed-in user because firestore.rules requires auth to
+  // read /products, so ProductContext resolves to an empty array for a
+  // guest — without this, every product page would report itself removed
+  // rather than merely unreadable.
+  const isRemoved =
+    Boolean(routeProduct?.id) &&
+    Boolean(auth.currentUser) &&
+    !productsLoading &&
+    !liveProduct;
+
+  const product = liveProduct || routeProduct;
 
   // Legacy fallback: products saved before per-product colors/sizes
   // existed have no such array on their doc (or an admin left it empty),
@@ -188,6 +221,33 @@ export default function ProductScreen({ navigation, route }) {
       setIsFavoriteState(isFavorite(product.id));
     }
   }, [product, isFavorite]);
+
+  // Now that the product is live, its options can change under a customer
+  // mid-view — a seller editing colors or sizes is exactly what the
+  // subscription above exists to surface. If the current selection stops
+  // being offered, fall back to one that is, rather than letting a cart
+  // line be built from a size or color the product no longer has.
+  //
+  // Both settle in a single pass: the fallback is drawn from the same list
+  // being tested against, so the next run finds it and stops.
+  useEffect(() => {
+    if (!productColors.includes(selectedColor)) setSelectedColor(productColors[0]);
+  }, [productColors, selectedColor]);
+
+  useEffect(() => {
+    if (!productSizes.includes(selectedSize)) setSelectedSize(productSizes[0]);
+  }, [productSizes, selectedSize]);
+
+  // Same reasoning for quantity against stock. The stepper's own cap stops
+  // a customer raising quantity past what's available, but it cannot
+  // retract a quantity that was legal when they chose it and isn't any
+  // more because someone else bought two in the meantime. Clamped rather
+  // than reset to 1: the customer asked for as many as they can still have.
+  useEffect(() => {
+    if (hasKnownStock && parsedStockValue > 0 && quantity > parsedStockValue) {
+      setQuantity(parsedStockValue);
+    }
+  }, [hasKnownStock, parsedStockValue, quantity]);
 
   // Cart badge gets a settle-pulse whenever the count actually grows (not on
   // mount, and not when it shrinks from removals elsewhere) — quick visual
@@ -364,10 +424,13 @@ export default function ProductScreen({ navigation, route }) {
     setSizeGuideVisible(true);
   };
 
-  // Route params can arrive without a product (a stale deep link, a
-  // malformed nav call) — render the shared EmptyState instead of a
-  // fabricated "Product Details" / ₱0.00 placeholder product.
-  if (!product) {
+  // Two ways to have nothing to show, and the existing copy covers both:
+  // route params that arrived without a product (a stale deep link, a
+  // malformed nav call), and a product the seller deleted while this
+  // screen was open — which only became detectable once the data went
+  // live. Either way, the shared EmptyState beats a fabricated
+  // "Product Details" / ₱0.00 placeholder.
+  if (!product || isRemoved) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
