@@ -26,6 +26,7 @@ import { db, auth } from '../firebaseConfig';
 import { collection, doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { parseStock, totalQuantityByProductId } from '../utils/stock';
+import { PAYMENT_METHODS, isPayOnDelivery } from '../constants/payment';
 import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -42,19 +43,6 @@ const parsePrice = (price) => {
   }
   return 0;
 };
-
-// UI-only, matching the SRS's "payment options are included in the UI
-// design only, not yet integrated" constraint — no card entry, no real
-// processing. Selection is just stored on the order for admin visibility.
-// COD included alongside the SRS-named options since it's the dominant
-// method in Philippine e-commerce and fits ukay-ukay's inspect-before-you-
-// pay nature.
-const paymentOptions = [
-  { id: 'gcash', label: 'GCash', icon: 'cash-outline' },
-  { id: 'maya', label: 'Maya', icon: 'wallet-outline' },
-  { id: 'card', label: 'Card', icon: 'card-outline' },
-  { id: 'cod', label: 'Cash on Delivery', icon: 'cube-outline' },
-];
 
 // A thin rust-tinted ring that flashes over a section to draw the eye to
 // exactly what's missing (no address / no payment method selected) —
@@ -244,6 +232,13 @@ export default function CheckoutScreen({ navigation, route }) {
       // just a client-side ref, no read or write involved.
       const newOrderRef = doc(collection(db, 'users', auth.currentUser.uid, 'orders'));
 
+      // Captured out of the transaction so the confirmation screen can
+      // render exactly what was written, rather than a second assembly of
+      // the same values that could drift from it. runTransaction may run
+      // its callback more than once under contention; each attempt
+      // overwrites this, so what survives is the attempt that committed.
+      let placedOrder = null;
+
       await runTransaction(db, async (transaction) => {
         // All reads must happen before any writes in a Firestore
         // transaction, so every product doc is read up front.
@@ -385,6 +380,21 @@ export default function CheckoutScreen({ navigation, route }) {
 
         transaction.set(newOrderRef, orderData);
 
+        // Only the fields the confirmation renders. createdAt is
+        // deliberately absent: it is a serverTimestamp sentinel here, not
+        // a date, and would be meaningless to the screen. That is also why
+        // the confirmation shows no date — OrdersScreen shows the real one
+        // once the server has stamped it.
+        placedOrder = {
+          orderId: newOrderRef.id,
+          items: orderData.items,
+          subtotal: orderData.subtotal,
+          shipping: orderData.shipping,
+          total: orderData.total,
+          paymentMethod: orderData.paymentMethod,
+          shippingAddress: orderData.shippingAddress,
+        };
+
         // Only items that came from an actual cart document carry a
         // `productId` field distinct from their own `id` (CartContext's
         // addToCart writes it explicitly). Buy Now items are a raw spread
@@ -399,9 +409,23 @@ export default function CheckoutScreen({ navigation, route }) {
       });
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert('Order Placed', 'Your order has been placed successfully!', [
-        { text: 'OK', onPress: () => navigation.navigate('Home') },
-      ]);
+
+      // reset() rather than navigate(): the order exists now, and the back
+      // gesture must not return into a checkout that would happily place
+      // it a second time. Home is left beneath the confirmation so back
+      // still goes somewhere sensible rather than nowhere.
+      //
+      // Everything the confirmation renders is passed through, because the
+      // client already holds it — re-reading would spend a read to show
+      // data it has, and would race the serverTimestamp that has not
+      // resolved locally yet. All plain serialisable values.
+      navigation.reset({
+        index: 1,
+        routes: [
+          { name: 'Home' },
+          { name: 'OrderConfirmation', params: { order: placedOrder } },
+        ],
+      });
     } catch (error) {
       console.error('Error placing order:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -449,10 +473,9 @@ export default function CheckoutScreen({ navigation, route }) {
     }
   };
 
-  const trustText =
-    selectedPayment === 'cod'
-      ? 'Pay when your order arrives — no online payment needed'
-      : 'Secure checkout — your details stay private';
+  const trustText = isPayOnDelivery(selectedPayment)
+    ? 'Pay when your order arrives — no online payment needed'
+    : 'Secure checkout — your details stay private';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -581,7 +604,7 @@ export default function CheckoutScreen({ navigation, route }) {
         <Animated.View style={paymentShakeStyle}>
           <View style={styles.highlightWrap}>
             <View style={styles.paymentRow}>
-              {paymentOptions.map((option) => {
+              {PAYMENT_METHODS.map((option) => {
                 const isSelected = selectedPayment === option.id;
                 return (
                   <AnimatedPressable

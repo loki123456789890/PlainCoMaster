@@ -28,6 +28,7 @@ import LocationScreen from './screens/LocationScreen';
 import HelpScreen from './screens/HelpScreen';
 import OrdersScreen from './screens/OrdersScreen';
 import OrderDetailsScreen from './screens/OrderDetailsScreen'; // <-- NEW IMPORT
+import OrderConfirmationScreen from './screens/OrderConfirmationScreen';
 import WriteReviewScreen from './screens/WriteReviewScreen';
 
 import AdminLoginScreen from './screens/admin/AdminLoginScreen';
@@ -123,6 +124,11 @@ export default function App() {
                   <Stack.Screen name="Help" component={HelpScreen} />
                   <Stack.Screen name="Orders" component={OrdersScreen} />
                   <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} />
+                  {/* Reached by resetting the stack from Checkout, never
+                      pushed — see the reset in Checkoutscreen for why the
+                      back gesture must not return into a checkout whose
+                      order has already been placed. */}
+                  <Stack.Screen name="OrderConfirmation" component={OrderConfirmationScreen} />
                   <Stack.Screen name="WriteReview" component={WriteReviewScreen} />
 
                   {/* Admin Screens */}
