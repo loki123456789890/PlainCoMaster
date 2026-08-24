@@ -64,19 +64,6 @@ design or a server.
 - [ ] Firestore offline persistence
 - [ ] Swap image rendering to `expo-image` for disk caching
 
-## Batch 4 — Tier 1 features (in progress)
-
-- [ ] **Image upload to Firebase Storage** + `storage.rules` — the
-      seller flow is currently impossible without it (products take a
-      pasted URL). Biggest single unlock.
-- [ ] Live product subscription on Productscreen (currently a frozen
-      nav param, so stock and price go stale)
-- [ ] Order confirmation screen — the order number is never shown
-- [ ] Low-stock alerts on the Store Manager dashboard
-- [ ] "Duplicate product" action
-- [ ] Firestore offline persistence
-- [ ] Swap image rendering to `expo-image` for disk caching
-
 ## Batch 5 — the server
 
 One project, not four — they all need the same Cloud Functions
