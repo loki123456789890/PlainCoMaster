@@ -213,12 +213,17 @@ function CartRow({ item, available, maxQuantity, onRemove, onQuantityChange }) {
 }
 
 export default function CartScreen({ navigation }) {
-  const { cartItems, loading, removeFromCart, addToCart, updateQuantity } = useCart();
+  const { cartItems, loading: cartLoading, removeFromCart, addToCart, updateQuantity } = useCart();
   // Live products list, used to check whether a cart item's original
   // product still exists and, when it does, to cap the quantity stepper at
   // its current stock — the cart item itself keeps its own saved
   // price/name regardless (see note on handleCheckout below).
-  const { products } = useProducts();
+  const {
+    products,
+    loading: productsLoading,
+    error: productsError,
+    retryFetchProducts,
+  } = useProducts();
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
 
@@ -243,6 +248,15 @@ export default function CartScreen({ navigation }) {
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     };
   }, []);
+
+  // Both listeners gate this screen, not just the cart's. Availability is
+  // decided by looking a cart line's productId up in `products`, so until
+  // the catalog has actually arrived that lookup answers "no" for
+  // everything — which rendered a full cart as every row struck out with
+  // "No longer available", a ₱0.00 subtotal, and Checkout disabled, for as
+  // long as the products listener took to resolve. The cart's own listener
+  // usually resolves first, so this was the normal path, not a race.
+  const loading = cartLoading || productsLoading;
 
   const getProduct = (item) => products.find((p) => p.id === item.productId);
   const isAvailable = (item) => Boolean(getProduct(item));
@@ -361,6 +375,26 @@ export default function CartScreen({ navigation }) {
 
       {loading ? (
         <CartSkeleton />
+      ) : productsError ? (
+        // Same reasoning as the loading gate above, for the other way the
+        // catalog can be missing: a failed products listener also leaves
+        // `products` empty, which would strike out every row as "No longer
+        // available" and claim the cart is worthless. We genuinely don't
+        // know what's still in stock here, so say that instead of guessing
+        // the alarming direction.
+        <Animated.View
+          style={styles.centerContainer}
+          entering={reduceMotion ? undefined : FadeIn.duration(280).easing(EASE_OUT_QUART)}
+        >
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Couldn't check your cart"
+            subtitle="We can't confirm which items are still available right now."
+          />
+          <View style={styles.shopNowButtonWrap}>
+            <Button variant="secondary" label="Retry" onPress={retryFetchProducts} />
+          </View>
+        </Animated.View>
       ) : showEmptyState ? (
         <Animated.View
           style={styles.centerContainer}
