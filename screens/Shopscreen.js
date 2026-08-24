@@ -199,9 +199,22 @@ export default function ShopScreen({ navigation, route }) {
   // fetch and giving the "did I just check for new items" gesture users
   // expect from a catalog screen. Clears once the next products/loading
   // update lands.
+  // Keyed on the results too, not just `loading`.
+  //
+  // Keyed on [loading] alone this could never clear for a signed-out
+  // viewer: retryFetchProducts() bumps ProductContext's retry token, but
+  // its no-user path calls setLoading(false) when loading is ALREADY
+  // false. React bails out of a state update to the same value, so no
+  // re-render happens, this effect never re-runs, and the spinner turns
+  // forever. Shop is browsable while signed out, so that path is reachable.
+  //
+  // `products` and `error` are the values a resubscribe actually replaces
+  // (ProductContext assigns a fresh array on every settle, including the
+  // empty one), so watching them catches the settle that `loading` alone
+  // misses.
   useEffect(() => {
     if (!loading) setRefreshing(false);
-  }, [loading]);
+  }, [loading, products, error]);
 
   const handleRefresh = () => {
     setRefreshing(true);

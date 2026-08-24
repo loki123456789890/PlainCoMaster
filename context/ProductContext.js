@@ -18,6 +18,54 @@ const ProductContext = createContext();
 
 export const useProducts = () => useContext(ProductContext);
 
+// A FieldValue (deleteField(), serverTimestamp(), …) is a request rather
+// than a value: it exposes isEqual() and carries no data of its own, so
+// comparing it against a stored value always reports a difference.
+const isFieldValueSentinel = (value) =>
+  value !== null &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  typeof value.isEqual === 'function';
+
+const stableStringify = (value) => {
+  try {
+    // Normalised so an absent field and an explicit undefined compare
+    // equal rather than throwing the diff off.
+    return JSON.stringify(value ?? null);
+  } catch {
+    return undefined;
+  }
+};
+
+// Which keys in an update actually differ from the document it targets.
+// Used only for the activity log's summary line.
+//
+// Two shapes need care:
+//
+//   - deleteField() sentinels. AdminEditProductScreen always sends
+//     `measurements: payload || deleteField()`, so a product that has
+//     never carried a size guide receives a delete request on every save.
+//     That is only a real change when the field is actually there.
+//
+//   - colors, sizes and measurements are arrays and maps, so comparing
+//     by reference would call every save a change. Compared by their JSON
+//     form, which is stable here because the form builds both from plain
+//     strings in a fixed order.
+//
+// Falls back to naming every key when the previous document isn't in
+// local state: an honest "everything, we couldn't tell" beats a summary
+// that quietly claims nothing changed.
+function diffChangedKeys(previous, updatedData) {
+  const keys = Object.keys(updatedData);
+  if (!previous) return keys;
+
+  return keys.filter((key) => {
+    const next = updatedData[key];
+    if (isFieldValueSentinel(next)) return previous[key] !== undefined;
+    return stableStringify(previous[key]) !== stableStringify(next);
+  });
+}
+
 export const ProductProvider = ({ children }) => {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -132,15 +180,28 @@ export const ProductProvider = ({ children }) => {
   };
 
   const updateProduct = async (productId, updatedData) => {
+    // Captured BEFORE the write, while local state still holds the old
+    // document — the onSnapshot listener replaces it moments later.
+    const previous = products.find((p) => p.id === productId);
+
     try {
       await updateDoc(doc(db, 'products', productId), updatedData);
       // Names the fields that changed rather than dumping their values:
       // "who touched what, and when" is what the SRS asks the log to
       // answer, and a full before/after diff of every product edit would
-      // bury that under noise. updatedData carries deleteField() sentinels
-      // for cleared optional fields, so only the keys are meaningful here.
-      const changed = Object.keys(updatedData).join(', ');
-      const label = updatedData.name || products.find((p) => p.id === productId)?.name || productId;
+      // bury that under noise.
+      //
+      // Diffed against the previous document rather than taken from
+      // Object.keys(updatedData), which is what this used to do. The sole
+      // caller — AdminEditProductScreen — sends the WHOLE document on
+      // every save, deliberately, because that is what migrates a legacy
+      // string price/stock to a number and what lets the rules validate
+      // the merged result. So "changed" listed all ten fields on every
+      // edit regardless of what was touched, and the log's most useful
+      // column was noise. Correcting it here keeps the full-document
+      // write intact.
+      const changed = diffChangedKeys(previous, updatedData).join(', ');
+      const label = updatedData.name || previous?.name || productId;
       logStoreActivity({
         action: ACTIONS.PRODUCT_UPDATED,
         targetId: productId,
