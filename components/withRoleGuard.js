@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useAdmin } from '../context/AdminContext';
+import { Colors } from '../constants/theme';
 
 // Wraps a privileged screen so it can only ever render for someone whose
 // AdminContext role is one of allowedRoles — which only ever gets set via a
@@ -52,7 +53,7 @@ export default function withRoleGuard(ScreenComponent, allowedRoles = DEFAULT_AL
     if (adminLoading || !isAllowed) {
       return (
         <View style={styles.container}>
-          <ActivityIndicator size="large" color="#007AFF" />
+          <ActivityIndicator size="large" color={Colors.light.tint} />
         </View>
       );
     }
@@ -66,6 +67,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: Colors.light.background,
   },
 });
