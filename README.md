@@ -65,6 +65,32 @@ deactivated or loses access to their email, account management can only
 be restored by editing Firestore in the console. The app warns about
 this but cannot prevent it.
 
+## Enabling Cloud Storage
+
+**Also required on a new Firebase project.** Product photos upload to
+Cloud Storage, and the bucket has to be provisioned in the console before
+anything — including `npm run storage:deploy` — can touch it. Deploying
+rules to a project without Storage set up fails with *"Firebase Storage
+has not been set up on project ..."*.
+
+1. Firebase Console → **Build → Storage → Get started**.
+2. Pick a location if you are offered one. Storage shares the default GCP
+   resource location with Firestore, so if Firestore already exists the
+   location is inherited and there is no choice to make. Where there is
+   one, `asia-southeast1` (Singapore) is nearest to a Philippine
+   audience. **The choice is permanent.**
+3. The starting-rules prompt (test mode vs. locked) does not matter —
+   `npm run storage:deploy` replaces them immediately.
+4. Confirm the bucket name matches `storageBucket` in
+   [firebaseConfig.js](firebaseConfig.js). New projects get
+   `<project>.firebasestorage.app`; some older ones get
+   `<project>.appspot.com`. If they differ, update the config — uploads
+   fail silently against a bucket that does not exist.
+5. `npm run storage:deploy`
+
+Note that `storageBucket` being present in `firebaseConfig.js` does not
+mean the bucket exists. It was declared long before anything used it.
+
 ## Firestore rules and indexes
 
 ```bash

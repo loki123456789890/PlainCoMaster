@@ -58,6 +58,9 @@ design or a server.
 - [x] Picker UI in AdminAddProductScreen and AdminEditProductScreen —
       take/choose a photo, added alongside the URL field so products
       hosted elsewhere keep working
+- [ ] **Enable Cloud Storage in the Firebase console** — the bucket has
+      never been provisioned, so `storage:deploy` fails until it is.
+      See the README section; the location choice is permanent.
 - [ ] Untested on device. Needs a real run on both iOS and Android:
       permission prompts, that iOS actually yields JPEG rather than
       HEIC, and that storage.rules accepts the upload
