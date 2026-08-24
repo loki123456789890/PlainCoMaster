@@ -26,6 +26,7 @@ import { auth } from '../firebaseConfig';
 import { useProducts } from '../context/ProductContext';
 import { useCart } from '../context/CartContext';
 import useNetworkStatus from '../hooks/useNetworkStatus';
+import { parseStockLimit, totalQuantityByProductId } from '../utils/stock';
 import { COLOR_PALETTE } from '../constants/productOptions';
 import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
 import Card from '../components/ui/Card';
@@ -43,16 +44,6 @@ const parsePrice = (price) => {
     return parseFloat(cleaned) || 0;
   }
   return 0;
-};
-
-// Same defensive parse as Checkoutscreen.js's parseStock — some products
-// still have "stock" stored as a string left over from before the admin
-// forms started saving it as a number. Returns null (treated as unlimited)
-// rather than 0 for anything non-numeric, so legacy data doesn't
-// permanently lock a line's quantity stepper at 1.
-const parseStock = (stock) => {
-  const parsed = parseInt(stock, 10);
-  return Number.isNaN(parsed) ? null : parsed;
 };
 
 const getColorHex = (colorName) => {
@@ -85,7 +76,12 @@ function CartSkeleton() {
 // via JSX, not called as a plain function) so its press-feedback and
 // price-pulse animations can use hooks safely, and so Reanimated's
 // entering/exiting/layout props have a stable per-row identity to animate.
-function CartRow({ item, available, maxQuantity, onRemove, onQuantityChange }) {
+// `maxQuantity` is how high THIS line may go (the product's stock minus
+// whatever its other lines have already claimed); `stockLimit` is the
+// product's actual stock. They differ whenever the same product sits on
+// more than one line, and the note below has to quote the second — the
+// first is a budget, not a fact about the shop.
+function CartRow({ item, available, maxQuantity, stockLimit, onRemove, onQuantityChange }) {
   const reduceMotion = useReducedMotion();
   const quantity = item.quantity || 1;
   const unitPrice = parsePrice(item.price);
@@ -204,8 +200,8 @@ function CartRow({ item, available, maxQuantity, onRemove, onQuantityChange }) {
             </View>
           </View>
         )}
-        {available && atMax && maxQuantity > 0 && (
-          <Text style={styles.maxStockNote}>Only {maxQuantity} in stock</Text>
+        {available && atMax && stockLimit > 0 && (
+          <Text style={styles.maxStockNote}>Only {stockLimit} in stock</Text>
         )}
       </Card>
     </Animated.View>
@@ -330,13 +326,42 @@ export default function CartScreen({ navigation }) {
     navigation.navigate('Checkout', { orderItems: availableCartItems });
   };
 
+  // Total units of each product across ALL cart lines. The same product
+  // legitimately occupies several lines — one shirt in two sizes is two
+  // lines, and CartContext.addToCart never dedupes — so its stock is a
+  // budget shared between them, not a limit each one gets separately.
+  const quantityByProductId = totalQuantityByProductId(
+    cartItems,
+    (item) => item.productId
+  );
+
   const renderCartItem = ({ item }) => {
     const product = getProduct(item);
+    const stockLimit = product ? parseStockLimit(product.stock) : null;
+
+    // This line's ceiling is the stock left after every OTHER line of the
+    // same product has taken its share. Capping each line at the full
+    // stock independently let two lines of a stock-3 item reach 3 each,
+    // and the customer only found out at checkout — where the transaction
+    // correctly totals per product and refuses the order. utils/stock.js
+    // spells out why both halves have to agree; the stepper was the half
+    // that didn't.
+    //
+    // Floored at the line's current quantity rather than at 1, so a line
+    // that is already over budget (added before another line claimed the
+    // stock) is left alone to be reduced or removed rather than silently
+    // treated as though its own quantity were invalid.
+    const quantity = item.quantity || 1;
+    const claimedElsewhere = (quantityByProductId.get(item.productId) || quantity) - quantity;
+    const maxQuantity =
+      stockLimit === null ? null : Math.max(quantity, stockLimit - claimedElsewhere);
+
     return (
       <CartRow
         item={item}
         available={Boolean(product)}
-        maxQuantity={product ? parseStock(product.stock) : null}
+        maxQuantity={maxQuantity}
+        stockLimit={stockLimit}
         onRemove={handleRemove}
         onQuantityChange={handleQuantityChange}
       />

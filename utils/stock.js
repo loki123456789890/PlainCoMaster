@@ -17,6 +17,28 @@ export const parseStock = (stock) => {
   return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+// The SAME parse, with the opposite answer for unusable input, and a
+// different name so the two can never be confused at a call site.
+//
+// parseStock() above is for ARITHMETIC — how many units to take or give
+// back — where an unreadable value has to floor at 0 or a decrement
+// invents inventory. This one is for a LIMIT — how high a quantity
+// stepper may go — where 0 is the wrong answer in the other direction:
+// it pins the stepper at 1 for exactly the products least likely to have
+// had inventory entered. null means "no limit known", which callers
+// treat as unlimited.
+//
+// Both existed already; this one was a private copy inside Cartscreen
+// under the name parseStock, so two functions with one name returned
+// opposite values for the same input. Productscreen keeps its own inline
+// handling because it needs the third distinction as well — whether
+// stock is KNOWN, which is what separates "out of stock" from "not
+// recorded" for the badge it renders.
+export const parseStockLimit = (stock) => {
+  const parsed = parseInt(stock, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
 // Totals quantity per product id across a list of line items.
 //
 // A single product can legitimately appear as SEVERAL lines in one order —
