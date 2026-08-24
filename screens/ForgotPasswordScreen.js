@@ -159,7 +159,7 @@ export default function ForgotPasswordScreen({ navigation }) {
         <View style={styles.offlineBanner}>
           <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
           <Text style={styles.offlineBannerText}>
-            No internet connection — password reset will be unavailable until you're back online.
+            No internet connection — password reset will be unavailable until you&apos;re back online.
           </Text>
         </View>
       )}
@@ -192,7 +192,7 @@ export default function ForgotPasswordScreen({ navigation }) {
               entering={reduceMotion ? undefined : FadeIn.duration(240).delay(80).easing(EASE_OUT_QUART)}
               style={styles.subtitle}
             >
-              Enter your email address and we'll send you a link to reset your password.
+              Enter your email address and we&apos;ll send you a link to reset your password.
             </Animated.Text>
 
             {/* Form */}

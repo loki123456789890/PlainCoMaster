@@ -377,7 +377,7 @@ export default function AdminProductsScreen({ navigation }) {
           <View style={styles.deleteModalContent}>
             <Text style={styles.modalTitle}>Delete Product</Text>
             <Text style={styles.modalMessage}>
-              Are you sure you want to delete "{selectedProduct?.name}"? This action cannot be undone.
+              Are you sure you want to delete &quot;{selectedProduct?.name}&quot;? This action cannot be undone.
             </Text>
             <View style={styles.modalButtons}>
               <View style={styles.modalButtonHalf}>

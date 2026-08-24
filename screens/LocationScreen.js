@@ -350,7 +350,7 @@ export default function LocationScreen({ navigation }) {
         <View style={styles.offlineBanner}>
           <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
           <Text style={styles.offlineBannerText}>
-            No internet connection — saving will be unavailable until you're back online.
+            No internet connection — saving will be unavailable until you&apos;re back online.
           </Text>
         </View>
       )}
@@ -396,7 +396,7 @@ export default function LocationScreen({ navigation }) {
                 </Animated.View>
               ) : (
                 <Text style={styles.locationHint}>
-                  We'll only use this to prefill the fields below.
+                  We&apos;ll only use this to prefill the fields below.
                 </Text>
               )}
 
