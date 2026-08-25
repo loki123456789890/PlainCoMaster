@@ -9,6 +9,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test:rules": "node scripts/run-rules-tests.mjs",
+    "preview:email": "node scripts/preview-email.mjs",
     "rules:deploy": "firebase deploy --only firestore:rules",
     "indexes:deploy": "firebase deploy --only firestore:indexes",
     "storage:deploy": "firebase deploy --only storage"

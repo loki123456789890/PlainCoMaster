@@ -104,10 +104,36 @@ design or a server.
 One project, not four — they all need the same Cloud Functions
 deployment:
 
-- [ ] Server-side order total verification (totals are client-supplied
-      and unvalidated)
-- [ ] Close the unconstrained product stock decrement — any signed-in
-      account can zero out the catalog
-- [ ] Firebase App Check (needs `initializeAppCheck` + a custom dev
-      build; not a console checkbox on React Native)
-- [ ] Transactional email — Help promises a 24h reply with no pipeline
+- [x] Server-side order total verification (totals are client-supplied
+      and unvalidated) — `placeOrder` in functions/index.js
+- [x] Close the unconstrained product stock decrement — any signed-in
+      account can zero out the catalog — customer branch removed from
+      firestore.rules; stock is written only by the server or a seller
+- [x] Transactional email — Help promises a 24h reply with no pipeline —
+      `notifySupportRequest` now emails the store on every request, and
+      `sendOrderConfirmation` sends the customer a receipt
+- [ ] ~~Firebase App Check~~ — **NOT DOABLE ON THIS STACK.** Not a
+      scheduling problem, an SDK one: `@firebase/app-check` ships no
+      React Native build, its only two providers are reCAPTCHA ones that
+      write to `document`, and `CustomProvider` needs an attestation
+      token that only native DeviceCheck / Play Integrity can mint.
+      Getting it would mean adopting `@react-native-firebase`, whose App
+      Check state the Web SDK cannot see — so in practice, migrating the
+      whole app off the Web SDK. Reconsider only if that migration
+      happens for other reasons.
+- [ ] Per-user rate limiting inside `placeOrder` — the nearest available
+      answer to what App Check would have covered (abuse of the callable
+      by something that is not the app). Needs no new SDK.
+
+### Known gaps in what shipped
+
+- [ ] The email triggers have no test coverage. `scripts/test-rules.mjs`
+      exercises firestore.rules, and these bypass rules entirely; the
+      templates are checked by eye via `npm run preview:email`.
+- [ ] `formatOrderNumber` now exists in three places —
+      OrderConfirmationScreen, OrderDetailsScreen, and functions/mailer.js.
+      The first two could move to `constants/`; the third cannot follow,
+      because functions/ is a separate CommonJS package. Same drift shape
+      that justified constants/payment.js.
+- [ ] Nothing retries a failed email. Outcomes land in the `mailLog`
+      collection with a status of `sent` or `failed`, but no one reads it.

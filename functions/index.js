@@ -43,14 +43,21 @@ const { getFirestore, FieldValue } = require('firebase-admin/firestore');
 initializeApp();
 const db = getFirestore();
 
-// Should match the region Firestore lives in — a function in one region
-// talking to a database in another pays a round trip on every read, and
-// this one does several before it writes anything. us-central1 is the
-// default rather than a considered choice; change it to match the project's
-// actual Firestore location, and change the matching region in
-// firebaseConfig.js at the same time or the client will call an endpoint
-// that does not exist.
-const REGION = 'us-central1';
+// PlainCo's Firestore is in asia-southeast1, and this function reads
+// several documents before it writes anything, so it belongs in the same
+// region — a function in one region talking to a database in another pays
+// a full round trip on every one of those reads.
+//
+// It was first deployed to us-central1, which was the SDK default rather
+// than a considered choice, and every read in the transaction below
+// crossed the Pacific. Moving it here also matters for the email triggers
+// in emails.js, which have no choice at all: a v2 Firestore trigger must
+// live in the database's region or the deploy is rejected.
+//
+// The matching region in firebaseConfig.js must change with this one, or
+// the client calls an endpoint where nothing is deployed and reports a
+// bare "not-found" that says nothing about regions.
+const REGION = 'asia-southeast1';
 
 // The only methods the checkout picker offers. Validated here rather than
 // trusted, because paymentMethod is stored on the order and read back by
@@ -340,3 +347,15 @@ exports.placeOrder = onCall({ region: REGION }, async (request) => {
 
   return placed;
 });
+
+// Transactional email lives in its own module — the triggers there share
+// nothing with placeOrder except the region, and folding an SMTP transport
+// into the file that handles money would make both harder to read.
+//
+// Re-exported here because the Firebase CLI discovers functions by loading
+// this entry point and walking its exports; a trigger defined in a file
+// nothing requires is a file that never deploys.
+const { sendOrderConfirmation, notifySupportRequest } = require('./emails');
+
+exports.sendOrderConfirmation = sendOrderConfirmation;
+exports.notifySupportRequest = notifySupportRequest;

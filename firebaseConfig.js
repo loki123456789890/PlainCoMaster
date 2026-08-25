@@ -30,4 +30,7 @@ export const storage = getStorage(app);
 // loudly — the SDK calls a URL in the region named here, and a function
 // deployed elsewhere simply is not at it, so checkout would report
 // "not-found" rather than anything about regions.
-export const functions = getFunctions(app, "us-central1");
+//
+// asia-southeast1 because that is where this project's Firestore lives,
+// and placeOrder reads several documents before writing.
+export const functions = getFunctions(app, "asia-southeast1");

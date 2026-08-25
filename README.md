@@ -12,10 +12,15 @@ sections — see [PRODUCT.md](PRODUCT.md) for the positioning and
 - **React Navigation** (native stack) — a single flat navigator in
   [App.js](App.js). This is *not* an expo-router app; there is no `app/`
   directory and no file-based routing.
-- **Firebase Web SDK** — Auth (email/password, AsyncStorage persistence)
-  and Firestore, called directly from the device. There are **no Cloud
-  Functions and no server**; every security guarantee lives in
-  [firestore.rules](firestore.rules).
+- **Firebase Web SDK** — Auth (email/password, AsyncStorage persistence),
+  Firestore, and Cloud Storage, called directly from the device.
+- **Cloud Functions** ([functions/](functions/)) for the three things a
+  client provably cannot be trusted with: placing an order (prices and
+  totals are computed server-side, never accepted from the request), and
+  the two transactional emails. Everything else is still enforced
+  declaratively in [firestore.rules](firestore.rules) — the functions
+  codebase is deliberately small, and adding to it should need the same
+  justification the first one did.
 - **Reanimated** for motion, gated throughout on `useReducedMotion()`.
 
 ## Setup
@@ -90,6 +95,62 @@ has not been set up on project ..."*.
 
 Note that `storageBucket` being present in `firebaseConfig.js` does not
 mean the bucket exists. It was declared long before anything used it.
+
+## Cloud Functions
+
+```bash
+cd functions && npm install && cd ..
+firebase deploy --only functions
+```
+
+Three functions, all in **`asia-southeast1`**:
+
+| Function | Trigger | What it does |
+| --- | --- | --- |
+| `placeOrder` | callable | The whole of checkout. Reads prices from the product documents, computes the total, decrements stock, writes the order, clears the cart — all in one transaction. |
+| `sendOrderConfirmation` | order created | Emails the customer their receipt. |
+| `notifySupportRequest` | support request created | Emails the store so Help's "within 24 hours" promise has something behind it. |
+
+**The region is not arbitrary and must not be changed casually.** It
+matches the Firestore database's location. A v2 Firestore trigger
+*cannot* deploy to any other region, and `placeOrder` would pay a
+cross-region round trip on every read if it did. If you change it, change
+`REGION` in [functions/index.js](functions/index.js), the constant of the
+same name in [functions/emails.js](functions/emails.js), **and** the
+region passed to `getFunctions()` in [firebaseConfig.js](firebaseConfig.js)
+together. Miss the last one and checkout fails with a bare `not-found`
+that says nothing about regions.
+
+### Email credentials
+
+Sending goes through Gmail SMTP. Both secrets live in Secret Manager and
+must be set before the first deploy, or it will fail:
+
+```bash
+firebase functions:secrets:set GMAIL_USER          # the full gmail address
+firebase functions:secrets:set GMAIL_APP_PASSWORD  # 16-char App Password
+```
+
+`GMAIL_APP_PASSWORD` is **not** the account password. Generate one at
+Google Account → Security → App passwords; that page only exists once
+2-Step Verification is switched on.
+
+Gmail was chosen over a transactional provider because those require a
+verified sending domain and PlainCo does not own one. The trade-offs
+(~500 recipients/day, weaker deliverability, no bounce handling) are
+written up at the top of [functions/mailer.js](functions/mailer.js).
+Swapping providers means rewriting `sendMail()` there and nothing else.
+
+### Previewing the emails
+
+```bash
+npm run preview:email
+```
+
+Renders every template — including the awkward fixtures (markup in a
+product name, a line with no size or colour, a support request from an
+account with no email) — into `.email-preview/`. No credentials needed
+and nothing is sent.
 
 ## Firestore rules and indexes
 
