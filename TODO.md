@@ -298,7 +298,9 @@ deployment:
       an entry the card counts.
 
       Found by the user: the card said "1 email didn't send" and opened a
-      screen saying "Everything sent". TWO separate causes, both live.
+      screen saying "Everything sent". Investigating turned up two real
+      defects. ONLY THE FIRST IS CONFIRMED to have been active — see the
+      note under (2).
 
       1. Two hand-written copies of the status list. Adding 'retrying'
          updated the log's and not the card's. `DRIFT-2` now fails on
@@ -316,6 +318,21 @@ deployment:
          second listener keyed on status, merged in, so anything
          countable is showable. Entries with no timestamp sort to the top
          and read "Time not recorded" rather than "Just now".
+
+         FIXED ON SUSPICION, NOT ON EVIDENCE. It was the best explanation
+         for a card counting something the log could not show, but when
+         the fix shipped no hidden entry appeared — the card simply went
+         to zero. So this was latent, not what the user hit. It stays
+         because the Firestore behaviour is real and this project did
+         once write recordedAt on only some paths (see the mailLog
+         reader entry above), but it should not be recorded as a
+         diagnosis that was confirmed.
+
+         What the user actually hit was almost certainly (1), with the
+         entry mid-retry — 'retrying' then 'sending' — at the moment they
+         looked, which is exactly the state the two screens disagreed
+         about. That is inference: the state was transient and is gone,
+         so it cannot now be reproduced.
 
       NOT covered by any suite — it is client query behaviour, and the
       emulator suites reach rules and functions only. Same blind spot as
