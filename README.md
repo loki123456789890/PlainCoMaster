@@ -263,9 +263,27 @@ of them.
 8. Force-quit and reopen the app while signed in. It should go straight to
    Home (or the dashboard for staff), never to the Landing screen.
 9. Log out. You should land on Landing and stay there.
-10. With a customer signed in on one device, deactivate that account from
-    Platform Admin → Users on another. The first device should sign out
-    within a second or two and say why.
+10. **Mid-session revocation.** The thing being tested is that a session
+    already open is ended, so the customer must stay signed in and in the
+    foreground while the flag flips. Signing out of the customer account
+    to go and deactivate it tests nothing — there is no live session left
+    to revoke, and the app will correctly do nothing.
+
+    With one device, use the console rather than a second account:
+
+    a. Sign in as a customer and leave the app open on any screen.
+    b. In the Firebase Console → Firestore → `users/{that-uid}`, set
+       `isActive` to `false`. Console writes bypass security rules, so
+       this is exactly what a Platform Admin's deactivation writes.
+    c. Watch the device. Within a second or two it should show "Account
+       Deactivated" and return to Landing.
+
+    With two devices, Platform Admin → Users on the second works the same
+    way — the point is only that the first session stays live.
+
+    If nothing happens, check that the app was in the FOREGROUND. A
+    backgrounded app has its Firestore listeners suspended by the OS, so
+    revocation lands when it next resumes rather than immediately.
 
 **Photo upload**, if the earlier test was Android only:
 
