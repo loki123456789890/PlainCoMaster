@@ -153,6 +153,14 @@ deployment:
       admin's, and without it someone closing their own account would be
       told to contact support about a mistake they made on purpose.
 
+- [x] `firebase-functions` upgraded 6.6.0 → 7.3.2. The CLI warned about it
+      on every deploy. All five v7 breaking changes were checked against
+      actual usage first and none applied: Node 16 dropped (we run 22),
+      `functions.config()` removed (never used — secrets come from the
+      `params` module), TypeScript/ES2022 target (this is plain CommonJS
+      JS), emulator error handling for async `onRequest` (no `onRequest`
+      anywhere), and v1 `Event` renamed to `LegacyEvent` (v2 API only).
+
 ### Known gaps in what shipped
 
 - [x] The email triggers have test coverage — `npm run test:email`, 8
