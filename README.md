@@ -14,10 +14,11 @@ sections — see [PRODUCT.md](PRODUCT.md) for the positioning and
   directory and no file-based routing.
 - **Firebase Web SDK** — Auth (email/password, AsyncStorage persistence),
   Firestore, and Cloud Storage, called directly from the device.
-- **Cloud Functions** ([functions/](functions/)) for the three things a
-  client provably cannot be trusted with: placing an order (prices and
-  totals are computed server-side, never accepted from the request), and
-  the two transactional emails. Everything else is still enforced
+- **Cloud Functions** ([functions/](functions/)) for the things a client
+  provably cannot be trusted with: placing an order (prices and totals are
+  computed server-side, never accepted from the request), the two
+  transactional emails, and re-sending one that failed. Everything else is
+  still enforced
   declaratively in [firestore.rules](firestore.rules) — the functions
   codebase is deliberately small, and adding to it should need the same
   justification the first one did.
@@ -103,13 +104,14 @@ cd functions && npm install && cd ..
 firebase deploy --only functions
 ```
 
-Three functions, all in **`asia-southeast1`**:
+Four functions, all in **`asia-southeast1`**:
 
 | Function | Trigger | What it does |
 | --- | --- | --- |
 | `placeOrder` | callable | The whole of checkout. Reads prices from the product documents, computes the total, decrements stock, writes the order, clears the cart — all in one transaction. |
 | `sendOrderConfirmation` | order created | Emails the customer their receipt. |
 | `notifySupportRequest` | support request created | Emails the store so Help's "within 24 hours" promise has something behind it. |
+| `retryMail` | callable | Sends one logged message again, for the Store Manager's "Send again" button. Takes a `mailLog` entry id and **never a recipient** — the address and body are re-derived from the order or support request, so it cannot be aimed anywhere. Active Store Manager only; refuses anything already sent; three attempts per entry. |
 
 **The region is not arbitrary and must not be changed casually.** It
 matches the Firestore database's location. A v2 Firestore trigger
@@ -169,7 +171,7 @@ or those screens will fail to load.
 ```bash
 npm run test:rules       # 83 — firestore.rules, every role
 npm run test:checkout    # 12 — placeOrder end to end
-npm run test:email       #  9 — the two mail triggers
+npm run test:email       # 18 — the mail triggers and the retry callable
 npm run test:rate-limit  #  9 — the order throttle's arithmetic
 npm run test:order-number #  8 — the one string that crosses every boundary
 npm run preview:email    #      renders the templates for eyeballing
@@ -193,7 +195,10 @@ four rather than one:
   rate limiter actually being wired up.
 - `test:email` fakes SMTP and nothing else, so the one-shot claim that
   stops a customer receiving two receipts is exercised as a genuine
-  Firestore race rather than a simulated one.
+  Firestore race rather than a simulated one. Its `RETRY-*` cases also
+  cover `retryMail`, including the one that matters most: RETRY-4 hands
+  the callable a hostile payload naming another recipient, subject and
+  body, and asserts the mail still goes to the address on the order.
 - `test:rate-limit` is pure arithmetic, which is the only way to walk a
   ten-minute window without waiting ten minutes.
 
@@ -264,9 +269,11 @@ of them.
    see no entry either way, the trigger did not fire or `recordedAt` is
    missing — check `firebase functions:log`.
 
-   Note there is one permanently stuck `unconfigured` receipt from before
-   the credentials were set, so on this project the card is lit regardless.
-   Nothing retries yet; see TODO.
+   Any entry that did not send offers **Send again**, which calls
+   `retryMail`. Tapping it on the old `unconfigured` receipt should turn
+   it **Sent** and clear the dashboard card. Tapping it on an entry that
+   already sent is impossible — the button is not drawn — and the server
+   refuses it regardless.
 
 **Session behaviour** (needs a second account):
 

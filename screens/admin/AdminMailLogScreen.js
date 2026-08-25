@@ -10,7 +10,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useReducedMotion, FadeIn, FadeInDown } from 'react-native-reanimated';
 import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
-import { db } from '../../firebaseConfig';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../../firebaseConfig';
+import { showAppAlert } from '../../utils/appAlert';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
@@ -30,12 +32,22 @@ import { EASE_OUT_QUART } from '../../constants/motion';
 // and the one they cannot answer any other way, because a bounced email
 // leaves no trace in the app.
 //
-// READ ONLY, and not by accident. There is no write rule on mailLog for
-// any role (see firestore.rules, MAIL-1). Nothing here can retry a send,
-// mark an entry handled, or delete one. Retrying would mean re-invoking
-// the mailer, which is a Cloud Function this screen cannot call, and
-// faking the rest would turn a record of what happened into a record of
-// what someone clicked.
+// READ ONLY AS FAR AS FIRESTORE GOES, and not by accident. There is no
+// write rule on mailLog for any role (see firestore.rules, MAIL-1), so
+// nothing typed on this screen can edit the record of what happened.
+//
+// The one action offered is "Send again", and it is deliberately not a
+// write: it calls the retryMail Cloud Function, which re-derives the
+// recipient and the body from the order or support request that produced
+// the message and then sends through the ordinary mailer. The entry
+// changes because the SEND changed it, exactly as it would have on the
+// first attempt. That is the distinction worth preserving — a button that
+// marked an entry "handled" would turn a record of what happened into a
+// record of what someone clicked, which is why there still isn't one.
+//
+// Retry was added once real credentials landed and the receipts logged
+// before them became permanently stuck at 'unconfigured'. A dashboard
+// alarm that can never be cleared stops being an alarm.
 
 // Ordered worst-first, because the whole point of opening this screen is
 // the failures. 'sending' sits between: an entry stuck there means the
@@ -60,6 +72,12 @@ const STATUS_META = {
     tone: 'warning',
     blurb: 'Started but never finished — the outcome was not recorded.',
   },
+  retrying: {
+    label: 'Trying again',
+    icon: 'refresh-outline',
+    tone: 'warning',
+    blurb: 'Released for another attempt.',
+  },
   sent: {
     label: 'Sent',
     icon: 'checkmark-circle-outline',
@@ -79,7 +97,19 @@ const UNKNOWN_STATUS = {
   blurb: 'This status was not recognised.',
 };
 
-const PROBLEM_STATUSES = ['failed', 'unconfigured', 'sending'];
+const PROBLEM_STATUSES = ['failed', 'unconfigured', 'sending', 'retrying'];
+
+// Which entries offer "Send again". Mirrors RETRYABLE_STATUSES in
+// functions/mailer.js, and is only about whether to draw the button —
+// the callable re-checks every one of these server-side and is the
+// authority. A client that got this wrong would show a button that
+// refuses, not a button that sends something it shouldn't.
+const RESENDABLE_STATUSES = ['failed', 'unconfigured', 'retrying'];
+
+// Mirrors MAX_RETRY_ATTEMPTS in functions/mailer.js, for the same reason
+// and with the same caveat: this decides what the button says, not what
+// the server allows.
+const MAX_RETRY_ATTEMPTS = 3;
 
 const KIND_LABELS = {
   orderConfirmation: 'Order receipt',
@@ -129,8 +159,61 @@ export default function AdminMailLogScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
+  // Which entry has a send in flight, by id. One at a time rather than a
+  // set: the button is per-entry and disables itself, so two concurrent
+  // sends would mean two deliberate taps on two different rows, which is
+  // rare enough not to complicate the state for.
+  const [resending, setResending] = useState(null);
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
+
+  // Not memoised on purpose — httpsCallable is cheap and hoisting it to
+  // module scope would bind it at import time, before firebaseConfig has
+  // necessarily finished initialising the app.
+  const resend = async (entry) => {
+    if (resending) return;
+    setResending(entry.id);
+    try {
+      const call = httpsCallable(functions, 'retryMail');
+      // The id and nothing else. Everything about the message — who it
+      // goes to, what it says — is re-derived server-side from the order
+      // or support request, so there is nothing else to send and nothing
+      // here that could redirect it.
+      const { data } = await call({ key: entry.id });
+
+      if (data?.status === 'sent') {
+        showAppAlert('Sent', `The email went out to ${data.to || 'the recipient'}.`, [{ text: 'OK' }]);
+      } else if (data?.status === 'unconfigured') {
+        showAppAlert(
+          'Still not sent',
+          'No mail credentials are set on the server, so there was nothing to send with.',
+          [{ text: 'OK' }]
+        );
+      } else {
+        // The mailer records failures rather than throwing them, so a
+        // 'failed' outcome arrives here as a successful call. Showing the
+        // provider's own words matches how the list renders detail.
+        showAppAlert(
+          'Still not sent',
+          data?.detail
+            ? `The mail server refused it again: ${data.detail}`
+            : 'The message could not be sent. Check the entry for the reason.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      // Every refusal the callable makes — already sent, out of attempts,
+      // source deleted, not a Store Manager — arrives as an HttpsError
+      // whose message was written to be read by the person holding the
+      // phone, so it is shown rather than replaced with something generic.
+      console.error('Error resending email:', error);
+      showAppAlert('Could not send again', error?.message || 'Something went wrong.', [
+        { text: 'OK' },
+      ]);
+    } finally {
+      setResending(null);
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -159,6 +242,7 @@ export default function AdminMailLogScreen({ navigation, route }) {
               to: data.to || '',
               subject: data.subject || '',
               detail: data.detail || '',
+              retryCount: Number(data.retryCount) || 0,
               recordedAt: data.recordedAt?.toDate?.() ?? null,
             };
           })
@@ -298,6 +382,34 @@ export default function AdminMailLogScreen({ navigation, route }) {
                       <Text style={styles.entryDetail}>{meta.blurb}</Text>
                     ) : null}
                     <Text style={styles.entryWhen}>{formatWhen(entry.recordedAt)}</Text>
+
+                    {/* Only on entries that can actually go out again.
+                        A 'sent' row has no button at all rather than a
+                        disabled one — there is nothing to explain and
+                        nothing to want. */}
+                    {RESENDABLE_STATUSES.includes(entry.status) && (
+                      <View style={styles.entryAction}>
+                        {entry.retryCount >= MAX_RETRY_ATTEMPTS ? (
+                          <Text style={styles.entryExhausted}>
+                            Tried {entry.retryCount} times — check the reason above.
+                          </Text>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            label="Send again"
+                            loading={resending === entry.id}
+                            disabled={resending !== null || !isConnected}
+                            onPress={() => resend(entry)}
+                            style={styles.resendButton}
+                          />
+                        )}
+                        {entry.retryCount > 0 && entry.retryCount < MAX_RETRY_ATTEMPTS && (
+                          <Text style={styles.entryAttempts}>
+                            {MAX_RETRY_ATTEMPTS - entry.retryCount} left
+                          </Text>
+                        )}
+                      </View>
+                    )}
                   </View>
                 </Card>
               </Animated.View>
@@ -400,6 +512,12 @@ const styles = StyleSheet.create({
     ...Platform.select({ ios: { fontVariant: ['tabular-nums'] }, default: {} }),
   },
   entryWhen: { fontSize: 11, color: Colors.light.icon, marginTop: 6 },
+  entryAction: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: Spacing.sm },
+  // Overrides the Button base, which is sized for a full-width primary
+  // action. This one sits inside a list row and must not dominate it.
+  resendButton: { paddingVertical: 8, paddingHorizontal: Spacing.md, minHeight: 36 },
+  entryAttempts: { fontSize: 11, color: Colors.light.icon },
+  entryExhausted: { fontSize: 12, color: Colors.light.icon, fontStyle: 'italic', flex: 1 },
   emptyStateWrap: { paddingTop: Spacing.xl },
   emptyStateAction: { alignItems: 'center', marginTop: Spacing.md },
 });

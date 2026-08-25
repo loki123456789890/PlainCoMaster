@@ -506,10 +506,15 @@ exports._handlePlaceOrder = handlePlaceOrder;
 // Re-exported here because the Firebase CLI discovers functions by loading
 // this entry point and walking its exports; a trigger defined in a file
 // nothing requires is a file that never deploys.
-const { sendOrderConfirmation, notifySupportRequest } = require('./emails');
+const { sendOrderConfirmation, notifySupportRequest, retryMail } = require('./emails');
 
 exports.sendOrderConfirmation = sendOrderConfirmation;
 exports.notifySupportRequest = notifySupportRequest;
+// A callable rather than a trigger, and the only one of the three a person
+// invokes directly — AdminMailLogScreen's "Send again" button. It takes a
+// mailLog entry id and re-derives the recipient from the source document,
+// so it cannot be aimed at an address; see the note above it in emails.js.
+exports.retryMail = retryMail;
 
 // Exported for scripts/test-rate-limit.mjs. The Firebase CLI discovers
 // functions by walking this module's exports and ignores a plain function,

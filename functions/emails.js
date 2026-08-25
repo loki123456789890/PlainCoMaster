@@ -17,11 +17,15 @@
 // identically every time. Retries would buy nothing but log noise.
 
 const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { getFirestore } = require('firebase-admin/firestore');
 const logger = require('firebase-functions/logger');
 
 const {
   MAIL_SECRETS,
   sendMail,
+  releaseForRetry,
+  MAX_RETRY_ATTEMPTS,
   storeInbox,
   shell,
   escapeHtml,
@@ -320,4 +324,180 @@ exports.notifySupportRequest = onDocumentCreated(
   async (event) => {
     await handleSupportCreated(event.data?.data(), event.params.requestId);
   }
+);
+
+// ---------------------------------------------------------------------
+// Resending a message that did not go out
+// ---------------------------------------------------------------------
+//
+// WHY THIS TAKES A LOG ENTRY ID AND NEVER AN ADDRESS, WHICH IS THE WHOLE
+// SECURITY ARGUMENT: the obvious shape for this function would accept a
+// recipient and a body, and that shape is an open relay wearing a Firebase
+// badge. Anyone who could call it could send mail from the store's own
+// authenticated Gmail account to anywhere, with the store's name on the
+// From line.
+//
+// So the caller supplies one thing — WHICH logged message to try again —
+// and every other input is re-derived here from the source document that
+// produced it in the first place. The recipient, the subject and the body
+// all come back out of the order or the support request. There is no
+// argument that changes where the mail goes, which means there is nothing
+// to point at a stranger. The seller check below limits who may press the
+// button; this limits what pressing it can possibly do, which is the
+// stronger of the two.
+//
+// The second consequence of re-deriving is correctness rather than
+// safety: the retried message is rendered by the same handler the trigger
+// uses, so it cannot drift from what the trigger would have sent. Storing
+// the rendered body in mailLog and replaying it would have been simpler
+// and would have frozen a copy of every template in the database.
+
+// reason -> [HttpsError code, message the Store Manager reads]. Kept as
+// data next to the callable rather than thrown from mailer.js, so that
+// file stays free of HTTP concepts and remains testable without a harness.
+const RETRY_REFUSALS = {
+  'not-found': ['not-found', 'That email is no longer in the delivery log.'],
+  'already-sent': [
+    'failed-precondition',
+    'That email already went out. It will not be sent a second time.',
+  ],
+  'in-flight': ['failed-precondition', 'That email is being sent right now. Give it a moment.'],
+  exhausted: [
+    'resource-exhausted',
+    `That email has already been retried ${MAX_RETRY_ATTEMPTS} times. Something about it is not going to fix itself — check the reason on the entry.`,
+  ],
+};
+
+// Finds the document a logged message was rendered from and returns a
+// function that re-runs the original handler over it.
+//
+// Runs BEFORE the entry is released, so an entry that can never be sent
+// again — a deleted order, an order with no address — refuses without
+// consuming one of its three attempts. Burning a retry on something
+// permanently unfixable would just be a slower way to reach 'exhausted'.
+async function resendAction(db, key, entry) {
+  // kind comes from the meta every send writes. Falling back to the key
+  // prefix covers entries written before kind existed; the key format is
+  // set in one place each, just above.
+  const kind =
+    entry.kind ||
+    (key.startsWith('order-') ? 'orderConfirmation' : null) ||
+    (key.startsWith('support-') ? 'supportRequest' : null);
+
+  if (kind === 'orderConfirmation') {
+    const orderId = entry.orderId || key.slice('order-'.length);
+    // Orders live under the customer, so the id alone does not locate one.
+    const customerId = entry.customerId;
+    if (!customerId) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This entry does not record which customer the order belongs to, so it cannot be rebuilt.'
+      );
+    }
+
+    const snapshot = await db.doc(`users/${customerId}/orders/${orderId}`).get();
+    if (!snapshot.exists) {
+      throw new HttpsError('failed-precondition', 'That order no longer exists.');
+    }
+
+    // The same test handleOrderCreated applies. Checked here too so a
+    // receipt with nowhere to go is refused out loud, rather than being
+    // released and then silently dropped — which would leave the entry
+    // sitting at 'retrying' with no explanation of why nothing happened.
+    const order = snapshot.data();
+    if (!order.customerEmail || order.customerEmail === 'unknown') {
+      throw new HttpsError(
+        'failed-precondition',
+        'That order has no email address on it, so there is nowhere to send the receipt.'
+      );
+    }
+
+    return () => handleOrderCreated(order, orderId);
+  }
+
+  if (kind === 'supportRequest') {
+    const requestId = entry.requestId || key.slice('support-'.length);
+    const snapshot = await db.doc(`supportRequests/${requestId}`).get();
+    if (!snapshot.exists) {
+      throw new HttpsError('failed-precondition', 'That support request has been deleted.');
+    }
+    return () => handleSupportCreated(snapshot.data(), requestId);
+  }
+
+  throw new HttpsError('failed-precondition', 'This kind of email cannot be resent.');
+}
+
+async function handleRetryMail(request) {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'Please sign in.');
+
+  const key = typeof request.data?.key === 'string' ? request.data.key.trim() : '';
+  if (!key) {
+    throw new HttpsError('invalid-argument', 'Which email should be sent again?');
+  }
+  // A document id, not a path. Without this a caller could walk out of
+  // mailLog and hand any collection to doc().
+  if (key.includes('/') || key.length > 200) {
+    throw new HttpsError('invalid-argument', 'That is not a delivery log entry.');
+  }
+
+  const db = getFirestore();
+
+  // Mirrors isSeller() in firestore.rules, deliberately including the
+  // isActive test. The rules already stop a deactivated seller reading
+  // mailLog at all, but this function runs with Admin SDK credentials and
+  // bypasses that file entirely, so the check has to be repeated here or
+  // it is not a check.
+  //
+  // Store Manager and not Platform Admin, matching who mailLog is for:
+  // the two roles are siblings, and email delivery is a store duty.
+  const actor = await db.doc(`users/${uid}`).get();
+  const actorData = actor.exists ? actor.data() : null;
+  if (!actorData || actorData.role !== 'seller' || actorData.isActive === false) {
+    throw new HttpsError(
+      'permission-denied',
+      'Only an active Store Manager can send email again.'
+    );
+  }
+
+  const entrySnapshot = await db.collection('mailLog').doc(key).get();
+  if (!entrySnapshot.exists) {
+    throw new HttpsError(...RETRY_REFUSALS['not-found']);
+  }
+
+  const send = await resendAction(db, key, entrySnapshot.data());
+
+  const released = await releaseForRetry(key);
+  if (!released.ok) {
+    const refusal = RETRY_REFUSALS[released.reason];
+    throw refusal
+      ? new HttpsError(...refusal)
+      : new HttpsError('failed-precondition', 'That email cannot be sent again.');
+  }
+
+  logger.info(`mail ${key} released for retry ${released.attempts} by ${uid}`);
+
+  // sendMail never throws; the outcome is in the document. So this reads
+  // the entry back rather than assuming success, and hands the real status
+  // to the caller — including 'unconfigured', which is what a retry
+  // attempted with the credentials missing again would produce.
+  await send();
+
+  const after = await db.collection('mailLog').doc(key).get();
+  const result = after.exists ? after.data() : {};
+  return {
+    status: result.status || 'unknown',
+    detail: result.detail || null,
+    to: result.to || null,
+    attempt: released.attempts,
+    attemptsLeft: Math.max(0, MAX_RETRY_ATTEMPTS - released.attempts),
+  };
+}
+
+exports._handleRetryMail = handleRetryMail;
+exports._resendAction = resendAction;
+
+exports.retryMail = onCall(
+  { region: REGION, secrets: MAIL_SECRETS },
+  handleRetryMail
 );

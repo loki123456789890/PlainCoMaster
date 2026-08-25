@@ -164,7 +164,13 @@ function shell({ preheader, heading, intro, body }) {
 // receipt missed while the mailbox was unconfigured would have been
 // permanently unsendable — and with the Gmail placeholders in place, that
 // is currently every receipt.
-const CLAIMABLE_STATUSES = ['unconfigured'];
+// 'retrying' is the second exemption, and it exists so that releasing a
+// message for another attempt is something a PERSON does explicitly and a
+// trigger cannot do at all. Nothing in the trigger path ever writes it —
+// only releaseForRetry() below — so the guarantee that matters here is
+// untouched: a redelivered Firestore event still cannot re-send a message
+// that already failed or already went out.
+const CLAIMABLE_STATUSES = ['unconfigured', 'retrying'];
 
 async function claimOnce(key, meta) {
   const db = getFirestore();
@@ -183,9 +189,21 @@ async function claimOnce(key, meta) {
       // No merge: a re-claim after 'unconfigured' should not inherit that
       // attempt's detail line, which would describe a state that no longer
       // applies.
+      //
+      // Which means every field that must OUTLIVE one attempt has to be
+      // carried across by hand — see retryCount below. RETRY-5 was written
+      // expecting the cap to work and found that it did not: the counter
+      // was being reset to zero by this very write on each claim, so the
+      // limit was unreachable and retries were effectively unbounded. A
+      // full overwrite is still right for a record OF one attempt; the
+      // counter is the one thing here that describes the entry instead.
       tx.set(ref, {
         ...meta,
         detail: null,
+        // Deliberately read from the snapshot rather than defaulted to 0,
+        // and deliberately not folded into `meta` — a caller that forgot
+        // it would silently uncap the retries again.
+        retryCount: Number(snapshot.exists ? snapshot.data().retryCount : 0) || 0,
         claimedAt: FieldValue.serverTimestamp(),
         // The field AdminMailLogScreen orders by, and it must be written
         // on EVERY path that creates one of these documents. Firestore's
@@ -227,6 +245,81 @@ async function recordOutcome(key, status, detail, extra) {
     },
     { merge: true }
   );
+}
+
+// What a person may hand back for another attempt.
+//
+// 'sent' is absent, and that is the whole spam guard on the recipient's
+// side: a message that reached Gmail is never sent twice, however many
+// times anyone taps the button.
+//
+// 'sending' is absent too, for a different reason — it means an attempt is
+// in flight, and releasing it would put two copies on the wire. The cost
+// is that a send which crashed between claiming and recording sticks at
+// 'sending' with no way back. That is deliberate: 'sending' cannot
+// distinguish "started a second ago" from "died an hour ago", and of the
+// two ways to be wrong, a message nobody resent beats a duplicate. It
+// shows in the log as a problem, so it is visible rather than lost.
+//
+// 'retrying' IS here, so that a retry which itself crashed before sending
+// can be picked up again rather than becoming a new kind of stuck.
+const RETRYABLE_STATUSES = ['failed', 'unconfigured', 'retrying'];
+
+// A ceiling on how many times one entry may be released.
+//
+// Not really a spam control — the recipient is re-derived from the source
+// document and never supplied by the caller, so there is no address to
+// point this at, and a send that keeps failing is by definition not
+// reaching anyone. It is here for the case that guard does NOT cover:
+// Gmail accepting a message and the connection dropping before we record
+// it, which lands in the log as 'failed' for mail that was in fact
+// delivered. Retrying that really does send a duplicate. Three bounds how
+// many.
+const MAX_RETRY_ATTEMPTS = 3;
+
+// Hands one logged message back for another attempt.
+//
+// Returns a plain result rather than throwing, and deliberately does not
+// know what an HttpsError is — this file owns the mailLog document and its
+// statuses, and emails.js owns the callable's contract. Keeping the
+// mapping there is what lets scripts/test-email.mjs exercise this without
+// a Cloud Functions harness.
+//
+// The status check and the counter increment share one transaction so two
+// taps on the same entry cannot both pass: the second reads 'retrying',
+// which is retryable, but reads the incremented count with it.
+async function releaseForRetry(key) {
+  const db = getFirestore();
+  const ref = db.collection('mailLog').doc(key);
+  return db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    if (!snapshot.exists) return { ok: false, reason: 'not-found' };
+
+    const data = snapshot.data();
+    if (data.status === 'sent') return { ok: false, reason: 'already-sent' };
+    if (!RETRYABLE_STATUSES.includes(data.status)) {
+      return { ok: false, reason: 'in-flight', status: data.status };
+    }
+
+    const attempts = Number(data.retryCount) || 0;
+    if (attempts >= MAX_RETRY_ATTEMPTS) {
+      return { ok: false, reason: 'exhausted', attempts };
+    }
+
+    tx.set(
+      ref,
+      {
+        status: 'retrying',
+        retryCount: attempts + 1,
+        // Cleared so the old failure's text does not sit under a new
+        // attempt's status and read as though it just happened.
+        detail: null,
+        recordedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { ok: true, entry: data, attempts: attempts + 1 };
+  });
 }
 
 // The value both secrets hold until someone sets the real ones. They have
@@ -343,6 +436,9 @@ const storeInbox = () => GMAIL_USER.value();
 module.exports = {
   MAIL_SECRETS,
   sendMail,
+  releaseForRetry,
+  RETRYABLE_STATUSES,
+  MAX_RETRY_ATTEMPTS,
   storeInbox,
   __setTransportForTests,
   UNCONFIGURED,

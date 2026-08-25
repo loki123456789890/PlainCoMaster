@@ -262,10 +262,33 @@ deployment:
       from a Store Manager dashboard card that appears only when something
       failed. `mailLog` gained a read rule for `isSeller()` and no write
       rule for anyone (MAIL-1, MAIL-2).
-- [ ] Nothing RETRIES a failed email — still true, and now visible rather
-      than silent. Retrying means re-invoking the mailer, which the client
-      cannot do; it would take a callable that re-sends one `mailLog`
-      entry, guarded so it cannot be used to spam an address. The screen
-      deliberately offers no fake substitute (no "mark as handled"), since
-      that would turn a record of what happened into a record of what
-      someone clicked.
+- [x] Failed email can be retried — `retryMail`, a callable, plus a "Send
+      again" button on every resendable entry in AdminMailLogScreen.
+
+      THE DESIGN DECISION WORTH KEEPING: the callable takes a `mailLog`
+      entry id and NOTHING else. Recipient, subject and body are all
+      re-derived from the order or support request that produced the
+      message. The obvious shape — accept an address and a body — is an
+      open relay wearing a Firebase badge, able to send from the store's
+      authenticated Gmail account to anywhere with the store's name on the
+      From line. The seller check limits who may press the button; taking
+      no address limits what pressing it can do, which is the stronger of
+      the two. RETRY-4 pins it by passing a hostile payload and asserting
+      the mail still goes to the order's own address.
+
+      Guards: active Store Manager only (re-checked server-side, since the
+      function bypasses rules); `sent` is never resendable; `sending` is
+      not either, so a crashed send stays stuck rather than risking a
+      duplicate; three attempts per entry; a key containing `/` is
+      refused before it reaches `doc()`; an unsendable entry (deleted
+      order, no address) refuses WITHOUT consuming an attempt.
+
+      Still no "mark as handled", deliberately — the entry changes because
+      the send changed it, never because someone clicked.
+
+      RETRY-5 found a live bug while being written: `claimOnce` used
+      `tx.set()` with no merge, a full document replacement, so every
+      claim reset `retryCount` to zero. The cap was unreachable and
+      retries were effectively unbounded. The counter is now carried
+      across explicitly, which is the general hazard with an overwriting
+      write — anything that must outlive one attempt has to be named.

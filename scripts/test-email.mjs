@@ -251,6 +251,221 @@ await test('MAILER-2  an unconfigured attempt does NOT consume the one-shot clai
   assertEqual((await entry('order-later1')).status, 'sent', 'and is recorded as sent');
 });
 
+console.log('\nResending (retryMail)');
+
+// The retry callable reads the SOURCE document rather than replaying a
+// stored body, so these tests need the order and support request to
+// actually exist — the whole point of the design is that a log entry
+// alone is not enough to send anything.
+async function seedActors() {
+  await db.doc('users/seller1').set({ role: 'seller', isActive: true, email: 'manager@plainco.test' });
+  await db.doc('users/customer1').set({ role: 'customer', isActive: true, email: 'cathy@example.com' });
+  await db.doc('users/gone').set({ role: 'seller', isActive: false, email: 'former@plainco.test' });
+}
+await seedActors();
+
+const asSeller = (key, extra = {}) => ({ auth: { uid: 'seller1' }, data: { key, ...extra } });
+
+async function expectReject(fn, code, what) {
+  try {
+    await fn();
+  } catch (error) {
+    assertEqual(error.code, code, `${what} (message: ${error.message})`);
+    return error;
+  }
+  throw new Error(`${what}: expected a rejection, got none`);
+}
+
+// Produces a genuinely failed entry the way production would — by letting
+// the real handler run against a transport that refuses — rather than by
+// hand-writing a mailLog document into the shape the test wants.
+async function seedFailedReceipt(transport, orderId, overrides = {}) {
+  const data = order(overrides);
+  await db.doc(`users/customer1/orders/${orderId}`).set(data);
+  transport.failNext('550 mailbox unavailable');
+  await emails._handleOrderCreated(data, orderId);
+  assertEqual((await entry(`order-${orderId}`)).status, 'failed', 'setup: the receipt failed');
+  return data;
+}
+
+await test('RETRY-1  a failed receipt sends on a second attempt', async (transport) => {
+  await seedFailedReceipt(transport, 'r1');
+
+  const result = await emails._handleRetryMail(asSeller('order-r1'));
+
+  assertEqual(result.status, 'sent', 'the callable reports the real outcome');
+  assertEqual(transport.sent.length, 1, 'exactly one message went out');
+  assertEqual(transport.sent[0].to, 'cathy@example.com', 'to the customer on the order');
+  assertEqual((await entry('order-r1')).status, 'sent', 'and the log agrees');
+});
+
+await test('RETRY-2  a message that already sent is never sent twice', async (transport) => {
+  // The spam guard as it applies to the recipient. 'sent' is absent from
+  // RETRYABLE_STATUSES for exactly this, and it is the assertion that
+  // stops a manager turning a receipt into a mailing by tapping a button
+  // repeatedly.
+  const data = order();
+  await db.doc('users/customer1/orders/r2').set(data);
+  await emails._handleOrderCreated(data, 'r2');
+  assertEqual(transport.sent.length, 1, 'setup: it sent once');
+
+  await expectReject(
+    () => emails._handleRetryMail(asSeller('order-r2')),
+    'failed-precondition',
+    'a sent message is refused'
+  );
+
+  assertEqual(transport.sent.length, 1, 'still exactly one message');
+});
+
+await test('RETRY-3  only an active Store Manager may resend', async (transport) => {
+  await seedFailedReceipt(transport, 'r3');
+
+  await expectReject(
+    () => emails._handleRetryMail({ auth: null, data: { key: 'order-r3' } }),
+    'unauthenticated',
+    'signed out'
+  );
+  await expectReject(
+    () => emails._handleRetryMail({ auth: { uid: 'customer1' }, data: { key: 'order-r3' } }),
+    'permission-denied',
+    'a customer'
+  );
+  // The rules already deny a deactivated seller, but this function runs
+  // with Admin credentials and bypasses them, so the check has to exist
+  // here independently.
+  await expectReject(
+    () => emails._handleRetryMail({ auth: { uid: 'gone' }, data: { key: 'order-r3' } }),
+    'permission-denied',
+    'a deactivated Store Manager'
+  );
+
+  assertEqual(transport.sent.length, 0, 'none of them sent anything');
+});
+
+await test('RETRY-4  the caller cannot choose the recipient', async (transport) => {
+  // THE test for this design. The callable takes a log entry id and
+  // re-derives everything else, so extra fields in the payload are inert.
+  // If this ever fails, the function has become an open relay sending
+  // from the store's authenticated Gmail account.
+  await seedFailedReceipt(transport, 'r4');
+
+  const result = await emails._handleRetryMail(
+    asSeller('order-r4', {
+      to: 'attacker@example.com',
+      subject: 'Your account is suspended',
+      html: '<p>Click here</p>',
+      text: 'Click here',
+      replyTo: 'attacker@example.com',
+    })
+  );
+
+  assertEqual(result.status, 'sent', 'it still sends');
+  assertEqual(transport.sent.length, 1, 'once');
+  assertEqual(transport.sent[0].to, 'cathy@example.com', 'to the order, not the payload');
+  assert(
+    transport.sent[0].subject.startsWith('Your PlainCo order'),
+    'with the real subject, not the payload'
+  );
+  assert(
+    !transport.sent[0].html.includes('Click here'),
+    'and the real body, not the payload'
+  );
+});
+
+await test('RETRY-5  attempts are capped', async (transport) => {
+  const data = await seedFailedReceipt(transport, 'r5');
+
+  // Three releases, each of which fails again.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    transport.failNext('550 mailbox unavailable');
+    const result = await emails._handleRetryMail(asSeller('order-r5'));
+    assertEqual(result.status, 'failed', `attempt ${attempt} failed`);
+    assertEqual(result.attempt, attempt, `attempt ${attempt} is counted`);
+  }
+
+  await expectReject(
+    () => emails._handleRetryMail(asSeller('order-r5')),
+    'resource-exhausted',
+    'the fourth is refused'
+  );
+  assertEqual(transport.sent.length, 0, 'nothing ever reached the transport');
+  assert(data.customerEmail === 'cathy@example.com', 'the order was untouched');
+});
+
+await test('RETRY-6  an unsendable entry does not burn an attempt', async (transport) => {
+  // A deleted order can never be rebuilt, so refusing it must not walk it
+  // toward the cap — otherwise the entry ends up 'exhausted', which reads
+  // as "we tried three times" when nothing was ever attempted.
+  await seedFailedReceipt(transport, 'r6');
+  await db.doc('users/customer1/orders/r6').delete();
+
+  for (let i = 0; i < 4; i += 1) {
+    await expectReject(
+      () => emails._handleRetryMail(asSeller('order-r6')),
+      'failed-precondition',
+      `refusal ${i + 1} names the missing order`
+    );
+  }
+
+  const after = await entry('order-r6');
+  assertEqual(after.status, 'failed', 'the entry is untouched');
+  assertEqual(after.retryCount ?? 0, 0, 'and no attempt was counted');
+});
+
+await test('RETRY-7  the stuck unconfigured receipt is what this fixes', async (transport) => {
+  // The case that motivated the whole feature: a receipt logged while the
+  // Gmail placeholders were in place, which nothing could re-send, leaving
+  // the dashboard alarm permanently lit.
+  process.env.GMAIL_USER = mailer.UNCONFIGURED;
+  const data = order();
+  await db.doc('users/customer1/orders/r7').set(data);
+  await emails._handleOrderCreated(data, 'r7');
+  assertEqual((await entry('order-r7')).status, 'unconfigured', 'setup: nothing was sent');
+
+  process.env.GMAIL_USER = 'shop@plainco.test';
+  const result = await emails._handleRetryMail(asSeller('order-r7'));
+
+  assertEqual(result.status, 'sent', 'it goes out once credentials exist');
+  assertEqual(transport.sent.length, 1, 'exactly once');
+});
+
+await test('RETRY-8  a support alert resends to the store, not the customer', async (transport) => {
+  const request = supportRequest();
+  await db.doc('supportRequests/r8').set(request);
+  transport.failNext('Connection timed out');
+  await emails._handleSupportCreated(request, 'r8');
+  assertEqual((await entry('support-r8')).status, 'failed', 'setup: it failed');
+
+  const result = await emails._handleRetryMail(asSeller('support-r8'));
+
+  assertEqual(result.status, 'sent', 'the retry sent it');
+  assertEqual(transport.sent[0].to, 'shop@plainco.test', 'to the store inbox');
+  assertEqual(transport.sent[0].replyTo, 'cathy@example.com', 'replying to the customer');
+});
+
+await test('RETRY-9  a key cannot escape mailLog', async () => {
+  // key goes to doc(), so a slash would let a caller address any
+  // collection in the database.
+  for (const key of ['users/seller1', '../users/seller1', 'mailLog/order-x/sub/doc']) {
+    await expectReject(
+      () => emails._handleRetryMail(asSeller(key)),
+      'invalid-argument',
+      `${key} is refused`
+    );
+  }
+  await expectReject(
+    () => emails._handleRetryMail(asSeller('   ')),
+    'invalid-argument',
+    'an empty key is refused'
+  );
+  await expectReject(
+    () => emails._handleRetryMail(asSeller('order-nonexistent')),
+    'not-found',
+    'an unknown entry is refused'
+  );
+});
+
 console.log('\nCross-package consistency');
 
 await test('DRIFT-1  the mailer formats order numbers identically to the app', async () => {
