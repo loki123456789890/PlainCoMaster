@@ -220,9 +220,25 @@ deployment:
       by hand as of 2026-08-25; a regression would be silent.
 - [ ] iOS/HEIC photo upload confirmation, if the device test was Android
       only.
-- [ ] Real Gmail credentials. Worth more now that the claim bug is fixed:
-      entries logged `unconfigured` are genuinely re-sendable rather than
-      permanently stuck.
+- [x] Real Gmail credentials set and verified 2026-08-25. Both secrets are
+      at version 2 in Secret Manager (version 1 is still the placeholder,
+      enabled but unused); `sendOrderConfirmation` and
+      `notifySupportRequest` were redeployed to bind them, since secrets
+      bind at deploy time and setting them alone changes nothing.
+
+      Verified by a real support request rather than an order: both paths
+      share `sendMail()`, so either proves the credentials, but
+      supportRequests has `allow delete: if isSeller()` while orders have
+      no delete rule for anyone and an order would also decrement stock.
+      Production logs show `mail support-5p5P8… sent`, and the mail
+      landed.
+
+      NOTE the side effect, which is the retry item below becoming real
+      rather than theoretical: the one order receipt logged `unconfigured`
+      before this is now stuck that way permanently, so the dashboard's
+      "1 email didn't send" card is lit for good. A conditional alarm that
+      never clears is worse than no alarm — it trains the reader to ignore
+      the thing that is supposed to catch a genuine failure.
 
 ### Known gaps in what shipped
 

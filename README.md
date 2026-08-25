@@ -252,11 +252,21 @@ of them.
    character for character. Paste it into the search box INCLUDING the
    leading "#", exactly as a customer would quote it — that is the form
    every screen and the receipt email show them, and it must match.
-7. The dashboard shows an **"1 email didn't send"** card. This is expected
-   and is the correct behaviour while the Gmail placeholders are in place:
-   tapping through should show one entry with status **Not sent**. If the
-   card is absent, either the trigger did not fire or `recordedAt` is
+7. The receipt arrives, and the mail log records it. Open Email Delivery
+   from the dashboard and confirm an **Order receipt** entry with status
+   **Sent**.
+
+   **The dashboard card is a filter, not a banner.** It only appears when
+   something failed, and tapping it opens Email Delivery *pre-filtered to
+   problems only* — so a successful send is hidden by the very card you
+   arrived through, and the screen can look empty when everything worked.
+   Clear the filter with the **×** on the red chip to see all mail. If you
+   see no entry either way, the trigger did not fire or `recordedAt` is
    missing — check `firebase functions:log`.
+
+   Note there is one permanently stuck `unconfigured` receipt from before
+   the credentials were set, so on this project the card is lit regardless.
+   Nothing retries yet; see TODO.
 
 **Session behaviour** (needs a second account):
 
