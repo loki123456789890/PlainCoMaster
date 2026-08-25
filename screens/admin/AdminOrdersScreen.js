@@ -32,6 +32,7 @@ import {
 } from 'firebase/firestore';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { parseStock, totalQuantityByProductId } from '../../utils/stock';
+import { orderNumber } from '../../utils/orderNumber';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
 import EmptyState from '../../components/ui/EmptyState';
@@ -214,7 +215,12 @@ export default function AdminOrdersScreen({ navigation }) {
           return {
             id: docSnap.id,
             ref: docSnap.ref, // needed to write status updates back to the correct document
-            orderNumber: docSnap.id.slice(0, 8).toUpperCase(),
+            // Stored BARE, without the leading "#", because this field is
+            // what the search box below filters against — and a customer
+            // reading the number off a receipt or an email may or may not
+            // include the hash when they quote it. The six render sites
+            // add it themselves.
+            orderNumber: orderNumber(docSnap.id),
             customerEmail: data.customerEmail || 'Unknown customer',
             customerId: data.customerId || null,
             date: data.createdAt?.toDate ? data.createdAt.toDate() : null,

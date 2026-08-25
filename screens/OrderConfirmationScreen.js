@@ -35,15 +35,12 @@ import Animated, {
 import { Colors, Spacing, Radius } from '../constants/theme';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 import { getPaymentLabel, getPaymentIcon, isPayOnDelivery } from '../constants/payment';
+import { formatOrderNumber } from '../utils/orderNumber';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import ProductImage from '../components/ui/ProductImage';
 
-// Same slice(0, 8).toUpperCase() convention OrderDetailsScreen and
-// AdminOrdersScreen already use, so the number a customer reads here is
-// character-for-character the one support will search for.
-const formatOrderNumber = (id) => (id ? `#${String(id).slice(0, 8).toUpperCase()}` : '—');
 
 // The one moment on this screen that earns motion: a single settle on the
 // success mark. Not a celebration — PRODUCT.md rules out flash-sale

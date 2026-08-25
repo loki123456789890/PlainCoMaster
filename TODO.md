@@ -162,11 +162,15 @@ deployment:
       `set({merge:true})`, which CREATES the document, so the unconfigured
       path did consume the claim and every receipt missed while the mailbox
       was unconfigured would have been permanently unsendable.
-- [ ] `formatOrderNumber` now exists in three places —
-      OrderConfirmationScreen, OrderDetailsScreen, and functions/mailer.js.
-      The first two could move to `constants/`; the third cannot follow,
-      because functions/ is a separate CommonJS package. Same drift shape
-      that justified constants/payment.js.
+- [x] `formatOrderNumber` was in FOUR places, not three — AdminOrdersScreen
+      held an undocumented fourth copy that had already drifted (no `#`, no
+      null guard, because it stores the bare value to search against). The
+      three app copies now share `utils/orderNumber.js`, which exports both
+      shapes: `orderNumber()` bare for storing and searching,
+      `formatOrderNumber()` prefixed for display. functions/mailer.js still
+      cannot import across the package boundary, so its copy stays — but
+      `DRIFT-1` in `npm run test:email` asserts the two agree on every id
+      including the falsy ones, which makes the comment a check.
 - [x] ~~Nothing reads `mailLog`~~ — AdminMailLogScreen does now, reached
       from a Store Manager dashboard card that appears only when something
       failed. `mailLog` gained a read rule for `isSeller()` and no write

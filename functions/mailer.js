@@ -70,10 +70,20 @@ const GOLD = '#846B1A';
 
 const SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
-// Matches formatOrderNumber in OrderConfirmationScreen.js and
-// OrderDetailsScreen.js. A customer who reads this number off an email and
-// then reads it off the app must see the same string, so this is the third
-// copy of one line and the copies must not drift.
+// THE ONE COPY OF utils/orderNumber.js THAT CANNOT IMPORT IT.
+//
+// The app package consolidated four hand-written copies of this into
+// utils/orderNumber.js. This is not a fifth that was missed — functions/
+// is a separate CommonJS package with its own dependency tree, and that
+// file is an ESM module in the app package, so there is no import that
+// reaches it. Duplication here is the cost of the package boundary.
+//
+// It must be changed in step with utils/orderNumber.js. The reason is not
+// tidiness: this is the number a customer reads off an EMAIL and then
+// quotes to support, who types it into AdminOrdersScreen's search box. If
+// this copy drifts by a character it looks broken nowhere — it just stops
+// matching, and surfaces as a customer insisting an order exists while a
+// manager cannot find it.
 const formatOrderNumber = (id) => (id ? `#${String(id).slice(0, 8).toUpperCase()}` : '—');
 
 // Gold is the money colour and pesos are always written this way in the

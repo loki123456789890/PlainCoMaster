@@ -30,6 +30,7 @@ import StarRating from '../components/ui/StarRating';
 import ProductImage from '../components/ui/ProductImage';
 import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
 import { getPaymentLabel, getPaymentIcon } from '../constants/payment';
+import { formatOrderNumber } from '../utils/orderNumber';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // "Pending" and "processing" share one visual status — an order is
@@ -91,10 +92,6 @@ const getTimelineStepIndex = (status) => {
   }
 };
 
-// A short, human order number instead of the raw Firestore document id —
-// same slice(0, 8).toUpperCase() convention AdminOrdersScreen already uses,
-// so the "same" order reads the same way to a customer and to support.
-const formatOrderNumber = (id) => (id ? `#${String(id).slice(0, 8).toUpperCase()}` : '—');
 
 // Horizontal Processing -> Shipped -> Delivered progress. Reached steps
 // fill with the order's status color; the current step gets a soft ring;

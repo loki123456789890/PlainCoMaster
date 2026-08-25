@@ -251,6 +251,43 @@ await test('MAILER-2  an unconfigured attempt does NOT consume the one-shot clai
   assertEqual((await entry('order-later1')).status, 'sent', 'and is recorded as sent');
 });
 
+console.log('\nCross-package consistency');
+
+await test('DRIFT-1  the mailer formats order numbers identically to the app', async () => {
+  // functions/mailer.js keeps its own copy of formatOrderNumber because
+  // functions/ is a separate CommonJS package and utils/orderNumber.js is
+  // an ESM module in the app package — there is no import that crosses
+  // that boundary. A comment there says the two must not drift. This makes
+  // that enforceable instead of aspirational.
+  //
+  // It matters because the two copies meet in one place: a customer reads
+  // the number off an EMAIL rendered by the mailer, then quotes it to
+  // support, who types it into AdminOrdersScreen's search box, which
+  // filters on the app's copy. A one-character divergence looks broken
+  // nowhere and simply stops matching.
+  const app = await import('../utils/orderNumber.js');
+
+  const ids = [
+    'aBcDeF1234567890',
+    'ZZZZZZZZZZZZZZZZZZZZ',
+    'short',
+    '12345678',
+    // The falsy cases, where the two could plausibly disagree on the
+    // placeholder rather than on the slice.
+    '',
+    null,
+    undefined,
+  ];
+
+  for (const id of ids) {
+    assertEqual(
+      mailer.formatOrderNumber(id),
+      app.formatOrderNumber(id),
+      `formatOrderNumber(${JSON.stringify(id)})`
+    );
+  }
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   for (const { name } of failures) console.error(`FAILED: ${name}`);
