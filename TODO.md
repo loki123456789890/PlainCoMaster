@@ -172,10 +172,23 @@ deployment:
 
 ### Still needs a device or an account, not code
 
-- [ ] A real order placed through the app. The suites cover the server;
-      nothing has exercised Checkoutscreen calling the deployed callable,
-      the confirmation screen rendering, or the dashboard mail-log card
-      appearing. See the checklist at the end of README.
+- [x] A real order placed through the app — **verified 2026-08-25**.
+      Confirmation screen rendered, and the dashboard mail-log card
+      appeared. Production logs show the full chain with no errors:
+      `placeOrder` invoked, `"verifications":{"app":"MISSING","auth":
+      "VALID"}`, then `sendOrderConfirmation` firing two seconds later and
+      logging `mail order-NoMd… not sent: GMAIL_USER is unset or still the
+      placeholder` — which is the designed behaviour, not a fault.
+
+      `"app":"MISSING"` is worth noting: that is the App Check field, and
+      it confirms empirically what the SDK analysis concluded. Requests
+      reach this callable with no attestation, which is why the per-user
+      rate limit is the compensating control rather than a nice-to-have.
+
+- [ ] Still unexercised by that pass: the session paths (steps 8–10 of the
+      README checklist). Cold start with a persisted session, logout, and
+      mid-session deactivation are all timing-dependent and none are
+      reachable from any suite.
 - [ ] iOS/HEIC photo upload confirmation, if the device test was Android
       only.
 - [ ] Real Gmail credentials. Worth more now that the claim bug is fixed:
