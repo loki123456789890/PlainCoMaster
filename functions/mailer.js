@@ -160,12 +160,37 @@ async function claimOnce(key, meta) {
   }
 }
 
-async function recordOutcome(key, status, detail) {
+// `extra` carries the recipient and subject on paths that never claimed —
+// claimOnce writes those, so without this an unconfigured entry would be a
+// status with no indication of what message it belonged to.
+async function recordOutcome(key, status, detail, extra) {
   const db = getFirestore();
   await db.collection('mailLog').doc(key).set(
-    { status, detail: detail || null, finishedAt: FieldValue.serverTimestamp() },
+    {
+      ...(extra || {}),
+      status,
+      detail: detail || null,
+      finishedAt: FieldValue.serverTimestamp(),
+    },
     { merge: true }
   );
+}
+
+// The value both secrets hold until someone sets the real ones. They have
+// to EXIST for any deploy to succeed — the CLI validates every declared
+// secret while it builds the deployment plan, so a missing GMAIL_USER
+// blocks `--only functions:placeOrder` just as surely as it blocks the
+// senders. Creating them as placeholders is what lets checkout deploy
+// before the mailbox is sorted out.
+const UNCONFIGURED = 'unconfigured@example.invalid';
+
+// Whether real credentials have landed yet. Checked before anything is
+// sent, because the alternative is a steady drip of SMTP authentication
+// failures in the log that look like a broken mailbox rather than one that
+// was never set up. This says which it is.
+function mailConfigured() {
+  const user = GMAIL_USER.value();
+  return Boolean(user) && user !== UNCONFIGURED && user.includes('@');
 }
 
 // The transport is built per invocation rather than at module load,
@@ -189,6 +214,26 @@ async function sendMail({ key, to, subject, html, text, replyTo, meta }) {
     logger.warn(`mail ${key} has no recipient, skipping`);
     return;
   }
+
+  // Deliberately does NOT claim: an unconfigured mailbox is a temporary
+  // state, and writing the one-shot guard here would mean that once
+  // credentials arrive, the backlog of messages missed in the meantime
+  // could never be sent by anything that reads mailLog. Recorded with
+  // set() instead, so that backlog is at least legible.
+  if (!mailConfigured()) {
+    logger.warn(
+      `mail ${key} not sent: GMAIL_USER is unset or still the placeholder. ` +
+      'Run `firebase functions:secrets:set GMAIL_USER` and ' +
+      '`firebase functions:secrets:set GMAIL_APP_PASSWORD`, then redeploy.'
+    );
+    await recordOutcome(key, 'unconfigured', 'no mail credentials set', {
+      to,
+      subject,
+      ...meta,
+    });
+    return;
+  }
+
   if (!(await claimOnce(key, { to, subject, ...meta }))) return;
 
   try {
