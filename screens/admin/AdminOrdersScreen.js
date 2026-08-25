@@ -32,7 +32,7 @@ import {
 } from 'firebase/firestore';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { parseStock, totalQuantityByProductId } from '../../utils/stock';
-import { orderNumber } from '../../utils/orderNumber';
+import { orderNumber, normalizeOrderNumberQuery } from '../../utils/orderNumber';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
 import EmptyState from '../../components/ui/EmptyState';
@@ -249,9 +249,21 @@ export default function AdminOrdersScreen({ navigation }) {
   const handleRetry = () => setRetryToken((t) => t + 1);
 
   const filteredOrders = orders.filter((order) => {
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
+    // The order number is matched against a NORMALISED query, the email
+    // against the raw one. They need different treatment: a customer
+    // quotes their number as "#NOMDQMGO" because that is what every screen
+    // and the receipt email show them, while the stored value is bare —
+    // so a paste of the displayed form matched nothing and said nothing.
+    // An email address, meanwhile, must keep its "@" and dots.
+    //
+    // Guarded on length so an empty search still matches everything:
+    // "".includes("") is true, which is the behaviour an empty box should
+    // have, but ''.includes() on the normalised side would make the first
+    // clause true for every row regardless.
+    const orderQuery = normalizeOrderNumberQuery(searchQuery).toLowerCase();
     const matchesSearch =
-      order.orderNumber.toLowerCase().includes(q) ||
+      (orderQuery.length > 0 && order.orderNumber.toLowerCase().includes(orderQuery)) ||
       order.customerEmail.toLowerCase().includes(q);
 
     if (activeTab === 'all') return matchesSearch;

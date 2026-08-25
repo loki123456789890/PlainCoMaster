@@ -11,6 +11,7 @@
     "test:rules": "node scripts/run-rules-tests.mjs",
     "preview:email": "node scripts/preview-email.mjs",
     "test:rate-limit": "node scripts/test-rate-limit.mjs",
+    "test:order-number": "node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON scripts/test-order-number.mjs",
     "test:email": "node scripts/run-rules-tests.mjs scripts/test-email.mjs",
     "test:checkout": "node scripts/run-rules-tests.mjs scripts/test-checkout.mjs",
     "rules:deploy": "firebase deploy --only firestore:rules",

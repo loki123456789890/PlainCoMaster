@@ -171,6 +171,7 @@ npm run test:rules       # 83 — firestore.rules, every role
 npm run test:checkout    # 12 — placeOrder end to end
 npm run test:email       #  9 — the two mail triggers
 npm run test:rate-limit  #  9 — the order throttle's arithmetic
+npm run test:order-number #  8 — the one string that crosses every boundary
 npm run preview:email    #      renders the templates for eyeballing
 ```
 
@@ -248,9 +249,9 @@ of them.
 **Then, as a Store Manager:**
 
 6. The order appears in Orders with the same number the customer saw,
-   character for character. That number is the whole point of
-   [utils/orderNumber.js](utils/orderNumber.js) — paste it into the search
-   box and confirm it matches.
+   character for character. Paste it into the search box INCLUDING the
+   leading "#", exactly as a customer would quote it — that is the form
+   every screen and the receipt email show them, and it must match.
 7. The dashboard shows an **"1 email didn't send"** card. This is expected
    and is the correct behaviour while the Gmail placeholders are in place:
    tapping through should show one entry with status **Not sent**. If the

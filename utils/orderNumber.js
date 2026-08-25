@@ -45,3 +45,21 @@ export const orderNumber = (id) =>
 // An em dash for a missing id, matching how the rest of the app renders an
 // absent value rather than printing a bare "#".
 export const formatOrderNumber = (id) => (id ? `#${orderNumber(id)}` : '—');
+
+// Cleans up a number as a HUMAN typed or pasted it, for matching against
+// the stored bare form.
+//
+// This exists because the two forms above meet in one place and did not
+// agree there. AdminOrdersScreen stores the bare "ABCDEF12" and searches
+// it with a plain substring match — but every place a customer SEES their
+// number shows "#ABCDEF12", hash included, on a line deliberately made
+// selectable so it can be copied rather than transcribed. So the most
+// likely thing anyone pastes into that search box is the one string it
+// could not match, and the result was silence rather than an error.
+//
+// Strips leading hashes and surrounding whitespace (a copy-paste routinely
+// brings a trailing space) and upper-cases, since the stored form is
+// upper-case. Everything else is left alone: this normalises a formatting
+// convention, it does not try to guess at typos.
+export const normalizeOrderNumberQuery = (query) =>
+  String(query ?? '').trim().replace(/^#+/, '').toUpperCase();

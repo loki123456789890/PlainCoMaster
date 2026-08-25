@@ -92,7 +92,7 @@ const cli = join('node_modules', 'firebase-tools', 'lib', 'bin', 'firebase.js');
 const target = process.argv[2] || 'scripts/test-rules.mjs';
 const result = spawnSync(
   process.execPath,
-  [cli, 'emulators:exec', '--only', 'firestore', `node ${target}`],
+  [cli, 'emulators:exec', '--only', 'firestore', `node --no-warnings=MODULE_TYPELESS_PACKAGE_JSON ${target}`],
   { env, stdio: 'inherit' }
 );
 
