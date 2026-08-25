@@ -49,7 +49,7 @@ design or a server.
       confirm first and are marked "Step back" in the picker; the
       activity log is what makes them accountable.
 
-## Batch 4 — Tier 1 features (in progress)
+## Batch 4 — Tier 1 features
 
 - [x] `storage.rules` + `firebase.json` wiring — the bucket was
       configured but ungoverned by anything in this repo
@@ -67,17 +67,37 @@ design or a server.
 - [ ] Confirm on the second platform. HEIC is iOS-specific, so if the
       device test was Android only, whether iOS actually yields JPEG is
       still unverified.
-- [ ] Storage rules still have no emulator coverage; `npm run
-      test:rules` is Firestore-only.
-- [ ] Storage rules have no emulator coverage; `npm run test:rules` is
-      Firestore-only
-- [ ] Live product subscription on Productscreen (currently a frozen
-      nav param, so stock and price go stale)
-- [ ] Order confirmation screen — the order number is never shown
-- [ ] Low-stock alerts on the Store Manager dashboard
-- [ ] "Duplicate product" action
-- [ ] Firestore offline persistence
-- [ ] Swap image rendering to `expo-image` for disk caching
+- [x] Live product subscription on Productscreen — was a frozen nav
+      param, so stock and price went stale while a shopper read the page
+- [x] Order confirmation screen, with the order number the customer
+      previously never saw
+- [x] Low-stock alerts on the Store Manager dashboard, tapping through
+      to a filtered product list
+- [x] "Duplicate product" action
+- [x] `expo-image` for disk caching, replacing four drifted copies of
+      the same fade-in wrapper
+- [ ] ~~Firestore offline persistence~~ — **not possible as scoped, and
+      the audit was wrong about this.** The JS SDK's
+      `persistentLocalCache` is IndexedDB-backed and React Native has no
+      IndexedDB; the RN build exports the function but ships none of the
+      storage layer behind it (`SimpleDb`,
+      `IndexedDbOfflineComponentProvider` are absent from
+      `index.rn.js`). Calling it would fail or silently do nothing.
+
+      What the app actually has today: an in-memory cache per session, so
+      repeated reads within one session are served locally and writes
+      queue while offline until the app is killed. What it lacks is
+      survival across restarts.
+
+      Real options, none of them small:
+      - `@react-native-firebase/firestore` (native SDK) has real disk
+        persistence on by default, but it is a different API surface, a
+        full migration, and needs a custom dev build — no Expo Go.
+      - Hand-roll an AsyncStorage cache for the catalog specifically.
+      - Accept it. Note the practical gap is now much smaller than the
+        audit implied: `expo-image` caches the photos, which are the
+        overwhelming majority of the bytes. What is left uncached is
+        JSON, which is small.
 
 ## Batch 5 — the server
 
