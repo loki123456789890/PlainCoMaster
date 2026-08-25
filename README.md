@@ -275,8 +275,12 @@ of them.
     b. In the Firebase Console → Firestore → `users/{that-uid}`, set
        `isActive` to `false`. Console writes bypass security rules, so
        this is exactly what a Platform Admin's deactivation writes.
-    c. Watch the device. Within a second or two it should show "Account
-       Deactivated" and return to Landing.
+    c. Watch the device. Within a second or two it should return to
+       Landing with an "Account Deactivated" notice over it.
+
+    Dismiss that notice with Android's BACK gesture rather than the OK
+    button. You should still be on Landing — the navigation does not
+    depend on which way the notice is closed.
 
     With two devices, Platform Admin → Users on the second works the same
     way — the point is only that the first session stays live.

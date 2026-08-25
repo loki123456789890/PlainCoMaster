@@ -189,7 +189,14 @@ deployment:
       the displayed `#NOMDQMGO` form now finds the order, which is what a
       customer actually quotes. It did not before, silently.
 
-- [ ] Still unexercised: the session paths (steps 8–10 of the README
+- [x] Mid-session revocation verified on device 2026-08-25 — the notice
+      appeared and the session ended. Reviewing the screenshot found a
+      follow-up: resetToLanding() hung off the OK button, and AppAlertHost
+      sets onRequestClose, so Android BACK dismissed the notice without
+      navigating. Reset now runs before the alert, independent of how it
+      is closed.
+
+- [ ] Still unexercised: steps 8-9 of the README
       checklist). Cold start with a persisted session, logout, and
       mid-session deactivation are all timing-dependent and none are
       reachable from any suite. These are now the newest client code in the

@@ -97,6 +97,22 @@ export const AdminProvider = ({ children }) => {
       console.error('Error signing out a deactivated account:', error);
     }
 
+    // Navigate BEFORE the notice, and do not hang the navigation off the
+    // alert's button.
+    //
+    // AppAlertHost is a Modal with onRequestClose, so Android's back
+    // gesture dismisses it without running any button's onPress. Putting
+    // resetToLanding() on the OK handler meant a customer who pressed Back
+    // instead of OK stayed on whatever screen they were on — signed out,
+    // looking at stale data, every read failing. That is the exact
+    // experience this whole listener was built to replace, reachable by
+    // the more natural of the two gestures.
+    //
+    // Resetting first makes the outcome independent of how the notice is
+    // dismissed. The alert renders above the navigator rather than inside
+    // it, so it survives the reset and is read on Landing.
+    resetToLanding();
+
     // NOT the only place this message can come from, deliberately.
     // Loginscreen and AdminLoginScreen each check isActive right after
     // authenticating and refuse the sign-in there, which this does not
@@ -113,7 +129,7 @@ export const AdminProvider = ({ children }) => {
     showAppAlert(
       'Account Deactivated',
       'This account has been deactivated, so you have been signed out. Please contact support if you believe this is a mistake.',
-      [{ text: 'OK', onPress: () => resetToLanding() }]
+      [{ text: 'OK' }]
     );
   }, []);
 
