@@ -11,6 +11,7 @@ import { FavoritesProvider } from './context/FavoritesContext';
 import { CartProvider } from './context/CartContext';
 import withRoleGuard from './components/withRoleGuard';
 import AppAlertHost from './components/ui/AppAlertHost';
+import { navigationRef } from './navigationRef';
 
 // Import all screens
 import LandingScreen from './screens/LandingScreen';
@@ -78,7 +79,10 @@ export default function App() {
         <ProductProvider>
           <FavoritesProvider>
             <CartProvider>
-              <NavigationContainer>
+              {/* ref lets AdminContext bounce a deactivated account back
+                  to Landing — it sits above this container and has no
+                  navigation prop of its own. See navigationRef.js. */}
+              <NavigationContainer ref={navigationRef}>
                 <Stack.Navigator
                   initialRouteName="Landing"
                   screenOptions={{

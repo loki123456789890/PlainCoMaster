@@ -36,11 +36,14 @@ design or a server.
       accepts both shapes
 - [x] All `react/no-unescaped-entities` errors cleared (source is at
       zero lint errors)
-- [ ] **Deferred:** persisted sessions still land on Landing. Auto-routing
-      them makes a case newly reachable that isn't today — a customer
-      deactivated since their last launch, since a persisted session
-      bypasses the login check. Needs AdminContext to expose
-      account-active state; belongs with session revocation below.
+- [ ] **Unblocked, not yet done:** persisted sessions still land on
+      Landing. The blocker is gone — AdminContext now exposes
+      `accountActive`, which is exactly the state auto-routing needed, and
+      a deactivated session is signed out on sight rather than being
+      carried into the app. What remains is the routing decision itself:
+      where a returning signed-in customer should land, and how to avoid a
+      flash of Landing before the redirect. Treat `accountActive === null`
+      as "not known yet" and wait, never as inactive.
 - [x] Order status transitions: decided to keep backward moves allowed
       and make them deliberate instead. Forward-only would have made a
       one-tap mis-tap permanent, and it protects nothing — the only
@@ -124,6 +127,28 @@ deployment:
 - [ ] Per-user rate limiting inside `placeOrder` — the nearest available
       answer to what App Check would have covered (abuse of the callable
       by something that is not the app). Needs no new SDK.
+
+## Batch 6 — session revocation (H8)
+
+- [x] Deactivation now takes effect mid-session. AdminContext's one-shot
+      `getDoc` on the user document became an `onSnapshot`, so a
+      deactivated account is signed out on sight instead of discovering
+      the fact through a string of denied writes. The listener's error
+      path deliberately does NOT revoke — offline and a backend blip both
+      land there, and ejecting someone mid-checkout over a dropped
+      connection is worse than the bug being fixed.
+- [x] `accountActive` exposed from AdminContext, kept separate from
+      `role`. `resolvePrivilegedRole` collapses "no document", "unknown
+      role" and "deactivated" into one null, which is right for the role
+      question and wrong for revocation — only the third means sign out.
+- [x] `SPLIT-8` pins the rule the whole mechanism rests on: a deactivated
+      account can still READ its own document. Gate that on `isActive` and
+      revocation stops working silently, because the listener would take
+      the error path, which does not revoke.
+- [x] Self-deactivation from ProfileScreen suppresses the notice via
+      `acknowledgeSelfDeactivation()` — the write is identical to an
+      admin's, and without it someone closing their own account would be
+      told to contact support about a mistake they made on purpose.
 
 ### Known gaps in what shipped
 

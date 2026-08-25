@@ -1,8 +1,10 @@
 // context/AdminContext.jsx
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef, useCallback } from 'react';
 import { auth, db } from '../firebaseConfig';
-import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { showAppAlert } from '../utils/appAlert';
+import { resetToLanding } from '../navigationRef';
 
 const AdminContext = createContext();
 
@@ -41,42 +43,167 @@ export const AdminProvider = ({ children }) => {
   // still-authenticated seller/platformAdmin before their role has
   // actually been checked).
   const [adminLoading, setAdminLoading] = useState(true);
+  // Whether this account is usable at all, which is a DIFFERENT question
+  // from what role it has, and the reason it needs its own state.
+  // resolvePrivilegedRole() deliberately collapses "no document",
+  // "unrecognized role" and "deactivated" into one null, because for the
+  // role question those three really are the same answer. For revocation
+  // they are not: only the third means "sign this person out", and the
+  // other two describe ordinary customers.
+  //
+  // null = unknown (signed out, still resolving, or the read failed),
+  // true = confirmed usable, false = confirmed deactivated.
+  const [accountActive, setAccountActive] = useState(null);
+
+  // Guards against acting twice. onSnapshot fires again for any later edit
+  // to the document, and signing out itself churns state — without this a
+  // deactivated user could be shown the notice more than once.
+  const revocationHandled = useRef(false);
+
+  // Signs a deactivated account out and says why.
+  //
+  // Declared above the effect that calls it, and wrapped in useCallback so
+  // its identity is stable: the effect subscribes to Firestore, so a
+  // function that changed on every render would tear down and rebuild that
+  // listener each time it appeared in the dependency array.
+  //
+  // Order matters inside: the flag is set BEFORE the await, because
+  // signOut() synchronously triggers onAuthStateChanged, which would
+  // otherwise race this function and let a second snapshot through.
+  //
+  // The notice is shown AFTER signing out rather than before, so the
+  // account is already closed by the time anyone reads it — the message is
+  // a courtesy, not a confirmation, and there is no path through it back
+  // into staying signed in.
+  const revokeSession = useCallback(async () => {
+    if (revocationHandled.current) return;
+    revocationHandled.current = true;
+
+    try {
+      await signOut(auth);
+    } catch (error) {
+      // Nothing useful to do — the notice still needs to appear, and the
+      // rules deny this account's writes regardless of what the client
+      // believes about its own auth state.
+      console.error('Error signing out a deactivated account:', error);
+    }
+
+    // NOT the only place this message can come from, deliberately.
+    // Loginscreen and AdminLoginScreen each check isActive right after
+    // authenticating and refuse the sign-in there, which this does not
+    // replace: without their check a deactivated account would reach Home
+    // and be bounced a moment later, once this listener's first snapshot
+    // arrived. They are the fast path; this is the one that covers a
+    // session already in progress.
+    //
+    // The two can race on a fresh sign-in. That is harmless — AppAlertHost
+    // shows one alert at a time, both messages say the same thing, and
+    // both paths sign out. Resist collapsing them into one: dropping the
+    // screens' check reintroduces the flash of Home, and dropping this one
+    // reopens mid-session revocation entirely.
+    showAppAlert(
+      'Account Deactivated',
+      'This account has been deactivated, so you have been signed out. Please contact support if you believe this is a mistake.',
+      [{ text: 'OK', onPress: () => resetToLanding() }]
+    );
+  }, []);
+
+  // Called by ProfileScreen immediately BEFORE it writes isActive: false
+  // on the user's own document.
+  //
+  // Self-deactivation writes exactly what an admin deactivation writes, so
+  // the listener above cannot tell the two apart — and without this it
+  // would greet someone who had just deliberately closed their own account
+  // with "this account has been deactivated, contact support if you
+  // believe this is a mistake". They know. They did it. ProfileScreen runs
+  // its own sign-out and its own reset to Landing, so the whole revocation
+  // path is redundant there, not just the wording.
+  //
+  // Claiming the same one-shot flag the listener checks is what makes this
+  // work, and it must happen before the write rather than after: the
+  // snapshot can arrive while the updateDoc promise is still pending.
+  const acknowledgeSelfDeactivation = useCallback(() => {
+    revocationHandled.current = true;
+  }, []);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    // Two subscriptions, nested: auth state, and then the signed-in user's
+    // own document. The inner one has to be torn down and rebuilt whenever
+    // the user changes, or a listener on the previous account's document
+    // outlives the session that was allowed to read it.
+    let unsubscribeUserDoc = null;
+
+    const stopWatchingUserDoc = () => {
+      if (unsubscribeUserDoc) {
+        unsubscribeUserDoc();
+        unsubscribeUserDoc = null;
+      }
+    };
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      stopWatchingUserDoc();
+
       if (!user) {
         setRole(null);
+        setAccountActive(null);
         setAdminLoading(false);
+        // Cleared so the NEXT person to sign in on this device can be
+        // revoked too. Safe to reset here because there is no user to act
+        // on until a new one arrives.
+        revocationHandled.current = false;
         return;
       }
 
-      try {
-        // Re-verifies role + isActive against Firestore on every cold
-        // start / auth state change — never trusts a cached or
-        // client-supplied role. Deliberately NOT signing the user out or
-        // alerting on an unprivileged result, though — this listener
-        // fires for EVERY signed-in user in the app (regular customers
-        // included, since there's one shared Firebase Auth instance), not
-        // just someone who just attempted a privileged login. Signing a
-        // customer out of their own account just because they aren't
-        // privileged would be a serious bug in its own right.
-        const userDocRef = doc(db, 'users', user.uid);
-        const userDocSnap = await getDoc(userDocRef);
+      // WAS A ONE-SHOT getDoc, now a live subscription. The read was
+      // already correct on every cold start; what it could not do was
+      // notice a change DURING a session. A Store Manager deactivated
+      // while their app was open kept every admin screen until they
+      // restarted, and firestore.rules would deny their writes — so the
+      // experience of being deactivated was a string of unexplained
+      // permission errors rather than being told.
+      //
+      // Still re-verified against Firestore, never trusted from a cached
+      // or client-supplied value.
+      unsubscribeUserDoc = onSnapshot(
+        doc(db, 'users', user.uid),
+        (snapshot) => {
+          setRole(resolvePrivilegedRole(snapshot));
 
-        setRole(resolvePrivilegedRole(userDocSnap));
-      } catch (error) {
-        // A failed Firestore read must not leave the app stuck on
-        // withRoleGuard's loading spinner forever — fail closed and let
-        // the guard redirect normally.
-        console.error('Error restoring admin session:', error);
-        setRole(null);
-      } finally {
-        setAdminLoading(false);
-      }
+          // A document that does not exist is NOT a deactivated account.
+          // It is the gap between creating an auth user and writing the
+          // user doc at signup, and treating it as revocation would sign
+          // people out of accounts they had just created.
+          const active = snapshot.exists()
+            ? snapshot.data().isActive !== false
+            : null;
+          setAccountActive(active);
+          setAdminLoading(false);
+
+          if (active === false) revokeSession();
+        },
+        (error) => {
+          // A failed read must not leave the app stuck on withRoleGuard's
+          // loading spinner — fail closed on the ROLE and let the guard
+          // redirect normally.
+          //
+          // But it must NOT fail closed on accountActive. An error is not
+          // a deactivation: offline, a rules change, a transient backend
+          // problem all land here, and signing someone out mid-checkout
+          // over a dropped connection would be a far worse bug than the
+          // one this listener fixes. Unknown stays unknown.
+          console.error('Error watching account status:', error);
+          setRole(null);
+          setAccountActive(null);
+          setAdminLoading(false);
+        }
+      );
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribeAuth();
+      stopWatchingUserDoc();
+    };
+  }, [revokeSession]);
 
   // Called by a screen that has already independently verified role +
   // isActive via its own getDoc — so it's safe to also clear adminLoading
@@ -104,6 +231,12 @@ export const AdminProvider = ({ children }) => {
       isSeller,
       isPlatformAdmin,
       adminLoading,
+      // Exposed for the deferred Landing work: a persisted session cannot
+      // safely be auto-routed past Landing without knowing whether the
+      // account behind it is still usable, and this is that answer.
+      // Consumers must treat null as "not known yet", never as "inactive".
+      accountActive,
+      acknowledgeSelfDeactivation,
       loginAsAdmin,
       logoutAsAdmin,
     }}>

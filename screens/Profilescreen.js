@@ -119,7 +119,7 @@ export default function ProfileScreen({ navigation }) {
   const [nameDraft, setNameDraft] = useState('');
   const [nameError, setNameError] = useState('');
   const [savingName, setSavingName] = useState(false);
-  const { role, adminLoading } = useAdmin();
+  const { role, adminLoading, acknowledgeSelfDeactivation } = useAdmin();
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
 
@@ -346,6 +346,16 @@ export default function ProfileScreen({ navigation }) {
 
     setDeactivating(true);
     try {
+      // Tells AdminContext that the deactivation about to be written is
+      // this user's own doing. Its listener watches this document and
+      // signs out anyone it sees deactivated — correct for an account
+      // disabled by staff, wrong here, where it would answer a deliberate
+      // choice with "contact support if you believe this is a mistake".
+      //
+      // Before the write, not after: the snapshot can land while the
+      // updateDoc below is still in flight.
+      acknowledgeSelfDeactivation();
+
       // Must happen before signOut() — the rule permitting this write
       // checks isOwner(userId) against the current request.auth, so once
       // signed out this same write would fail on permissions instead of

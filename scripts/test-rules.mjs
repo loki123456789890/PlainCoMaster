@@ -367,6 +367,35 @@ await test('SPLIT-7  a customer cannot read another customer\'s account', async 
   await assertFails(getDoc(doc(asOtherCustomer(), 'users/customer1')));
 });
 
+await test('SPLIT-8  a DEACTIVATED account can still read its own document', async () => {
+  // Looks like a rule that should be tightened. It must not be, and this
+  // test exists to say so before someone "fixes" it.
+  //
+  // AdminContext subscribes to the signed-in user's own document and signs
+  // them out when it sees isActive === false. That subscription belongs to
+  // the very account being deactivated, so the read has to keep working at
+  // exactly the moment the flag flips — gate it on isActive and the
+  // listener gets a permission error instead of a document.
+  //
+  // Which would fail SILENTLY, and that is the dangerous part: the error
+  // path in AdminContext deliberately does NOT revoke, because an error
+  // means offline or a backend problem, not a deactivation. So a rules
+  // change here would not break the listener loudly. It would just quietly
+  // stop revoking anyone, forever.
+  //
+  // Both roles, because the seller path and the customer path are the two
+  // that matter and they reach this rule through different branches.
+  await assertSucceeds(getDoc(doc(asDeactivatedCustomer(), 'users/deactivatedCustomer')));
+  await assertSucceeds(getDoc(doc(asDeactivatedSeller(), 'users/deactivatedSeller')));
+
+  // Reading is all they get. isActive is a platformAdmin's field, and a
+  // deactivated account must not be able to switch itself back on — the
+  // self-deactivation shape in the rules requires the new value be false.
+  await assertFails(
+    updateDoc(doc(asDeactivatedCustomer(), 'users/deactivatedCustomer'), { isActive: true })
+  );
+});
+
 // ---------------------------------------------------------------------------
 console.log('\nProducts and stock');
 // ---------------------------------------------------------------------------
