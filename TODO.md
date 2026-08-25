@@ -165,5 +165,14 @@ deployment:
       The first two could move to `constants/`; the third cannot follow,
       because functions/ is a separate CommonJS package. Same drift shape
       that justified constants/payment.js.
-- [ ] Nothing retries a failed email. Outcomes land in the `mailLog`
-      collection with a status of `sent` or `failed`, but no one reads it.
+- [x] ~~Nothing reads `mailLog`~~ — AdminMailLogScreen does now, reached
+      from a Store Manager dashboard card that appears only when something
+      failed. `mailLog` gained a read rule for `isSeller()` and no write
+      rule for anyone (MAIL-1, MAIL-2).
+- [ ] Nothing RETRIES a failed email — still true, and now visible rather
+      than silent. Retrying means re-invoking the mailer, which the client
+      cannot do; it would take a callable that re-sends one `mailLog`
+      entry, guarded so it cannot be used to spam an address. The screen
+      deliberately offers no fake substitute (no "mark as handled"), since
+      that would turn a record of what happened into a record of what
+      someone clicked.

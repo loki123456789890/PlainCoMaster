@@ -146,6 +146,14 @@ async function claimOnce(key, meta) {
     await db.collection('mailLog').doc(key).create({
       ...meta,
       claimedAt: FieldValue.serverTimestamp(),
+      // The field AdminMailLogScreen orders by, and it must be written on
+      // EVERY path that creates one of these documents. Firestore's
+      // orderBy silently omits documents that lack the field it sorts on —
+      // not an error, just an absence — so a timestamp written on some
+      // paths and not others makes entries invisible in the one screen
+      // that exists to reveal them. claimedAt cannot serve: the
+      // unconfigured path never claims.
+      recordedAt: FieldValue.serverTimestamp(),
       status: 'sending',
     });
     return true;
@@ -171,6 +179,10 @@ async function recordOutcome(key, status, detail, extra) {
       status,
       detail: detail || null,
       finishedAt: FieldValue.serverTimestamp(),
+      // Refreshed here so it means "last touched", and written here so the
+      // unconfigured path — which never calls claimOnce — still produces a
+      // sortable document. See the note in claimOnce.
+      recordedAt: FieldValue.serverTimestamp(),
     },
     { merge: true }
   );

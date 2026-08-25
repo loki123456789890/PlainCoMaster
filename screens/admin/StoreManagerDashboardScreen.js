@@ -76,6 +76,9 @@ export default function StoreManagerDashboardScreen({ navigation }) {
   const [openSupportCount, setOpenSupportCount] = useState(0);
   const [supportLoading, setSupportLoading] = useState(true);
   const [supportError, setSupportError] = useState(false);
+  const [mailProblemCount, setMailProblemCount] = useState(0);
+  const [mailLoading, setMailLoading] = useState(true);
+  const [mailError, setMailError] = useState(false);
 
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -136,9 +139,34 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       }
     );
 
+    // Undelivered transactional email. Filtered server-side to the three
+    // statuses that mean something went wrong, for the same reason as the
+    // support query above: the card needs a count, not the history.
+    //
+    // 'sending' counts as a problem. It means the mailer claimed a send
+    // and never recorded an outcome — the function died mid-flight — so
+    // whether that receipt arrived is genuinely unknown, and unknown
+    // belongs in front of someone rather than filed as fine.
+    //
+    // A single-field `in` needs no composite index, so this adds nothing
+    // to firestore.indexes.json.
+    const unsubscribeMail = onSnapshot(
+      query(collection(db, 'mailLog'), where('status', 'in', ['failed', 'unconfigured', 'sending'])),
+      (snapshot) => {
+        setMailProblemCount(snapshot.size);
+        setMailLoading(false);
+      },
+      (error) => {
+        console.error('Error fetching undelivered email count:', error);
+        setMailError(true);
+        setMailLoading(false);
+      }
+    );
+
     return () => {
       unsubscribeOrders();
       unsubscribeSupport();
+      unsubscribeMail();
     };
   }, [retryToken]);
 
@@ -439,6 +467,43 @@ export default function StoreManagerDashboardScreen({ navigation }) {
           </Animated.View>
         )}
 
+        {/* Undelivered email. Same rule as the restocking card above:
+            appears only when there is something to act on, because a
+            standing "0 emails failed" row is furniture the eye learns to
+            skip — and this one has to be noticed the one time it matters.
+            Links straight into the filtered view, since a card that counts
+            problems should not land you in a list where you have to find
+            them again. */}
+        {!mailLoading && !mailError && mailProblemCount > 0 && (
+          <Animated.View
+            entering={
+              reduceMotion ? undefined : FadeInDown.duration(240).delay(80).easing(EASE_OUT_QUART)
+            }
+          >
+            <AnimatedPressable
+              onPress={() => handleNavigate('AdminMailLog', { problemsOnly: true })}
+              accessibilityRole="button"
+              accessibilityLabel={
+                `${mailProblemCount} ${mailProblemCount === 1 ? 'email' : 'emails'} did not send`
+              }
+              accessibilityHint="Opens the email delivery list, filtered to these"
+            >
+              <Card variant="flat" style={styles.mailCard}>
+                <View style={styles.mailHeader}>
+                  <Ionicons name="mail-unread-outline" size={18} color={Colors.light.danger} />
+                  <Text style={styles.mailTitle}>
+                    {mailProblemCount} {mailProblemCount === 1 ? 'email' : 'emails'} didn&apos;t send
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.light.icon} />
+                </View>
+                <Text style={styles.mailBlurb}>
+                  Order receipts or support alerts that never reached anyone.
+                </Text>
+              </Card>
+            </AnimatedPressable>
+          </Animated.View>
+        )}
+
         <View style={styles.grid}>
           {gridItems.map((item, index) => {
             const statusLabel = item.error
@@ -646,6 +711,13 @@ const styles = StyleSheet.create({
   restockCountOut: { color: Colors.light.danger },
   restockCountLow: { color: Colors.light.highlight },
   restockMore: { fontSize: 12, color: Colors.light.icon },
+  // Deliberately the same shape as the restocking card — both say "this
+  // needs attention", and giving them two different treatments would imply
+  // a difference in kind that isn't there.
+  mailCard: { marginBottom: Spacing.md, gap: Spacing.sm },
+  mailHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  mailTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: Colors.light.text },
+  mailBlurb: { fontSize: 12, color: Colors.light.icon },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

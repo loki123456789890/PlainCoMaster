@@ -158,6 +158,19 @@ async function seed() {
       uid: 'deactivatedCustomer', name: 'Dee Activated', email: 'dee@example.com',
       isActive: false,
     });
+    // Written by functions/mailer.js in production, seeded here so MAIL-1
+    // reads a real document rather than a missing one — a permitted read
+    // of a document that does not exist succeeds either way, which would
+    // make the test pass without proving anything about the shape.
+    await setDoc(doc(db, 'mailLog/order-o1'), {
+      kind: 'orderConfirmation',
+      orderId: 'o1',
+      to: 'cathy@example.com',
+      subject: 'Your PlainCo order #O1',
+      status: 'failed',
+      detail: 'Invalid login: 535-5.7.8 Username and Password not accepted',
+      recordedAt: serverTimestamp(),
+    });
     await setDoc(doc(db, 'users/deactivatedCustomer/orders/delivered2'), {
       customerId: 'deactivatedCustomer', customerEmail: 'dee@example.com',
       items: [{ productId: 'p1', name: 'Denim Jacket', price: 850, quantity: 1 }],
@@ -781,6 +794,42 @@ await test('LOG-9  a deactivated store manager cannot write to the log', async (
   await assertFails(
     setDoc(doc(asDeactivatedSeller(), 'activityLogs/l8'), logEntry('deactivatedSeller'))
   );
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nMail delivery log');
+// ---------------------------------------------------------------------------
+
+await test('MAIL-1  a store manager can read the mail log, and only read it', async () => {
+  // The log records what the mailer did with each receipt and support
+  // notification. A Store Manager reads it to answer "did that receipt go
+  // out?" — the question the collection existed to answer while nothing
+  // could see it.
+  await assertSucceeds(getDoc(doc(asSeller(), 'mailLog/order-o1')));
+
+  // No write rule exists for anyone, and that is load-bearing rather than
+  // an oversight: this is a record of what the server did. A seller who
+  // could edit it could mark a failed send as delivered, and the log stops
+  // being evidence.
+  await assertFails(setDoc(doc(asSeller(), 'mailLog/order-o1'), { status: 'sent' }));
+  await assertFails(updateDoc(doc(asSeller(), 'mailLog/order-o1'), { status: 'sent' }));
+  await assertFails(deleteDoc(doc(asSeller(), 'mailLog/order-o1')));
+});
+
+await test('MAIL-2  customers and platform admins cannot read the mail log', async () => {
+  // Entries carry recipient email addresses. A customer must not read
+  // other people's, and a platformAdmin is excluded on the same principle
+  // that keeps them out of orders (SPLIT-6): these entries are store
+  // operations, not account management.
+  await assertFails(getDoc(doc(asCustomer(), 'mailLog/order-o1')));
+  await assertFails(getDoc(doc(asAdmin(), 'mailLog/order-o1')));
+  await assertFails(getDocs(collection(asCustomer(), 'mailLog')));
+
+  // Including the customer the entry is actually about — there is no
+  // owner-read branch here, deliberately. Nothing in the app shows a
+  // shopper their own delivery receipts, so granting it would widen the
+  // rule for a reader that does not exist.
+  await assertFails(getDoc(doc(asCustomer(), 'mailLog/order-customer1')));
 });
 
 // ---------------------------------------------------------------------------

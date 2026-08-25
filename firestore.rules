@@ -634,5 +634,31 @@ service cloud.firestore {
       allow read: if isPlatformAdmin();
       allow create: if isPlatformAdmin() && isValidLogEntry();
     }
+    // Delivery record for transactional email, written by functions/mailer.js
+    // with Admin credentials. READ ONLY, and read by one role.
+    //
+    // WHY IT NEEDS A RULE AT ALL when it had none: it was unreachable from
+    // every client, which was correct while nothing read it — and useless,
+    // because a receipt that failed to send was recorded where no human
+    // would ever look. AdminMailLogScreen is that reader.
+    //
+    // NO WRITE RULE, for anyone, ever. This is a record of what the server
+    // did; a client able to edit it could mark a failed send as delivered,
+    // which turns the log from evidence into decoration. The mailer
+    // bypasses rules entirely, so it needs no grant here.
+    //
+    // isSeller() rather than isPlatformAdmin(), following the same split
+    // the two activity logs draw: these entries are about orders and
+    // support requests, which is store operations — the Store Manager's
+    // domain. A platformAdmin cannot read orders (see the collection-group
+    // rule above) and has no business reading who was emailed about one.
+    //
+    // ON THE ADDRESSES INSIDE: entries carry a recipient email. That is not
+    // new exposure — a seller already reads customerEmail on every order
+    // and userEmail on every support request, which are the same two
+    // sources these are copied from.
+    match /mailLog/{entryId} {
+      allow read: if isSeller();
+    }
   }
 }

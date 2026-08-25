@@ -42,6 +42,7 @@ import AdminUsersScreen from './screens/admin/AdminUsersScreen';
 import AdminSupportScreen from './screens/admin/AdminSupportScreen';
 import AdminReviewsScreen from './screens/admin/AdminReviewsScreen';
 import AdminActivityScreen from './screens/admin/AdminActivityScreen';
+import AdminMailLogScreen from './screens/admin/AdminMailLogScreen';
 
 LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
 
@@ -65,6 +66,10 @@ const GuardedAdminSupportScreen = withRoleGuard(AdminSupportScreen, 'seller');
 // support requests. firestore.rules agrees: only isSeller() may write the
 // `hidden` flag.
 const GuardedAdminReviewsScreen = withRoleGuard(AdminReviewsScreen, 'seller');
+// Seller-only, matching the mailLog read rule: these entries are about
+// orders and support requests, which is store operations. A platformAdmin
+// navigating here would be bounced by the guard, same as for Orders.
+const GuardedAdminMailLogScreen = withRoleGuard(AdminMailLogScreen, 'seller');
 // The one screen both roles may open, and the exception that proves the
 // rule: it shows each role its OWN activity log and nothing else, because
 // it picks the collection from the signed-in role and firestore.rules
@@ -146,6 +151,7 @@ export default function App() {
                   <Stack.Screen name="AdminSupport" component={GuardedAdminSupportScreen} />
                   <Stack.Screen name="AdminReviews" component={GuardedAdminReviewsScreen} />
                   <Stack.Screen name="AdminActivity" component={GuardedAdminActivityScreen} />
+                  <Stack.Screen name="AdminMailLog" component={GuardedAdminMailLogScreen} />
                 </Stack.Navigator>
               </NavigationContainer>
               <AppAlertHost />
