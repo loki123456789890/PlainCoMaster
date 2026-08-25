@@ -207,6 +207,9 @@ deployment:
       Metro emptied the cache and hid it, which is what made it look like a
       bundler problem rather than a bug.
 
+      Fix verified on device 2026-08-25: reactivate in the console, sign
+      in without restarting Metro, works.
+
       Worth remembering as a class, not an incident: every path here that
       does something IRREVERSIBLE now demands a server-confirmed fact. An
       error is not a deactivation; a cached value is not a confirmation.
