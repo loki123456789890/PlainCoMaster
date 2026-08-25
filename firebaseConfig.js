@@ -3,6 +3,7 @@ import { initializeApp } from "firebase/app";
 import { initializeAuth, getReactNativePersistence } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 
 // Your web app's Firebase configuration
@@ -25,3 +26,8 @@ export const db = getFirestore(app);
 // above but never actually used — products took a pasted image URL — so
 // nothing here initialised it. Governed by storage.rules.
 export const storage = getStorage(app);
+// Must match REGION in functions/index.js. A mismatch does not fail
+// loudly — the SDK calls a URL in the region named here, and a function
+// deployed elsewhere simply is not at it, so checkout would report
+// "not-found" rather than anything about regions.
+export const functions = getFunctions(app, "us-central1");

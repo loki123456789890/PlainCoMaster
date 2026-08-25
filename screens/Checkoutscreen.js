@@ -21,10 +21,10 @@ import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { db, auth } from '../firebaseConfig';
-import { collection, doc, getDoc, runTransaction, serverTimestamp } from 'firebase/firestore';
+import { db, auth, functions } from '../firebaseConfig';
+import { doc, getDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { parseStock, totalQuantityByProductId } from '../utils/stock';
 import { PAYMENT_METHODS, isPayOnDelivery } from '../constants/payment';
 import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
 import Card from '../components/ui/Card';
@@ -207,206 +207,39 @@ export default function CheckoutScreen({ navigation, route }) {
       return;
     }
 
-    // Cart lines don't dedupe by product — the same product can appear as
-    // several separate lines with different size/color (see CartContext's
-    // addToCart), so stock is decremented per unique product using the
-    // combined quantity across all of that product's lines. See
-    // totalQuantityByProductId for why that matters in both directions.
+    // What the server needs, and deliberately nothing more: which product,
+    // how many, and the chosen size/colour. Prices, the subtotal, the total
+    // and the delivery address are all looked up server-side now — a field
+    // the client cannot supply is a field the client cannot forge.
     //
-    // A cart line's own `id` is its CART document id; the product it points
-    // at is in `productId`. A Buy Now item is a raw spread of the product,
-    // so its `id` IS the product id and it has no `productId` at all —
-    // hence the fallback, in that order.
-    const quantityByProductId = totalQuantityByProductId(
-      orderItems,
-      (item) => item.productId || item.id
-    );
-    const productIds = Array.from(quantityByProductId.keys());
+    // Lines are sent as-is rather than totalled per product here. The
+    // function does that itself (a product can occupy several lines with
+    // different sizes), and it has to, because it cannot trust an arithmetic
+    // result the client hands it.
+    //
+    // A cart line's own `id` is its CART document id and the product it
+    // points at is in `productId`. A Buy Now line is a raw spread of the
+    // product, so its `id` IS the product id and it has no `productId` —
+    // hence the fallback, in that order, and hence cartItemId being sent
+    // only when the line genuinely came from a cart document.
+    const items = orderItems.map((item) => ({
+      productId: item.productId || item.id,
+      quantity: item.quantity || 1,
+      size: item.selectedSize || item.size || null,
+      color: item.selectedColor || item.color || null,
+      cartItemId: item.productId && item.id ? item.id : null,
+    }));
 
     setSubmitting(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     try {
-      // doc() with no id generates a ref with an auto-id without writing
-      // anything yet — this can happen outside the transaction since it's
-      // just a client-side ref, no read or write involved.
-      const newOrderRef = doc(collection(db, 'users', auth.currentUser.uid, 'orders'));
-
-      // Captured out of the transaction so the confirmation screen can
-      // render exactly what was written, rather than a second assembly of
-      // the same values that could drift from it. runTransaction may run
-      // its callback more than once under contention; each attempt
-      // overwrites this, so what survives is the attempt that committed.
-      let placedOrder = null;
-
-      await runTransaction(db, async (transaction) => {
-        // All reads must happen before any writes in a Firestore
-        // transaction, so every product doc is read up front.
-        const productRefs = productIds.map((id) => doc(db, 'products', id));
-        const productSnaps = await Promise.all(
-          productRefs.map((ref) => transaction.get(ref))
-        );
-
-        const insufficient = [];
-        // Products the backend will refuse to decrement no matter how much
-        // stock they have — see the typeof check below.
-        const unsellable = [];
-
-        productSnaps.forEach((snap, index) => {
-          const productId = productIds[index];
-          const requestedQty = quantityByProductId.get(productId);
-          const matchingItem = orderItems.find(
-            (item) => (item.productId || item.id) === productId
-          );
-          const name = matchingItem?.name || 'This item';
-
-          if (!snap.exists()) {
-            insufficient.push({ name, available: 0, requested: requestedQty });
-            return;
-          }
-
-          const rawStock = snap.data().stock;
-          // The customer branch of the products rule permits this decrement
-          // only when the STORED value is already a number
-          // (`resource.data.stock is number`). Products saved before the
-          // admin forms started writing stock numerically still hold it as
-          // a string — and parseStock('10') happily returns 10, so the
-          // sufficiency check below passed, the transaction was then
-          // refused server-side, and the customer got the catch-all "Could
-          // not place your order. Please try again." A retry can never
-          // succeed, so that message sent them into a loop with no way out
-          // and nothing naming the real problem.
-          //
-          // Caught here instead, against the raw stored value rather than
-          // the parsed one, so the message can name the item and say what
-          // actually fixes it: a Store Manager re-saving that product once
-          // (AdminEditProductScreen writes every field, which migrates the
-          // legacy string to a number as it goes).
-          if (typeof rawStock !== 'number') {
-            unsellable.push(name);
-            return;
-          }
-
-          const availableStock = parseStock(rawStock);
-          if (availableStock < requestedQty) {
-            insufficient.push({ name, available: availableStock, requested: requestedQty });
-          }
-        });
-
-        // Checked before the stock comparison's own failure, because this
-        // one is not the customer's to resolve — telling someone an item is
-        // out of stock when the real problem is a malformed listing sends
-        // them to wait for a restock that was never the issue.
-        if (unsellable.length > 0) {
-          const error = new Error('One or more items cannot be checked out.');
-          error.unsellableItems = unsellable;
-          throw error;
-        }
-
-        if (insufficient.length > 0) {
-          const error = new Error('Insufficient stock for one or more items.');
-          error.insufficientItems = insufficient;
-          throw error;
-        }
-
-        // All items have enough stock — decrement each, create the order,
-        // and clear the corresponding cart items, all in this same
-        // transaction so it's all-or-nothing.
-        productSnaps.forEach((snap, index) => {
-          const productId = productIds[index];
-          const requestedQty = quantityByProductId.get(productId);
-          const availableStock = parseStock(snap.data().stock);
-          // Written as a real number — matches firestore.rules, which
-          // requires both the old and new stock values to be numbers to
-          // allow this decrement (see the products/{productId} rule).
-          transaction.update(productRefs[index], {
-            stock: availableStock - requestedQty,
-          });
-        });
-
-        const orderData = {
-          // customerId/customerEmail let the admin dashboard identify who placed
-          // this order — the order doc itself lives under users/{uid}/orders,
-          // so the uid is implicit in the path, but the admin's collectionGroup
-          // query reads many users' orders flattened together, where that
-          // context is lost unless we store it directly on the document.
-          customerId: auth.currentUser.uid,
-          customerEmail: auth.currentUser.email || 'unknown',
-          items: orderItems.map((item) => ({
-            // `item.productId || item.id`, in that order, and NOT the other
-            // way round: for a cart-sourced line `item.id` is the cart
-            // document's own auto-id, so preferring it stored a cart id here
-            // and left the line pointing at nothing (the cart doc is deleted
-            // at the end of this same transaction). Nothing read this field
-            // until cancellation needed to restore stock through it, which
-            // is why the mismatch went unnoticed. Same precedence as the
-            // decrement above, so the id restored to is the id taken from.
-            productId: item.productId || item.id || 'unknown',
-            name: item.name,
-            price: parsePrice(item.price),
-            quantity: item.quantity || 1,
-            size: item.selectedSize || item.size || null,
-            color: item.selectedColor || item.color || null,
-            image: item.image || item.imageUrl || null,
-          })),
-          // The same ids the stock decrement above was computed from,
-          // denormalised onto the order because firestore.rules cannot
-          // derive them: rules have no way to read a field out of each map
-          // in a list, so "is this product on this order?" is unanswerable
-          // against items[] alone. The reviews rule needs exactly that
-          // question answered before it will accept a review as a verified
-          // purchase — see the /reviews/{reviewId} block in
-          // firestore.rules. Orders written before this field existed
-          // simply have no productIds, and the rule's .get() default of []
-          // means their lines cannot be reviewed; that is the safe
-          // direction to fail, and a backfill is a one-off script rather
-          // than a loosened rule.
-          productIds,
-          subtotal,
-          shipping,
-          total,
-          paymentMethod: selectedPayment,
-          shippingAddress: {
-            fullName: shippingAddress.fullName || '',
-            phone: shippingAddress.phone || '',
-            address: shippingAddress.address || '',
-            city: shippingAddress.city || '',
-            province: shippingAddress.province || '',
-            zipCode: shippingAddress.zipCode || '',
-          },
-          status: 'pending',
-          createdAt: serverTimestamp(),
-        };
-
-        transaction.set(newOrderRef, orderData);
-
-        // Only the fields the confirmation renders. createdAt is
-        // deliberately absent: it is a serverTimestamp sentinel here, not
-        // a date, and would be meaningless to the screen. That is also why
-        // the confirmation shows no date — OrdersScreen shows the real one
-        // once the server has stamped it.
-        placedOrder = {
-          orderId: newOrderRef.id,
-          items: orderData.items,
-          subtotal: orderData.subtotal,
-          shipping: orderData.shipping,
-          total: orderData.total,
-          paymentMethod: orderData.paymentMethod,
-          shippingAddress: orderData.shippingAddress,
-        };
-
-        // Only items that came from an actual cart document carry a
-        // `productId` field distinct from their own `id` (CartContext's
-        // addToCart writes it explicitly). Buy Now items are a raw spread
-        // of the product object and never had this field, so they're
-        // correctly skipped here — there's no cart entry to clear.
-        orderItems
-          .filter((item) => item.productId && item.id)
-          .forEach((item) => {
-            const cartItemRef = doc(db, 'users', auth.currentUser.uid, 'cart', item.id);
-            transaction.delete(cartItemRef);
-          });
-      });
+      // One call replaces the client-side transaction that used to read
+      // every product, decrement stock, write the order and clear the cart.
+      // All of that still happens atomically — just on the server, where
+      // the prices it multiplies are the ones in the catalog.
+      const placeOrder = httpsCallable(functions, 'placeOrder');
+      const { data: placedOrder } = await placeOrder({ items, paymentMethod: selectedPayment });
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
@@ -430,35 +263,66 @@ export default function CheckoutScreen({ navigation, route }) {
       console.error('Error placing order:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
-      if (error.unsellableItems) {
-        const detail = error.unsellableItems.map((name) => `• ${name}`).join('\n');
+      // The callable reports refusals through HttpsError, which reaches the
+      // client as error.code ('functions/failed-precondition') plus whatever
+      // structured detail the function attached. These branches read that
+      // detail rather than the message, so the wording stays here in the UI
+      // layer instead of being assembled server-side.
+      const reason = error.details?.reason;
+
+      if (reason === 'no-address') {
         showAppAlert(
-          "Item(s) Can't Be Checked Out",
-          `There's a problem with the listing for:\n\n${detail}\n\n` +
-            'This needs the store to fix it, and retrying now would fail again. ' +
-            'Please remove these from your cart to check out the rest, or reach ' +
-            'us through the Help Center.'
+          'Delivery Address Required',
+          'Please add a delivery address before placing your order.',
+          [
+            { text: 'Add Address', onPress: () => navigation.navigate('Location') },
+            { text: 'Cancel', style: 'cancel' },
+          ]
         );
         return;
       }
 
-      if (error.insufficientItems) {
-        const detail = error.insufficientItems
+      if (reason === 'unavailable') {
+        showAppAlert(
+          "Item(s) No Longer Available",
+          'Some items in your cart are no longer being sold. Please remove them ' +
+            'and try again — everything else can still be checked out.'
+        );
+        return;
+      }
+
+      if (reason === 'insufficient-stock') {
+        const detail = (error.details?.items || [])
           .map((i) => `• ${i.name} — only ${i.available} left (${i.requested} requested)`)
           .join('\n');
         showAppAlert(
-          'Item(s) No Longer Available',
+          'Not Enough Stock',
           `The following item(s) don't have enough stock:\n\n${detail}\n\nPlease update your cart and try again.`
         );
         return;
       }
 
-      // isConnected reflects our own NetInfo listener at the moment the
-      // transaction failed; error.code === 'unavailable' is Firestore's own
-      // signal for the same thing, in case connectivity dropped mid-request
-      // faster than NetInfo's event fired. Either one means this failure
-      // was a network drop, not a real rejection from the backend.
-      const isNetworkError = !isConnected || error.code === 'unavailable';
+      if (error.code === 'functions/unauthenticated') {
+        showAppAlert('Login Required', 'Please sign in to place an order.', [
+          { text: 'Login', onPress: () => navigation.navigate('Login') },
+          { text: 'Cancel', style: 'cancel' },
+        ]);
+        return;
+      }
+
+      if (error.code === 'functions/permission-denied') {
+        showAppAlert(
+          'Account Deactivated',
+          'This account has been deactivated and cannot place orders. Please contact support.'
+        );
+        return;
+      }
+
+      // isConnected reflects our own NetInfo listener at the moment the call
+      // failed; the callable reports the same condition as
+      // 'functions/unavailable'. Either one means a network drop rather than
+      // a refusal from the backend.
+      const isNetworkError = !isConnected || error.code === 'functions/unavailable';
       if (isNetworkError) {
         showAppAlert(
           'No Internet Connection',
