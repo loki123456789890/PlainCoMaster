@@ -54,6 +54,15 @@ export const AdminProvider = ({ children }) => {
   // null = unknown (signed out, still resolving, or the read failed),
   // true = confirmed usable, false = confirmed deactivated.
   const [accountActive, setAccountActive] = useState(null);
+  // Has onAuthStateChanged fired even once? Distinct from "is there a
+  // user", and the distinction is the whole reason this exists: on a cold
+  // start with a persisted session, Firebase restores auth asynchronously,
+  // so for the first moments signedIn is false because nothing has been
+  // checked yet — not because nobody is signed in. LandingScreen has to
+  // wait through that rather than treat it as a signed-out visitor and
+  // show the marketing screen to someone who has an account.
+  const [authChecked, setAuthChecked] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
 
   // Guards against acting twice. onSnapshot fires again for any later edit
   // to the document, and signing out itself churns state — without this a
@@ -142,6 +151,8 @@ export const AdminProvider = ({ children }) => {
 
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       stopWatchingUserDoc();
+      setAuthChecked(true);
+      setSignedIn(Boolean(user));
 
       if (!user) {
         setRole(null);
@@ -236,6 +247,8 @@ export const AdminProvider = ({ children }) => {
       // account behind it is still usable, and this is that answer.
       // Consumers must treat null as "not known yet", never as "inactive".
       accountActive,
+      authChecked,
+      signedIn,
       acknowledgeSelfDeactivation,
       loginAsAdmin,
       logoutAsAdmin,

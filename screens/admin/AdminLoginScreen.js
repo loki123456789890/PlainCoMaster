@@ -30,6 +30,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
+import { getHomeRouteForRole } from '../../constants/roles';
 import Input from '../../components/ui/Input';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
@@ -205,7 +206,11 @@ export default function AdminLoginScreen({ navigation }) {
       // Platform administration is account/role management, not
       // product/order operations — landing a platformAdmin on the seller
       // dashboard they can't write to would be misleading.
-      navigation.replace(role === 'platformAdmin' ? 'AdminUsers' : 'AdminDashboard');
+      //
+      // Shared with LandingScreen, which needs the same answer when it
+      // skips itself for a persisted staff session. Two copies of this
+      // mapping would drift the first time a role or a route is renamed.
+      navigation.replace(getHomeRouteForRole(role));
     } catch (error) {
       setLoading(false);
       console.error('Staff login error:', error);

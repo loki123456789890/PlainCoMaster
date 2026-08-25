@@ -36,14 +36,12 @@ design or a server.
       accepts both shapes
 - [x] All `react/no-unescaped-entities` errors cleared (source is at
       zero lint errors)
-- [ ] **Unblocked, not yet done:** persisted sessions still land on
-      Landing. The blocker is gone — AdminContext now exposes
-      `accountActive`, which is exactly the state auto-routing needed, and
-      a deactivated session is signed out on sight rather than being
-      carried into the app. What remains is the routing decision itself:
-      where a returning signed-in customer should land, and how to avoid a
-      flash of Landing before the redirect. Treat `accountActive === null`
-      as "not known yet" and wait, never as inactive.
+- [x] Persisted sessions now skip Landing. Requires `accountActive ===
+      true` exactly — null (unknown, or no user document yet) and false
+      (deactivated, already being signed out by AdminContext) both fall
+      through to Landing rather than carrying a doubtful session inward.
+      Destination comes from `getHomeRouteForRole()` in constants/roles.js,
+      now shared with AdminLoginScreen instead of duplicated.
 - [x] Order status transitions: decided to keep backward moves allowed
       and make them deliberate instead. Forward-only would have made a
       one-tap mis-tap permanent, and it protects nothing — the only

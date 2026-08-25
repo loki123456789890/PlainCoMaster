@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Colors } from '../constants/theme';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
+import { auth } from '../firebaseConfig';
+import { useAdmin } from '../context/AdminContext';
+import { getHomeRouteForRole } from '../constants/roles';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // The hero photo + gradient here is much darker than the light Canvas
@@ -122,8 +125,74 @@ function GetStartedButton({ onPress }) {
   );
 }
 
+// The gap between "we don't know yet" and "nobody is signed in".
+//
+// Landing is the app's initial route, so it mounts before Firebase has
+// restored a persisted session from AsyncStorage. Rendering the marketing
+// screen during that gap is what the old behaviour did: someone who has
+// been signed in for weeks reopened the app and was shown "Get Started".
+//
+// So it holds. Deliberately styled as the hero photo's own placeholder
+// colour and wordmark — the same two things Landing shows first anyway
+// while its remote image decodes — so a signed-out visitor sees a
+// continuous load rather than a splash that swaps to a different screen.
+// The cost of the wait is paid by everyone; it is a few hundred
+// milliseconds and it buys not lying to signed-in users about who they are.
+function ResolvingSession() {
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" />
+      <View style={[styles.container, styles.resolvingContainer]}>
+        <View style={styles.logoContainer}>
+          <Text style={styles.logoText}>PlainCo</Text>
+          <Text style={styles.logoSubtext}>Shop</Text>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
 export default function LandingScreen({ navigation }) {
   const reduceMotion = useReducedMotion();
+  const { authChecked, signedIn, accountActive, adminLoading, role } = useAdmin();
+
+  // True only while the answer is genuinely unknown. Once auth has been
+  // checked and there is no user, this is false immediately — a signed-out
+  // visitor waits on nothing beyond Firebase's own restore.
+  const resolving = !authChecked || (signedIn && adminLoading);
+
+  // Skip Landing for a session that is signed in AND confirmed usable.
+  //
+  // accountActive must be exactly true. null means unknown — the document
+  // read failed, or the account has no document yet — and false means
+  // deactivated, which AdminContext is already signing out and bouncing
+  // back here. Routing on anything but a confirmed true would either fight
+  // that revocation or carry a broken session into the app.
+  //
+  // auth.currentUser is checked ALONGSIDE the context's signedIn, not
+  // instead of it, and it is not redundant. Every logout in the app awaits
+  // signOut() and then resets here, so this screen is mounted by the very
+  // action that invalidates the session — and `signedIn` is React state
+  // set from an observer, which is one render behind the synchronous
+  // truth. If a reset ever won that race, a signed-out user would be
+  // bounced straight back into the app by their own logout. currentUser is
+  // null the instant signOut resolves, so reading both makes the skip
+  // strictly harder and closes the gap without depending on flush order.
+  const shouldSkipLanding =
+    !resolving && signedIn && auth.currentUser !== null && accountActive === true;
+
+  useEffect(() => {
+    if (!shouldSkipLanding) return;
+    // reset, not navigate: Landing must not sit behind the destination
+    // where a back gesture could return a signed-in user to "Get Started".
+    // Mirrors what Checkoutscreen and ProfileScreen already do.
+    navigation.reset({ index: 0, routes: [{ name: getHomeRouteForRole(role) }] });
+  }, [shouldSkipLanding, role, navigation]);
+
+  // Keep holding through the frame in which the reset is dispatched, or
+  // the marketing screen paints once on the way out — the exact flash this
+  // whole path exists to prevent.
+  if (resolving || shouldSkipLanding) return <ResolvingSession />;
 
   const handleGetStarted = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -242,6 +311,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 60,
     paddingBottom: 40,
+  },
+  // Nothing but the wordmark on the hero's own placeholder colour, which
+  // `container` already supplies. No spinner: this resolves in a few
+  // hundred milliseconds, and a spinner that appears and vanishes that
+  // fast reads as a glitch rather than as progress.
+  resolvingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   logoContainer: {
     alignItems: 'center',

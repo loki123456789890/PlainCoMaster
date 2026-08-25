@@ -59,3 +59,25 @@ export const getPortalLabel = (role) => {
   if (role === ROLE_PLATFORM_ADMIN) return 'Platform Admin';
   return STAFF_PORTAL_LABEL;
 };
+
+// The screen a signed-in account belongs on, by role.
+//
+// Written out inline in AdminLoginScreen until LandingScreen needed the
+// same answer for a persisted session. Two copies of a role-to-route map
+// is exactly the drift that justified constants/payment.js: adding a role,
+// or renaming a route, would otherwise mean finding every copy and hoping.
+//
+// Note the asymmetry, which is deliberate rather than an oversight — a
+// platformAdmin lands on AdminUsers because account management IS their
+// job, while a seller lands on a dashboard that surveys several. There is
+// no platformAdmin dashboard to send them to.
+//
+// Anything unrecognized — "customer", a missing role, a role invented
+// later — goes to Home. Same fail-closed direction as
+// resolvePrivilegedRole in AdminContext: an unknown role gets the
+// unprivileged destination, never a guessed privileged one.
+export const getHomeRouteForRole = (role) => {
+  if (role === ROLE_PLATFORM_ADMIN) return 'AdminUsers';
+  if (role === ROLE_SELLER) return 'AdminDashboard';
+  return 'Home';
+};
