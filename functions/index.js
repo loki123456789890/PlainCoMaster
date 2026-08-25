@@ -38,7 +38,7 @@
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { initializeApp } = require('firebase-admin/app');
-const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
 
 initializeApp();
 const db = getFirestore();
@@ -78,6 +78,27 @@ const SHIPPING_FEE = 0;
 // would refuse it eventually, but slowly and with a confusing error.
 const MAX_LINE_ITEMS = 50;
 const MAX_QUANTITY_PER_LINE = 99;
+
+// RATE LIMITING, and why this function has any.
+//
+// A callable is a public HTTPS endpoint. Requiring auth stops anonymous
+// traffic but not a script holding one real account's credentials, and
+// nothing here can tell that script apart from the app — that is exactly
+// the gap Firebase App Check exists to close, and App Check is not
+// available on this stack (no React Native build of @firebase/app-check;
+// see TODO.md). So the endpoint is reachable by anything that can sign in.
+//
+// What that buys an attacker is not a stolen product but an emptied shop:
+// every accepted order decrements real stock, and a Cash-on-Delivery order
+// costs the person placing it nothing at all. A loop could book the entire
+// catalogue to a fake address in seconds, leaving the store to discover
+// its inventory was gone and every order fraudulent.
+//
+// Eight attempts per ten minutes is far above what a person does — placing
+// two orders in a sitting is already unusual — and far below what makes
+// scripted abuse worthwhile.
+const RATE_LIMIT_MAX_ATTEMPTS = 8;
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 
 // Products may still store price and stock as strings, written before the
 // admin forms saved them as numbers. Parsed defensively in both cases —
@@ -162,6 +183,111 @@ function totalQuantityByProductId(lines) {
   return totals;
 }
 
+// The whole decision, as arithmetic — no Firestore, no clock of its own,
+// no I/O. Pulled out of the transaction below so it can be tested
+// directly: window rollover and the boundary between the last allowed
+// attempt and the first refused one are exactly the parts that are easy to
+// get wrong by one and impossible to observe through a transaction without
+// waiting ten real minutes.
+//
+// Returns the new counter state when the attempt is allowed, or how long
+// to wait when it is not.
+function rateLimitDecision(windowStartedAtMs, storedAttempts, now) {
+  const windowIsOpen = now - windowStartedAtMs < RATE_LIMIT_WINDOW_MS;
+  // A closed window is indistinguishable from never having attempted:
+  // both start a fresh count from zero at the current instant.
+  const attempts = windowIsOpen ? storedAttempts : 0;
+
+  if (attempts >= RATE_LIMIT_MAX_ATTEMPTS) {
+    return {
+      allowed: false,
+      // Floors at one second so a caller is never told to wait zero and
+      // invited to retry immediately.
+      retryAfterSeconds: Math.max(
+        1,
+        Math.ceil((windowStartedAtMs + RATE_LIMIT_WINDOW_MS - now) / 1000)
+      ),
+    };
+  }
+
+  return {
+    allowed: true,
+    nextAttempts: attempts + 1,
+    // A refusal never reaches here, which is the point: the window start
+    // is only ever advanced by an ALLOWED attempt opening a new one. A
+    // caller who keeps hammering after being refused cannot push their own
+    // unlock further away, so an impatient customer tapping twice does not
+    // convert a rate limit into an escalating lockout.
+    windowStartedAtMs: windowIsOpen ? windowStartedAtMs : now,
+  };
+}
+
+// Counts an attempt against the caller's window and refuses once the
+// window is full.
+//
+// COUNTS ATTEMPTS, NOT ORDERS, and runs in its OWN transaction rather than
+// inside the order's. That combination is the whole design, and the
+// obvious-looking alternative is broken: fold this into the order
+// transaction and a refused order rolls the counter back with it, so an
+// attacker loops forever on a deliberately out-of-stock item at zero cost
+// while every read and write still happens. Quota has to be spent on the
+// attempt, whatever becomes of it.
+//
+// The cost is real and is accepted: a shopper whose order legitimately
+// fails — an item sold out between opening the cart and confirming — burns
+// quota too. At eight per ten minutes there is ample room to fix a cart
+// and retry, and the alternative leaves the door open.
+//
+// A fixed window, not a sliding one. A sliding window means storing a
+// timestamp per attempt and pruning on read; a fixed window is two fields
+// and one transaction. What that concedes is a burst across a boundary —
+// up to sixteen attempts spanning two adjacent windows — which is well
+// inside what this is meant to stop.
+//
+// rateLimits/{uid} has NO rule in firestore.rules, and that file has no
+// catch-all match, so no client can read or reset its own counter. Only
+// the Admin SDK reaches it. RATE-1 in scripts/test-rules.mjs pins that,
+// because a permissive rule added here later would quietly undo all of it.
+async function countAttemptAgainstRateLimit(uid) {
+  const ref = db.collection('rateLimits').doc(uid);
+  // The function instance's own clock. Skew between instances is
+  // irrelevant at ten-minute granularity, and serverTimestamp() cannot be
+  // used for the comparison below — it is a sentinel, not a value, and
+  // reads back as null within the transaction that writes it.
+  const now = Date.now();
+
+  const retryAfterSeconds = await db.runTransaction(async (tx) => {
+    const snapshot = await tx.get(ref);
+    const data = snapshot.exists ? snapshot.data() : null;
+
+    const decision = rateLimitDecision(
+      data?.windowStartedAt?.toMillis?.() ?? 0,
+      data?.attempts || 0,
+      now
+    );
+
+    if (!decision.allowed) return decision.retryAfterSeconds;
+
+    tx.set(ref, {
+      attempts: decision.nextAttempts,
+      windowStartedAt: Timestamp.fromMillis(decision.windowStartedAtMs),
+      // Not read by anything here. Written so that someone looking at this
+      // collection while investigating abuse can see when it last happened
+      // without decoding the window arithmetic.
+      lastAttemptAt: FieldValue.serverTimestamp(),
+    });
+    return 0;
+  });
+
+  if (retryAfterSeconds > 0) {
+    throw new HttpsError(
+      'resource-exhausted',
+      'Too many order attempts. Please wait a moment and try again.',
+      { reason: 'rate-limited', retryAfterSeconds }
+    );
+  }
+}
+
 exports.placeOrder = onCall({ region: REGION }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) {
@@ -174,6 +300,19 @@ exports.placeOrder = onCall({ region: REGION }, async (request) => {
   if (!PAYMENT_METHODS.includes(paymentMethod)) {
     throw new HttpsError('invalid-argument', 'Choose a payment method.');
   }
+
+  // Placed here on purpose: AFTER the shape checks above, BEFORE the
+  // transaction below.
+  //
+  // After, because a malformed payload is rejected by normaliseLines()
+  // without touching Firestore at all — flooding with junk already costs
+  // the attacker more than it costs us, and spending a transactional write
+  // to record each one would invert that.
+  //
+  // Before, because everything past this point is the expensive part: a
+  // multi-document read, a stock decrement, an order write. The limit
+  // exists to keep a flood away from exactly that.
+  await countAttemptAgainstRateLimit(uid);
 
   const quantityByProductId = totalQuantityByProductId(lines);
   const productIds = [...quantityByProductId.keys()];
@@ -359,3 +498,9 @@ const { sendOrderConfirmation, notifySupportRequest } = require('./emails');
 
 exports.sendOrderConfirmation = sendOrderConfirmation;
 exports.notifySupportRequest = notifySupportRequest;
+
+// Exported for scripts/test-rate-limit.mjs. The Firebase CLI discovers
+// functions by walking this module's exports and ignores a plain function,
+// so this deploys nothing.
+exports._rateLimitDecision = rateLimitDecision;
+exports._RATE_LIMIT = { RATE_LIMIT_MAX_ATTEMPTS, RATE_LIMIT_WINDOW_MS };

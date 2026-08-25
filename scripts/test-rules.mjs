@@ -784,6 +784,35 @@ await test('LOG-9  a deactivated store manager cannot write to the log', async (
 });
 
 // ---------------------------------------------------------------------------
+console.log('\nRate limiting');
+// ---------------------------------------------------------------------------
+
+await test('RATE-1  nobody can read or write their own rate-limit counter', async () => {
+  // placeOrder throttles order attempts per account by counting them in
+  // rateLimits/{uid}. The counter is only meaningful if the account it
+  // constrains cannot touch it — a customer who could write this document
+  // would reset their own quota and the limit would be decorative.
+  //
+  // No rule grants access to this collection and firestore.rules has no
+  // catch-all, so today every line below passes by default. That is
+  // exactly why the test is here: it is pinning an ABSENCE, and an absence
+  // is what a later "let users see their own status" rule would quietly
+  // remove. Reads are asserted too, because the attempt count is a signal
+  // about how the throttle behaves and there is no reason to publish it.
+  //
+  // Staff are included: no role has business here. This is the server's
+  // bookkeeping, not an admin surface.
+  const db = asCustomer();
+  await assertFails(getDoc(doc(db, 'rateLimits/customer1')));
+  await assertFails(setDoc(doc(db, 'rateLimits/customer1'), { attempts: 0 }));
+  await assertFails(updateDoc(doc(db, 'rateLimits/customer1'), { attempts: 0 }));
+  await assertFails(deleteDoc(doc(db, 'rateLimits/customer1')));
+
+  await assertFails(getDoc(doc(asSeller(), 'rateLimits/customer1')));
+  await assertFails(setDoc(doc(asAdmin(), 'rateLimits/customer1'), { attempts: 0 }));
+});
+
+// ---------------------------------------------------------------------------
 console.log('\nOrder creation (server-only)');
 // ---------------------------------------------------------------------------
 

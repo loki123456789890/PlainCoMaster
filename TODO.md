@@ -124,9 +124,14 @@ deployment:
       Check state the Web SDK cannot see — so in practice, migrating the
       whole app off the Web SDK. Reconsider only if that migration
       happens for other reasons.
-- [ ] Per-user rate limiting inside `placeOrder` — the nearest available
-      answer to what App Check would have covered (abuse of the callable
-      by something that is not the app). Needs no new SDK.
+- [x] Per-user rate limiting inside `placeOrder` — the nearest available
+      answer to what App Check would have covered. Eight attempts per ten
+      minutes, counted in `rateLimits/{uid}`. Counts ATTEMPTS in its own
+      transaction, not orders in the order's: fold it in and a refused
+      order rolls the counter back, letting an attacker loop for free on a
+      deliberately out-of-stock item. Covered by `npm run test:rate-limit`
+      (pure arithmetic, no emulator) and `RATE-1` in the rules suite, which
+      pins that no client can reset its own counter.
 
 ## Batch 6 — session revocation (H8)
 

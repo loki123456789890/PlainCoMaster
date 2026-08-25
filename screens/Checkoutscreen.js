@@ -302,6 +302,25 @@ export default function CheckoutScreen({ navigation, route }) {
         return;
       }
 
+      if (reason === 'rate-limited') {
+        // Phrased as "in a short time" rather than naming a number,
+        // because the limit is an anti-abuse threshold and stating it
+        // tells someone probing it exactly what to stay under. The wait,
+        // on the other hand, is worth being concrete about — a person who
+        // hit this by retrying a failing cart needs to know whether to
+        // wait or walk away.
+        const seconds = Number(error.details?.retryAfterSeconds) || 0;
+        const minutes = Math.ceil(seconds / 60);
+        const wait = seconds > 90
+          ? `about ${minutes} minutes`
+          : 'a moment';
+        showAppAlert(
+          'Too Many Attempts',
+          `You've tried to place several orders in a short time. Please wait ${wait} and try again.`
+        );
+        return;
+      }
+
       if (error.code === 'functions/unauthenticated') {
         showAppAlert('Login Required', 'Please sign in to place an order.', [
           { text: 'Login', onPress: () => navigation.navigate('Login') },
