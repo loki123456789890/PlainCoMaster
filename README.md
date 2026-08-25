@@ -164,21 +164,45 @@ collection-group index on `orders` that the admin order screens require.
 Deploy it before using the Store Manager dashboard on a fresh project,
 or those screens will fail to load.
 
-## Rules test suite
+## Test suites
 
 ```bash
-npm run test:rules
+npm run test:rules       # 83 — firestore.rules, every role
+npm run test:checkout    # 12 — placeOrder end to end
+npm run test:email       #  9 — the two mail triggers
+npm run test:rate-limit  #  9 — the order throttle's arithmetic
+npm run preview:email    #      renders the templates for eyeballing
 ```
 
-Runs ~128 assertions against the Firestore emulator. **Requires a JDK** —
-the emulator is a Java process. [scripts/run-rules-tests.mjs](scripts/run-rules-tests.mjs)
-locates a JDK itself and puts it on `PATH` for the child process only, so
-a freshly opened terminal that predates your JDK install still works.
+The first three need the Firestore emulator, and therefore **a JDK** — the
+emulator is a Java process. [scripts/run-rules-tests.mjs](scripts/run-rules-tests.mjs)
+locates one itself and puts it on `PATH` for the child process only, so a
+freshly opened terminal that predates your JDK install still works. The
+last two need nothing.
 
-The suite deliberately seeds privileged accounts with rules bypassed,
-because the rules under test forbid creating a document that already
-carries a role — the same restriction described in the bootstrap section
-above.
+**Each covers a boundary the others cannot reach**, which is why there are
+four rather than one:
+
+- `test:rules` runs against the security rules, so it can only see what a
+  *client* may do. The Cloud Functions bypass rules entirely and are
+  invisible to it.
+- `test:checkout` calls the real `placeOrder` handler against the emulator
+  with nothing mocked — server-side pricing, the stock decrement, the
+  legacy string-to-number migration, cart clearing, every refusal, and the
+  rate limiter actually being wired up.
+- `test:email` fakes SMTP and nothing else, so the one-shot claim that
+  stops a customer receiving two receipts is exercised as a genuine
+  Firestore race rather than a simulated one.
+- `test:rate-limit` is pure arithmetic, which is the only way to walk a
+  ten-minute window without waiting ten minutes.
+
+The rules suite deliberately seeds privileged accounts with rules
+bypassed, because the rules under test forbid creating a document that
+already carries a role — the same restriction described in the bootstrap
+section above.
+
+None of them touch the app itself. See the manual checklist at the end of
+this file for what still needs a device.
 
 ## Layout
 
@@ -203,3 +227,48 @@ utils/                  stock arithmetic, reviews, activity log, alerts
 - Stored role values (`customer`, `seller`, `platformAdmin`) are
   load-bearing; `firestore.rules` matches them literally. Only the
   labels in [constants/roles.js](constants/roles.js) are user-facing.
+
+## Manual test checklist
+
+The four suites cover the server. Nothing in them exercises the app
+itself, so these are the paths that still need a device — and the order
+below is deliberate: each step sets up the next, so one pass covers all
+of them.
+
+**Place a real order.**
+
+1. Sign in as a customer with a saved delivery address.
+2. Add two items to the cart, then check out with Cash on Delivery.
+3. Confirm the confirmation screen shows an order number, and that the
+   total reads "To pay on delivery" rather than "Total".
+4. Reopen the product you bought — stock should have dropped by the
+   quantity ordered.
+5. Check the cart is empty.
+
+**Then, as a Store Manager:**
+
+6. The order appears in Orders with the same number the customer saw,
+   character for character. That number is the whole point of
+   [utils/orderNumber.js](utils/orderNumber.js) — paste it into the search
+   box and confirm it matches.
+7. The dashboard shows an **"1 email didn't send"** card. This is expected
+   and is the correct behaviour while the Gmail placeholders are in place:
+   tapping through should show one entry with status **Not sent**. If the
+   card is absent, either the trigger did not fire or `recordedAt` is
+   missing — check `firebase functions:log`.
+
+**Session behaviour** (needs a second account):
+
+8. Force-quit and reopen the app while signed in. It should go straight to
+   Home (or the dashboard for staff), never to the Landing screen.
+9. Log out. You should land on Landing and stay there.
+10. With a customer signed in on one device, deactivate that account from
+    Platform Admin → Users on another. The first device should sign out
+    within a second or two and say why.
+
+**Photo upload**, if the earlier test was Android only:
+
+11. Add a product on iOS using a photo from the library, and confirm the
+    stored `imageUrl` renders. HEIC is iOS-specific and `storage.rules`
+    accepts only JPEG, PNG and WebP, so this is the one path that could
+    fail on iOS while passing on Android.

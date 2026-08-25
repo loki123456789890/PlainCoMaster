@@ -12,6 +12,7 @@
     "preview:email": "node scripts/preview-email.mjs",
     "test:rate-limit": "node scripts/test-rate-limit.mjs",
     "test:email": "node scripts/run-rules-tests.mjs scripts/test-email.mjs",
+    "test:checkout": "node scripts/run-rules-tests.mjs scripts/test-checkout.mjs",
     "rules:deploy": "firebase deploy --only firestore:rules",
     "indexes:deploy": "firebase deploy --only firestore:indexes",
     "storage:deploy": "firebase deploy --only storage"

@@ -161,6 +161,27 @@ deployment:
       JS), emulator error handling for async `onRequest` (no `onRequest`
       anywhere), and v1 `Event` renamed to `LegacyEvent` (v2 API only).
 
+- [x] End-to-end coverage of `placeOrder` — `npm run test:checkout`, 12
+      tests against the emulator with nothing mocked. This was the seam
+      three suites each stopped short of: test-rules proves no client can
+      write orders, test-rate-limit proves the arithmetic in isolation, and
+      test-email starts from an order that already exists. Server-side
+      pricing, the stock decrement, the legacy string migration, cart
+      clearing, every refusal path, and the rate limiter actually being
+      wired to the endpoint are all exercised here.
+
+### Still needs a device or an account, not code
+
+- [ ] A real order placed through the app. The suites cover the server;
+      nothing has exercised Checkoutscreen calling the deployed callable,
+      the confirmation screen rendering, or the dashboard mail-log card
+      appearing. See the checklist at the end of README.
+- [ ] iOS/HEIC photo upload confirmation, if the device test was Android
+      only.
+- [ ] Real Gmail credentials. Worth more now that the claim bug is fixed:
+      entries logged `unconfigured` are genuinely re-sendable rather than
+      permanently stuck.
+
 ### Known gaps in what shipped
 
 - [x] The email triggers have test coverage — `npm run test:email`, 8

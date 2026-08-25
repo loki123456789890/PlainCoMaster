@@ -288,7 +288,12 @@ async function countAttemptAgainstRateLimit(uid) {
   }
 }
 
-exports.placeOrder = onCall({ region: REGION }, async (request) => {
+// Named rather than inline so scripts/test-checkout.mjs can call it with a
+// plain object instead of a constructed callable request. What it does —
+// price from the catalogue, decrement stock, write the order, clear the
+// cart, all in one transaction — is the most consequential logic in the
+// project and should not need a deployed endpoint to exercise.
+async function handlePlaceOrder(request) {
   const uid = request.auth?.uid;
   if (!uid) {
     throw new HttpsError('unauthenticated', 'Please sign in to place an order.');
@@ -485,7 +490,14 @@ exports.placeOrder = onCall({ region: REGION }, async (request) => {
   });
 
   return placed;
-});
+}
+
+exports.placeOrder = onCall({ region: REGION }, handlePlaceOrder);
+
+// Exported for scripts/test-checkout.mjs. A plain function, so the
+// Firebase CLI's export-walking discovery ignores it and it deploys
+// nothing.
+exports._handlePlaceOrder = handlePlaceOrder;
 
 // Transactional email lives in its own module — the triggers there share
 // nothing with placeOrder except the region, and folding an SMTP transport
