@@ -26,6 +26,7 @@ import { useAdmin } from '../../context/AdminContext';
 import { useProducts } from '../../context/ProductContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
+import { stockLevel, parseStockLimit } from '../../utils/stock';
 import Card from '../../components/ui/Card';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
@@ -143,6 +144,32 @@ export default function StoreManagerDashboardScreen({ navigation }) {
 
   const handleRetry = () => setRetryToken((t) => t + 1);
 
+  // Which products need restocking, derived from the catalog this screen
+  // already holds — no extra listener, no extra read.
+  //
+  // Worth having at all because the customer-facing app has known this
+  // longer than the shop has: Productscreen renders "Only N left in stock"
+  // and an Out of Stock badge to shoppers, while this dashboard showed a
+  // bare product count. The shopkeeper found out an item had run out after
+  // the shopper did.
+  //
+  // Sold-out items sort ahead of merely low ones because they are the ones
+  // actively costing sales, and within each group the smallest number
+  // first. Products with no recorded stock are excluded by stockLevel()
+  // rather than counted as zero — see its note there.
+  //
+  // Declared above gridItems because that list reads restockItems for its
+  // badge.
+  const restockItems = products
+    .map((product) => ({ product, level: stockLevel(product.stock) }))
+    .filter(({ level }) => level === 'out' || level === 'low')
+    .sort((a, b) => {
+      if (a.level !== b.level) return a.level === 'out' ? -1 : 1;
+      return parseStockLimit(a.product.stock) - parseStockLimit(b.product.stock);
+    });
+
+  const outOfStockCount = restockItems.filter(({ level }) => level === 'out').length;
+
   // Neutral icon tiles by design: none of Products/Orders/Support map to an
   // existing semantic color (Clay = actions, Moss = success, Gold = money,
   // Rust = danger), so coloring them arbitrarily would be decoration, not
@@ -162,6 +189,10 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       loading: productsLoading,
       error: Boolean(productsError),
       onRetry: retryFetchProducts,
+      // Reuses the same overlay dot the Support tile uses for its open
+      // queue, so "this needs attention" reads the same way in both
+      // places rather than inventing a second signal for one idea.
+      badge: restockItems.length > 0,
     },
     {
       title: 'Orders',
@@ -233,9 +264,9 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     }
   };
 
-  const handleNavigate = (screen) => {
+  const handleNavigate = (screen, params) => {
     Haptics.selectionAsync();
-    navigation.navigate(screen);
+    navigation.navigate(screen, params);
   };
 
   const heroAccessibilityLabel = ordersLoading
@@ -347,6 +378,66 @@ export default function StoreManagerDashboardScreen({ navigation }) {
             </Card>
           </AnimatedPressable>
         </Animated.View>
+
+        {/* Restocking. Renders only when there is something to act on —
+            a permanent "0 items need restocking" card would be furniture
+            the eye learns to skip, which is exactly what this must not
+            become. Named items rather than a bare count, because "what do
+            I need to restock today" is answered by names, and a number
+            alone would just start a hunt through the product list. */}
+        {!productsLoading && !productsError && restockItems.length > 0 && (
+          <Animated.View
+            entering={
+              reduceMotion ? undefined : FadeInDown.duration(240).delay(60).easing(EASE_OUT_QUART)
+            }
+          >
+            <AnimatedPressable
+              onPress={() => handleNavigate('AdminProducts', { filter: 'restock' })}
+              accessibilityRole="button"
+              accessibilityLabel={
+                `${restockItems.length} ${restockItems.length === 1 ? 'product needs' : 'products need'} restocking` +
+                (outOfStockCount > 0 ? `, ${outOfStockCount} sold out` : '')
+              }
+              accessibilityHint="Opens the product list filtered to these items"
+            >
+              <Card variant="flat" style={styles.restockCard}>
+                <View style={styles.restockHeader}>
+                  <Ionicons
+                    name="alert-circle-outline"
+                    size={18}
+                    color={outOfStockCount > 0 ? Colors.light.danger : Colors.light.highlight}
+                  />
+                  <Text style={styles.restockTitle}>
+                    {restockItems.length} {restockItems.length === 1 ? 'item needs' : 'items need'} restocking
+                  </Text>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.light.icon} />
+                </View>
+
+                {restockItems.slice(0, 3).map(({ product, level }) => (
+                  <View key={product.id} style={styles.restockRow}>
+                    <Text style={styles.restockName} numberOfLines={1}>
+                      {product.name}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.restockCount,
+                        level === 'out' ? styles.restockCountOut : styles.restockCountLow,
+                      ]}
+                    >
+                      {level === 'out' ? 'Sold out' : `${parseStockLimit(product.stock)} left`}
+                    </Text>
+                  </View>
+                ))}
+
+                {restockItems.length > 3 && (
+                  <Text style={styles.restockMore}>
+                    +{restockItems.length - 3} more
+                  </Text>
+                )}
+              </Card>
+            </AnimatedPressable>
+          </Animated.View>
+        )}
 
         <View style={styles.grid}>
           {gridItems.map((item, index) => {
@@ -543,6 +634,18 @@ const styles = StyleSheet.create({
   retryTextPressed: {
     opacity: 0.6,
   },
+  restockCard: { marginBottom: Spacing.md, gap: Spacing.sm },
+  restockHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  restockTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: Colors.light.text },
+  restockRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  restockName: { flex: 1, fontSize: 13, color: Colors.light.icon },
+  restockCount: { fontSize: 12, fontWeight: '600' },
+  // Rust for sold out, Gold for merely low. Sold out is the one actively
+  // costing sales; low is a heads-up, and giving both the danger color
+  // would flatten the difference the sort order exists to express.
+  restockCountOut: { color: Colors.light.danger },
+  restockCountLow: { color: Colors.light.highlight },
+  restockMore: { fontSize: 12, color: Colors.light.icon },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

@@ -39,6 +39,30 @@ export const parseStockLimit = (stock) => {
   return Number.isNaN(parsed) ? null : parsed;
 };
 
+// Below this many units, a product is worth a Store Manager's attention.
+//
+// The same number Productscreen already shows customers as "Only N left in
+// stock". Those two should agree: it would be odd for a shopper to be told
+// an item is running out while the shop's own dashboard still called it
+// fine.
+export const LOW_STOCK_THRESHOLD = 10;
+
+// Buckets a stored stock value for the restocking view.
+//
+// 'unknown' is a real answer and deliberately not folded into 'out'.
+// Products written before stock was mandatory have no value at all, and
+// Productscreen treats an unrecorded stock as unlimited rather than zero —
+// counting those as needing restocking would fill the dashboard with false
+// alarms about items that may be perfectly well stocked. Reads through
+// parseStockLimit for exactly that distinction.
+export const stockLevel = (stock) => {
+  const parsed = parseStockLimit(stock);
+  if (parsed === null) return 'unknown';
+  if (parsed <= 0) return 'out';
+  if (parsed < LOW_STOCK_THRESHOLD) return 'low';
+  return 'ok';
+};
+
 // Totals quantity per product id across a list of line items.
 //
 // A single product can legitimately appear as SEVERAL lines in one order —

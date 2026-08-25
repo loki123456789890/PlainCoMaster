@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import { useProducts } from '../../context/ProductContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Radius } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
+import { stockLevel } from '../../utils/stock';
 import Badge from '../../components/ui/Badge';
 import EmptyState from '../../components/ui/EmptyState';
 import Card from '../../components/ui/Card';
@@ -42,9 +43,14 @@ function ProductCardSkeleton() {
   );
 }
 
-export default function AdminProductsScreen({ navigation }) {
+export default function AdminProductsScreen({ navigation, route }) {
   const { products, loading, error, deleteProduct, refreshProducts, retryFetchProducts } = useProducts();
   const [searchQuery, setSearchQuery] = useState('');
+  // Set when arriving from the dashboard's restocking card. Held in state
+  // rather than read from route.params directly so it can be cleared
+  // without a navigation call — the manager should be able to widen back
+  // to the full list without leaving the screen and coming back.
+  const [restockOnly, setRestockOnly] = useState(route.params?.filter === 'restock');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
@@ -59,10 +65,26 @@ export default function AdminProductsScreen({ navigation }) {
     setRefreshing(false);
   };
 
-  const filteredProducts = products.filter(product =>
-    product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (product.type && product.type.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  // If the dashboard sends the same filter again while this screen is
+  // already mounted, honour it — same reasoning as Shopscreen's handling
+  // of route.params.filterType.
+  useEffect(() => {
+    if (route.params?.filter === 'restock') setRestockOnly(true);
+  }, [route.params?.filter]);
+
+  // Search and the restocking filter compose (AND) rather than replacing
+  // each other, so searching inside a restock list narrows it instead of
+  // silently dropping back to the whole catalog.
+  const filteredProducts = products
+    .filter((product) => {
+      if (!restockOnly) return true;
+      const level = stockLevel(product.stock);
+      return level === 'out' || level === 'low';
+    })
+    .filter(product =>
+      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (product.type && product.type.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
 
   const handleDelete = (product) => {
     Haptics.selectionAsync();
@@ -162,6 +184,31 @@ export default function AdminProductsScreen({ navigation }) {
           </AnimatedPressable>
         )}
       </Animated.View>
+
+      {/* An active filter must never be invisible: without this, arriving
+          from the dashboard would look like most of the catalog had
+          vanished. Clearable in place so widening back to everything
+          doesn't mean leaving the screen and coming back. */}
+      {restockOnly && (
+        <Animated.View
+          style={styles.filterChipRow}
+          entering={reduceMotion ? undefined : FadeIn.duration(200)}
+        >
+          <AnimatedPressable
+            style={styles.filterChip}
+            onPress={() => {
+              Haptics.selectionAsync();
+              setRestockOnly(false);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Showing only items needing restock. Tap to show all products."
+          >
+            <Ionicons name="alert-circle-outline" size={14} color={Colors.light.tint} />
+            <Text style={styles.filterChipText}>Needs restocking</Text>
+            <Ionicons name="close" size={14} color={Colors.light.tint} />
+          </AnimatedPressable>
+        </Animated.View>
+      )}
 
       {/* Stats Summary */}
       <Animated.View
@@ -273,7 +320,13 @@ export default function AdminProductsScreen({ navigation }) {
             <EmptyState
               icon="cube-outline"
               title="No products found"
-              subtitle={searchQuery ? 'Try a different search term' : 'Tap + to add your first product'}
+              subtitle={
+                restockOnly
+                  ? 'Nothing is running low right now.'
+                  : searchQuery
+                    ? 'Try a different search term'
+                    : 'Tap + to add your first product'
+              }
             />
             {Boolean(searchQuery) && (
               <View style={styles.emptyStateAction}>
@@ -470,6 +523,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.light.text,
   },
+  filterChipRow: { flexDirection: 'row', paddingHorizontal: 16, marginBottom: 12 },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.tint + '12',
+  },
+  filterChipText: { fontSize: 12, fontWeight: '600', color: Colors.light.tint },
   statsContainer: {
     flexDirection: 'row',
     paddingHorizontal: 16,
