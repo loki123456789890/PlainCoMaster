@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   Pressable,
-  Image,
   TextInput,
   Modal,
   Platform,
@@ -39,6 +38,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
+import ProductImage from '../../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
 import { getPaymentLabel, getPaymentIcon } from '../../constants/payment';
@@ -785,7 +785,7 @@ export default function AdminOrdersScreen({ navigation }) {
                   {selectedOrder.items.map((item, index) => (
                     <View key={index} style={styles.itemRow}>
                       {item.image ? (
-                        <Image source={{ uri: item.image }} style={styles.itemImage} />
+                        <ProductImage uri={item.image} style={styles.itemImage} />
                       ) : (
                         <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
                           <Ionicons name="shirt-outline" size={20} color={Colors.light.icon} />

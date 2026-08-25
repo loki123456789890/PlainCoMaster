@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -28,6 +27,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import StarRating from '../components/ui/StarRating';
+import ProductImage from '../components/ui/ProductImage';
 import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
 import { getPaymentLabel, getPaymentIcon } from '../constants/payment';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
@@ -379,7 +379,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
                     accessibilityLabel={`${item.name}${item.size ? `, size ${item.size}` : ''}${item.color ? `, color ${item.color}` : ''}, quantity ${item.quantity || 1}, ₱${(Number(item.price) * (item.quantity || 1)).toFixed(2)}`}
                   >
                     {item.image ? (
-                      <Image source={{ uri: item.image }} style={styles.itemImage} />
+                      <ProductImage uri={item.image} style={styles.itemImage} />
                     ) : (
                       <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
                         <Ionicons name="shirt-outline" size={24} color={Colors.light.icon} />

@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  Image,
   TextInput,
   Modal,
   Platform,
@@ -26,6 +25,7 @@ import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
+import ProductImage from '../../components/ui/ProductImage';
 
 // Shaped like a real product row so the loading state previews the content
 // that's about to arrive, matching the skeleton treatment every other admin
@@ -277,7 +277,7 @@ export default function AdminProductsScreen({ navigation, route }) {
                 accessibilityHint="Opens product details"
               >
                 <Card variant="flat" style={styles.productCard}>
-                  <Image source={{ uri: product.imageUrl || product.image }} style={styles.productImage} />
+                  <ProductImage uri={product.imageUrl || product.image} style={styles.productImage} />
                   <View style={styles.productInfo}>
                     <Text style={styles.productName} numberOfLines={2}>
                       {product.name}
@@ -366,7 +366,7 @@ export default function AdminProductsScreen({ navigation, route }) {
 
             {selectedProduct && (
               <ScrollView showsVerticalScrollIndicator={false}>
-                <Image source={{ uri: selectedProduct.imageUrl || selectedProduct.image }} style={styles.modalImage} />
+                <ProductImage uri={selectedProduct.imageUrl || selectedProduct.image} style={styles.modalImage} />
                 <Text style={styles.modalProductName}>{selectedProduct.name}</Text>
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Price:</Text>

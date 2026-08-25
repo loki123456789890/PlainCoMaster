@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Pressable,
   ScrollView,
-  Image,
 } from 'react-native';
 import { showAppAlert } from '../utils/appAlert';
 import Animated, {
@@ -32,6 +31,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
+import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // Handles "$450.00", "450", or 450 — always returns a clean number
@@ -519,7 +519,7 @@ export default function CheckoutScreen({ navigation, route }) {
         {orderItems.map((item, index) => (
           <View key={index} style={styles.itemRow}>
             {(item.image || item.imageUrl) ? (
-              <Image source={{ uri: item.image || item.imageUrl }} style={styles.itemImage} />
+              <ProductImage uri={item.image || item.imageUrl} style={styles.itemImage} />
             ) : null}
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>

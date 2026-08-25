@@ -33,6 +33,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
+import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 const menuItems = [
@@ -45,19 +46,6 @@ const filterTabs = [
   { key: 'ready-to-wear', label: 'Ready-to-Wear' },
   { key: 'ukay-ukay', label: 'Ukay-Ukay' },
 ];
-
-// Fades a remote image in over its skeleton once decoded — same treatment
-// Home/Product give their product photography.
-function FadingImage({ style, onLoad, onError, ...rest }) {
-  const reduceMotion = useReducedMotion();
-  const opacity = useSharedValue(reduceMotion ? 1 : 0);
-  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  const handleLoad = (e) => {
-    opacity.value = reduceMotion ? 1 : withTiming(1, { duration: 220, easing: EASE_OUT_QUART });
-    onLoad?.(e);
-  };
-  return <Animated.Image style={[style, animatedStyle]} onLoad={handleLoad} onError={onError} {...rest} />;
-}
 
 // Heart toggle with a settle-pulse on tap — same three-keyframe treatment as
 // Homescreen.js's FavoriteButton, so favoriting reads identically whether
@@ -144,12 +132,10 @@ function ProductCard({ item, index, favorited, onPress, onToggleFavorite }) {
                 <Ionicons name="image-outline" size={28} color={Colors.light.icon} />
               </View>
             ) : (
-              <FadingImage
-                source={{ uri: item.imageUrl }}
+              <ProductImage
+                uri={item.imageUrl}
                 style={styles.image}
-                resizeMode="cover"
                 onError={() => setImageFailed(true)}
-                accessible
                 accessibilityLabel={`Photo of ${item.name}`}
               />
             )}

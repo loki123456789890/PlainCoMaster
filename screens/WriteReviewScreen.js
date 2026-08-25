@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
@@ -26,6 +25,7 @@ import Input from '../components/ui/Input';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import StarRating from '../components/ui/StarRating';
+import ProductImage from '../components/ui/ProductImage';
 import {
   REVIEWS_COLLECTION,
   REVIEW_TEXT_MAX,
@@ -262,7 +262,7 @@ export default function WriteReviewScreen({ navigation, route }) {
           <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220)}>
             <Card variant="flat" style={styles.itemCard}>
               {item?.image ? (
-                <Image source={{ uri: item.image }} style={styles.itemImage} />
+                <ProductImage uri={item.image} style={styles.itemImage} />
               ) : (
                 <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
                   <Ionicons name="shirt-outline" size={24} color={Colors.light.icon} />

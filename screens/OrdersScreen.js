@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Pressable,
   FlatList,
-  Image,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -31,6 +30,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
+import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // "Pending" and "processing" share one visual status (color/icon/tab) —
@@ -115,7 +115,7 @@ function OrderCard({ order, index, onPress }) {
       >
         <Card variant="flat" style={styles.orderCard}>
           {order.image ? (
-            <Image source={{ uri: order.image }} style={styles.orderImage} />
+            <ProductImage uri={order.image} style={styles.orderImage} />
           ) : (
             <View style={[styles.orderImage, styles.orderImagePlaceholder]}>
               <Ionicons name="shirt-outline" size={28} color={Colors.light.icon} />

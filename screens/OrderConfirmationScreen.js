@@ -19,7 +19,7 @@
 // this instant, and OrdersScreen shows the real one once the server
 // stamps it.
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -38,6 +38,7 @@ import { getPaymentLabel, getPaymentIcon, isPayOnDelivery } from '../constants/p
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
+import ProductImage from '../components/ui/ProductImage';
 
 // Same slice(0, 8).toUpperCase() convention OrderDetailsScreen and
 // AdminOrdersScreen already use, so the number a customer reads here is
@@ -167,7 +168,7 @@ export default function OrderConfirmationScreen({ navigation, route }) {
         {items.map((item, index) => (
           <View key={`${item.productId || 'item'}-${index}`} style={styles.itemRow}>
             {item.image ? (
-              <Image source={{ uri: item.image }} style={styles.itemImage} />
+              <ProductImage uri={item.image} style={styles.itemImage} />
             ) : (
               <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
                 <Ionicons name="shirt-outline" size={20} color={Colors.light.icon} />

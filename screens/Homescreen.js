@@ -32,6 +32,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
+import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // Favorite heart: generic press-dip plus a distinct settle-pulse on toggle,
@@ -74,19 +75,6 @@ function FavoriteButton({ favorited, onToggle, accessibilityLabel }) {
       </Animated.View>
     </Pressable>
   );
-}
-
-// Fades a remote image in over its existing placeholder background once
-// decoded, instead of popping in abruptly. Falls back to no animation
-// (instant) under Reduce Motion.
-function FadingImage({ style, ...rest }) {
-  const reduceMotion = useReducedMotion();
-  const opacity = useSharedValue(reduceMotion ? 1 : 0);
-  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  const handleLoad = () => {
-    opacity.value = reduceMotion ? 1 : withTiming(1, { duration: 220, easing: EASE_OUT_QUART });
-  };
-  return <Animated.Image style={[style, animatedStyle]} onLoad={handleLoad} {...rest} />;
 }
 
 // Loading placeholder shaped exactly like the real Featured Picks row, so
@@ -327,7 +315,11 @@ export default function HomeScreen({ navigation }) {
                   rippleColor={Colors.light.border}
                 >
                   <View style={styles.productImageWrapper}>
-                    <FadingImage source={{ uri: product.imageUrl }} style={styles.productImage} />
+                    <ProductImage
+                      uri={product.imageUrl}
+                      style={styles.productImage}
+                      accessibilityLabel={`Photo of ${product.name}`}
+                    />
                     <FavoriteButton
                       favorited={isFavorite(product.id)}
                       onToggle={() => handleToggleFavorite(product)}

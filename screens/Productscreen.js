@@ -33,6 +33,7 @@ import Card from '../components/ui/Card';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
+import ProductImage from '../components/ui/ProductImage';
 import SizeGuideModal from '../components/ui/SizeGuideModal';
 import StarRating from '../components/ui/StarRating';
 import {
@@ -73,19 +74,6 @@ const isLightColor = (hex) => {
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return luminance > 0.6;
 };
-
-// Fades a remote image in over its skeleton once decoded, instead of
-// popping in abruptly — same treatment Home gives its product photos.
-function FadingImage({ style, onLoad, ...rest }) {
-  const reduceMotion = useReducedMotion();
-  const opacity = useSharedValue(reduceMotion ? 1 : 0);
-  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  const handleLoad = (e) => {
-    opacity.value = reduceMotion ? 1 : withTiming(1, { duration: 280, easing: EASE_OUT_QUART });
-    onLoad?.(e);
-  };
-  return <Animated.Image style={[style, animatedStyle]} onLoad={handleLoad} {...rest} />;
-}
 
 // Handles price as "₱450.00", "450", or a plain number 450
 const parsePrice = (price) => {
@@ -520,13 +508,11 @@ export default function ProductScreen({ navigation, route }) {
               <Text style={styles.imageFallbackText}>Photo unavailable</Text>
             </View>
           ) : (
-            <FadingImage
-              source={{ uri: productImage }}
+            <ProductImage
+              uri={productImage}
               style={styles.productImage}
-              resizeMode="cover"
               onLoad={() => setImageLoaded(true)}
               onError={() => setImageFailed(true)}
-              accessible
               accessibilityLabel={`Photo of ${productName}`}
             />
           )}

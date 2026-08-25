@@ -29,6 +29,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
+import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 const quickLinks = [
@@ -47,19 +48,6 @@ const parsePrice = (price) => {
   }
   return 0;
 };
-
-// Fades a remote image in over its skeleton once decoded — same treatment
-// Home/Shop/Product give their product photography.
-function FadingImage({ style, onLoad, onError, ...rest }) {
-  const reduceMotion = useReducedMotion();
-  const opacity = useSharedValue(reduceMotion ? 1 : 0);
-  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  const handleLoad = (e) => {
-    opacity.value = reduceMotion ? 1 : withTiming(1, { duration: 220, easing: EASE_OUT_QUART });
-    onLoad?.(e);
-  };
-  return <Animated.Image style={[style, animatedStyle]} onLoad={handleLoad} onError={onError} {...rest} />;
-}
 
 // Heart toggle with a settle-pulse on tap — same three-keyframe treatment as
 // Homescreen.js/Shopscreen.js's FavoriteButton, so unfavoriting here reads
@@ -154,12 +142,10 @@ function FavoriteCard({ item, index, onPress, onRemove }) {
                 <Ionicons name="image-outline" size={28} color={Colors.light.icon} />
               </View>
             ) : (
-              <FadingImage
-                source={{ uri: imageSource }}
+              <ProductImage
+                uri={imageSource}
                 style={styles.image}
-                resizeMode="cover"
                 onError={() => setImageFailed(true)}
-                accessible
                 accessibilityLabel={`Photo of ${item.name}`}
               />
             )}
