@@ -115,6 +115,21 @@ export default function AdminProductsScreen({ navigation, route }) {
     }
   };
 
+  // Ready-to-wear stock arrives in runs of the same item in a different
+  // colour or size, and an ukay-ukay bale is dozens of similar pieces.
+  // Re-entering a 1000-line form for each one is why listing a bale takes
+  // a day. This hands the Add form a filled-in copy to edit rather than a
+  // blank one to retype.
+  //
+  // Deliberately opens the form rather than writing a copy straight to
+  // Firestore: a silent duplicate would put a second identical product in
+  // the catalog with no photo change, no price change, and nothing telling
+  // the manager it happened.
+  const handleDuplicate = (product) => {
+    Haptics.selectionAsync();
+    navigation.navigate('AdminAddProduct', { duplicateFrom: product });
+  };
+
   const handleView = (product) => {
     Haptics.selectionAsync();
     setSelectedProduct(product);
@@ -300,6 +315,16 @@ export default function AdminProductsScreen({ navigation, route }) {
                       accessibilityLabel={`Edit ${product.name}`}
                     >
                       <Ionicons name="create-outline" size={20} color={Colors.light.tint} />
+                    </AnimatedPressable>
+                    <AnimatedPressable
+                      style={styles.actionButton}
+                      onPress={() => handleDuplicate(product)}
+                      hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Duplicate ${product.name}`}
+                      accessibilityHint="Opens the add-product form filled in from this item"
+                    >
+                      <Ionicons name="copy-outline" size={20} color={Colors.light.icon} />
                     </AnimatedPressable>
                     <AnimatedPressable
                       style={styles.actionButton}

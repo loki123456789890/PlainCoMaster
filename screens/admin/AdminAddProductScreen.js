@@ -48,30 +48,79 @@ const TYPE_OPTIONS = [
   { key: 'ukay-ukay', label: 'Ukay-Ukay' },
 ];
 
-export default function AdminAddProductScreen({ navigation }) {
+const EMPTY_FORM = {
+  name: '',
+  price: '',
+  type: 'ready-to-wear',
+  stock: '',
+  description: '',
+  imageUrl: '',
+  colors: [],
+  sizes: [],
+  measurements: {},
+  measurementType: null,
+};
+
+// A blank form, or a copy of an existing product when arriving via
+// Duplicate on AdminProductsScreen.
+//
+// price and stock are stringified because this form holds them as text —
+// they are TextInput values here and only become numbers at save, so a
+// prefill that handed them through as numbers would break .trim() in
+// validate() on the very first render.
+//
+// The name gets a "(Copy)" suffix rather than arriving identical. Two
+// products with the same name is a real state a manager could save
+// without noticing, and the suffix is both a flag and a cursor position:
+// it says what happened and it is the first thing they will edit.
+//
+// colors, sizes and measurements are copied by value, not by reference.
+// The source object here is the live one out of ProductContext's array,
+// so editing sizes on the duplicate would otherwise mutate the product
+// being copied FROM — silently, in every other screen holding that same
+// array.
+function buildInitialForm(source) {
+  if (!source) return EMPTY_FORM;
+  return {
+    name: source.name ? `${source.name} (Copy)` : '',
+    price: source.price != null ? String(source.price) : '',
+    type: source.type || 'ready-to-wear',
+    stock: source.stock != null ? String(source.stock) : '',
+    description: source.description || '',
+    imageUrl: source.imageUrl || '',
+    colors: [...(source.colors || [])],
+    sizes: [...(source.sizes || [])],
+    measurements: Object.entries(source.measurements || {}).reduce((acc, [size, entry]) => {
+      acc[size] = { ...entry };
+      return acc;
+    }, {}),
+    measurementType: source.measurementType || null,
+  };
+}
+
+export default function AdminAddProductScreen({ navigation, route }) {
   const { addProduct } = useProducts();
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
 
-  const [formData, setFormData] = useState({
-    name: '',
-    price: '',
-    type: 'ready-to-wear',
-    stock: '',
-    description: '',
-    imageUrl: '',
-    colors: [],
-    sizes: [],
-    // Keyed by size, only for sizes currently selected in `sizes` above —
-    // toggleSize() below adds/removes entries as sizes are (de)selected.
-    // Field keys within each entry depend on measurementType below.
-    measurements: {},
-    // Which measurement field set applies to this product — null until the
-    // admin picks one. No type selected means no measurement inputs render
-    // at all (see MEASUREMENT_TYPES in constants/productOptions.js).
-    measurementType: null,
-  });
-  const [measurementsExpanded, setMeasurementsExpanded] = useState(false);
+  // Set when arriving via Duplicate on AdminProductsScreen. Read once into
+  // initial state rather than watched: this form is the manager's working
+  // copy from the first render on, and re-syncing it to the source product
+  // would throw away edits if that product changed underneath.
+  //
+  // `formData` holds the same shape it always did — see EMPTY_FORM and
+  // buildInitialForm above. The measurements map is keyed by size, only
+  // for sizes currently selected in `sizes`, and its field keys depend on
+  // measurementType (see MEASUREMENT_TYPES in constants/productOptions.js).
+  const duplicateFrom = route.params?.duplicateFrom;
+
+  const [formData, setFormData] = useState(() => buildInitialForm(duplicateFrom));
+  // Opened by default when duplicating a product that has a size guide,
+  // so the copied measurements are visible rather than hidden behind a
+  // collapsed section the manager has no reason to suspect is populated.
+  const [measurementsExpanded, setMeasurementsExpanded] = useState(
+    Boolean(duplicateFrom?.measurements)
+  );
   const [pendingMeasurementType, setPendingMeasurementType] = useState(null);
   const [errors, setErrors] = useState({
     name: '',
@@ -494,7 +543,7 @@ export default function AdminAddProductScreen({ navigation }) {
           <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </AnimatedPressable>
         <Text style={styles.headerTitle} accessibilityRole="header">
-          Add New Product
+          {duplicateFrom ? 'Duplicate Product' : 'Add New Product'}
         </Text>
         <View style={{ width: 44 }} />
       </View>
