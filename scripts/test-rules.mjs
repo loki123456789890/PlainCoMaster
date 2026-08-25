@@ -368,7 +368,7 @@ await test('SPLIT-7  a customer cannot read another customer\'s account', async 
 });
 
 // ---------------------------------------------------------------------------
-console.log('\nProducts and checkout');
+console.log('\nProducts and stock');
 // ---------------------------------------------------------------------------
 
 await test('SHOP-1  a customer cannot create or edit products', async () => {
@@ -376,17 +376,47 @@ await test('SHOP-1  a customer cannot create or edit products', async () => {
   await assertFails(updateDoc(doc(asCustomer(), 'products/p1'), { price: 1 }));
 });
 
-await test('SHOP-2  a customer may decrement stock at checkout', async () => {
-  await assertSucceeds(updateDoc(doc(asCustomer(), 'products/p1'), { stock: 9 }));
+await test('SHOP-2  a customer CANNOT decrement stock — checkout is server-side', async () => {
+  // This assertion is the exact inverse of what it asserted before, and
+  // the inversion is the point. There used to be a rule branch letting an
+  // active signed-in user decrement stock, so that Checkoutscreen's
+  // client transaction could work. It has been deleted: checkout now runs
+  // in the placeOrder Cloud Function, which writes as Admin and is not
+  // governed by this file at all.
+  //
+  // The write below is the well-formed one — a smaller, non-negative
+  // number, stock the only changed key — that the old branch accepted. It
+  // must now fail, because "well-formed" was never the same as
+  // "legitimate": nothing tied it to an order, so any account could have
+  // walked the catalogue decrementing every product to zero.
+  await assertFails(updateDoc(doc(asCustomer(), 'products/p1'), { stock: 9 }));
+  assertEqual(await readStock('p1'), 10, 'p1 stock after a customer decrement attempt');
 });
 
-await test('SHOP-3  a customer cannot increase stock or go negative', async () => {
+await test('SHOP-3  no non-seller role can touch stock, in any direction', async () => {
+  // Increases and negatives were rejected before too, so those two lines
+  // are unchanged in outcome. What is new is the third caller: a
+  // platformAdmin. They were always denied here (SPLIT-4 covers products
+  // generally), but stock is the field an over-broad "admins can do
+  // anything" reading would most likely be handed by mistake, so it is
+  // pinned explicitly.
   await assertFails(updateDoc(doc(asCustomer(), 'products/p1'), { stock: 99 }));
   await assertFails(updateDoc(doc(asCustomer(), 'products/p1'), { stock: -1 }));
+  await assertFails(updateDoc(doc(asAdmin(), 'products/p1'), { stock: 9 }));
+  assertEqual(await readStock('p1'), 10, 'p1 stock after non-seller write attempts');
 });
 
-await test('SHOP-4  stock decrement cannot smuggle a price change', async () => {
-  await assertFails(updateDoc(doc(asCustomer(), 'products/p1'), { stock: 9, price: 1 }));
+await test('SHOP-4  a seller CAN still adjust stock — the tightening did not overshoot', async () => {
+  // The guard against fixing H2 by breaking the store. Removing the
+  // customer branch must leave the Store Manager's ordinary inventory
+  // edit intact, in both directions, since that is also the write the
+  // cancellation restore rides on (see CANCEL-2).
+  //
+  // Both directions are asserted: down is the manual correction a manager
+  // makes after damaging an item, up is what a cancellation writes back.
+  await assertSucceeds(updateDoc(doc(asSeller(), 'products/p1'), { stock: 9 }));
+  await assertSucceeds(updateDoc(doc(asSeller(), 'products/p1'), { stock: 12 }));
+  assertEqual(await readStock('p1'), 12, 'p1 stock after seller adjustments');
 });
 
 await test('SHOP-5  a guest cannot read products', async () => {
@@ -501,8 +531,12 @@ await test('CANCEL-7  a status update cannot smuggle other order fields', async 
 });
 
 await test('CANCEL-8  a customer cannot cancel their own order or restore stock', async () => {
-  // Order writes stay staff-only, and the customer product branch admits
-  // decrements only — so neither half of a cancellation is reachable.
+  // Order writes stay staff-only, and customers now have no product write
+  // access at all — so neither half of a cancellation is reachable. The
+  // stock line below used to fail only because 12 is an INCREASE on a
+  // seeded 10; since the customer branch was removed it fails for the
+  // blunter reason that no such write is permitted in any direction. See
+  // SHOP-2.
   const db = asCustomer();
   await assertFails(updateDoc(doc(db, 'users/customer1/orders/o1'), { status: 'cancelled' }));
   await assertFails(updateDoc(doc(db, 'products/p1'), { stock: 12 }));
@@ -721,11 +755,20 @@ await test('LOG-9  a deactivated store manager cannot write to the log', async (
 });
 
 // ---------------------------------------------------------------------------
-console.log('\nOrder creation (checkout)');
+console.log('\nOrder creation (server-only)');
 // ---------------------------------------------------------------------------
 
-// The exact shape Checkoutscreen.js writes. Any test that varies from this
-// is varying from what the real app does.
+// The exact shape the ORDER rules used to accept from a client — and the
+// shape placeOrder now writes server-side. It is kept, unchanged, as the
+// control case: if a client can still write THIS, the tightening did not
+// take. Everything in this section asserts a denial.
+//
+// NOTE ON WHAT THESE TESTS CANNOT SEE: the emulator suite exercises
+// firestore.rules, and the function bypasses rules entirely. So nothing
+// below proves placeOrder writes a correct order — only that no one else
+// can write one at all. The function's own behaviour (server-side
+// pricing, the stock decrement, status pinned to 'pending') is untested
+// here and remains verified only by hand.
 const checkoutOrder = (overrides = {}) => ({
   customerId: 'customer1',
   customerEmail: 'cathy@example.com',
@@ -749,25 +792,34 @@ const checkoutOrder = (overrides = {}) => ({
   ...overrides,
 });
 
-await test('ORDER-1  a real checkout write succeeds, inside a transaction', async () => {
-  // Run through runTransaction, not setDoc, because that is how
-  // Checkoutscreen actually writes — and because the createdAt rule
-  // (serverTimestamp() must equal request.time) is the one clause whose
-  // behaviour could plausibly differ between a plain write and a
-  // transactional commit. Asserting it here means a rule that only works
-  // outside transactions cannot pass this suite while breaking checkout.
+await test('ORDER-1  a customer CANNOT create an order, however well-formed', async () => {
+  // The inverse of what this test used to assert. It previously ran the
+  // write through runTransaction because that is how Checkoutscreen wrote
+  // it; both forms are kept here, because a denial that holds for setDoc
+  // but not inside a transaction would be no denial at all — checkout was
+  // a transaction.
+  //
+  // The payload is the one the old rule was written to accept. Nothing
+  // about it is malformed. It fails because there is no create rule on
+  // this collection for anyone, which is the whole change.
   const db = asCustomer();
-  await assertSucceeds(
+  await assertFails(
+    setDoc(doc(db, 'users/customer1/orders/newOrder'), checkoutOrder())
+  );
+  await assertFails(
     runTransaction(db, async (tx) => {
-      tx.set(doc(db, 'users/customer1/orders/newOrder'), checkoutOrder());
+      tx.set(doc(db, 'users/customer1/orders/newOrder2'), checkoutOrder());
     })
   );
 });
 
 await test('ORDER-2  an order CANNOT be created already delivered', async () => {
-  // The headline case for reviews. 'delivered' is what /reviews accepts as
-  // proof of purchase, so a client able to mint one here could review any
-  // product it named without ever buying anything.
+  // Unchanged in outcome, and kept even though ORDER-1 now subsumes it,
+  // because this is the case that gives the rule its purpose. 'delivered'
+  // is what /reviews accepts as proof of purchase: a client able to mint
+  // one here could review any product it named without ever buying it.
+  // If a create rule is ever reintroduced, this is the test that should
+  // fail first.
   const db = asCustomer();
   await assertFails(
     setDoc(doc(db, 'users/customer1/orders/faked'), checkoutOrder({ status: 'delivered' }))
@@ -777,30 +829,42 @@ await test('ORDER-2  an order CANNOT be created already delivered', async () => 
   );
 });
 
-await test('ORDER-3  an order cannot be attributed to another customer', async () => {
-  await assertFails(
-    setDoc(doc(asCustomer(), 'users/customer1/orders/o9'), checkoutOrder({ customerId: 'customer2' }))
-  );
-  // ...nor written into someone else's subcollection.
+await test('ORDER-3  no other caller can create an order either', async () => {
+  // Into someone else's subcollection, as the account being impersonated,
+  // and as staff. The seller case matters most: isSeller() may UPDATE an
+  // order's status, and it would be an easy slip to let that same role
+  // create one — a seller who can mint a 'delivered' order into a
+  // customer's subcollection can manufacture verified-purchase reviews
+  // just as effectively as the customer could.
   await assertFails(
     setDoc(doc(asCustomer(), 'users/customer2/orders/o9'), checkoutOrder({ customerId: 'customer2' }))
   );
+  await assertFails(
+    setDoc(doc(asOtherCustomer(), 'users/customer2/orders/o9'), checkoutOrder({ customerId: 'customer2' }))
+  );
+  await assertFails(
+    setDoc(doc(asSeller(), 'users/customer1/orders/o9'), checkoutOrder({ status: 'delivered' }))
+  );
+  await assertFails(
+    setDoc(doc(asAdmin(), 'users/customer1/orders/o9'), checkoutOrder())
+  );
 });
 
-await test('ORDER-4  malformed orders are rejected', async () => {
+await test('ORDER-4  a customer cannot rewrite or delete an order after the fact', async () => {
+  // Creation is closed, so the remaining client-side route to a forged
+  // 'delivered' order is editing a real one. The order update rule is
+  // seller-only and CANCEL-8 covers the status case; what is added here
+  // is the money. A customer who could lower the total on a placed order
+  // would undo the entire reason placement moved to the server, since
+  // server-side pricing only holds if the written figure stays written.
+  //
+  // Delete is absent for every role by design (SRS §2.4, orders are
+  // retained for audit), so it is pinned here too.
   const db = asCustomer();
-  await assertFails(
-    setDoc(doc(db, 'users/customer1/orders/o10'), checkoutOrder({ note: 'extra field' }))
-  );
-  await assertFails(
-    setDoc(doc(db, 'users/customer1/orders/o11'), checkoutOrder({ total: -5 }))
-  );
-  await assertFails(
-    setDoc(doc(db, 'users/customer1/orders/o12'), checkoutOrder({ productIds: 'p1' }))
-  );
-  await assertFails(
-    setDoc(doc(db, 'users/customer1/orders/o13'), checkoutOrder({ createdAt: new Date('2020-01-01') }))
-  );
+  await assertFails(updateDoc(doc(db, 'users/customer1/orders/o1'), { total: 1 }));
+  await assertFails(updateDoc(doc(db, 'users/customer1/orders/o1'), { status: 'delivered' }));
+  await assertFails(deleteDoc(doc(db, 'users/customer1/orders/o1')));
+  await assertFails(deleteDoc(doc(asSeller(), 'users/customer1/orders/o1')));
 });
 
 // ---------------------------------------------------------------------------

@@ -24,8 +24,9 @@ service cloud.firestore {
          get(/databases/$(database)/documents/users/$(userId)).data.get('isActive', true) != false);
     }
     // Same "not deactivated" check as isActiveOwner, but for writes that
-    // aren't scoped to a specific userId path (e.g. decrementing a
-    // product's stock during checkout).
+    // aren't scoped to a specific userId path — reviews, which live in a
+    // top-level collection keyed by orderId_productId rather than under
+    // the author's user document.
     function isActiveUser() {
       return request.auth != null &&
         (!exists(/databases/$(database)/documents/users/$(request.auth.uid)) ||
@@ -167,43 +168,43 @@ service cloud.firestore {
         // for every role — order records are preserved for audit and
         // transaction history per SRS §2.4.
         allow read: if isOwner(userId) || isSeller();
-        // Create is the customer's own write (CheckoutScreen), and it is
-        // shape-validated for one reason above all: "status" is what the
-        // reviews collection treats as proof of purchase. Left unvalidated,
-        // a client could create an order that arrives already 'delivered',
-        // naming any product it liked — minting its own verified-purchase
-        // credential without ever buying anything. So creation is pinned to
-        // 'pending', and the ONLY path to 'delivered' is the seller-only
-        // update branch below.
+        // NO CREATE RULE, for anyone. Orders are written exclusively by
+        // the placeOrder Cloud Function (functions/index.js), which runs
+        // with Admin SDK credentials and so bypasses this file entirely.
+        // A client that tries to create an order document directly is
+        // denied here, which is the point.
         //
-        // Same allowlist reasoning as users/{userId} create: an exact key
-        // set, because a denylist silently admits any field invented later.
+        // WHY THE SHAPE VALIDATION THAT USED TO LIVE HERE IS GONE RATHER
+        // THAN KEPT AS DEFENCE IN DEPTH: it was never defence in depth. A
+        // create rule can only check the shape of what the client sends;
+        // it cannot check that the prices in it are the prices in the
+        // product documents, that the total is the sum of the lines, or
+        // that the stock decrement travelling alongside it matches the
+        // quantities ordered. The old rule permitted a client to invent a
+        // total of 1 peso for a 3000-peso order and had no way to notice.
+        // Validating shape while the numbers stay attacker-controlled is
+        // not a weaker version of correct — it is a different thing that
+        // reads like correct, and keeping it would suggest the collection
+        // is guarded when the money in it is not. Removing the rule states
+        // plainly that the server, and only the server, may write here.
         //
-        // "productIds" is the flat list of product ids appearing in items,
-        // written by CheckoutScreen from the same map it decrements stock
-        // through. It is denormalised rather than derived because rules
-        // cannot iterate a list of maps — there is no way to ask whether
-        // any element of items[] has productId == X. The reviews rule needs
-        // exactly that question answered, and `X in productIds` is the only
-        // form Firestore can evaluate. See /reviews/{reviewId}.
-        allow create: if isActiveOwner(userId) &&
-          request.resource.data.keys().hasOnly(
-            ['customerId', 'customerEmail', 'items', 'productIds', 'subtotal',
-             'shipping', 'total', 'paymentMethod', 'shippingAddress',
-             'status', 'createdAt']
-          ) &&
-          request.resource.data.keys().hasAll(
-            ['customerId', 'items', 'productIds', 'total', 'status', 'createdAt']
-          ) &&
-          request.resource.data.customerId == request.auth.uid &&
-          request.resource.data.items is list &&
-          request.resource.data.productIds is list &&
-          request.resource.data.total is number &&
-          request.resource.data.total >= 0 &&
-          request.resource.data.get('subtotal', 0) is number &&
-          request.resource.data.get('shipping', 0) is number &&
-          request.resource.data.status == 'pending' &&
-          request.resource.data.createdAt == request.time;
+        // WHAT THIS MEANS FOR THE VERIFIED-PURCHASE CHAIN in
+        // /reviews/{reviewId}: link 1 used to be "create pins status to
+        // 'pending'", enforced by the rule above. It is now "only the
+        // server creates orders, and it always writes 'pending'" —
+        // functions/index.js sets status as a literal and accepts no
+        // status from the caller. The link is stronger than it was (a
+        // client cannot write the document at all), but it is enforced in
+        // the function rather than in this file, so the two must be
+        // changed together. Link 2 is unchanged and still lives below:
+        // only isSeller() may move an order to 'delivered'.
+        //
+        // "productIds" — the flat list of product ids appearing in items —
+        // is likewise written by the function now. It stays denormalised
+        // because rules cannot iterate a list of maps: there is no way to
+        // ask whether any element of items[] has productId == X, and the
+        // reviews rule needs exactly that question answered. `X in
+        // productIds` is the only form Firestore can evaluate.
         // Working an order means moving it between statuses, and that is
         // the only change this rule permits — the same treatment
         // supportRequests gets. A Store Manager cannot rewrite the total,
@@ -314,30 +315,41 @@ service cloud.firestore {
         isNewProductShape() &&
         productFieldsAreWellTyped(request.resource.data);
       allow delete: if isSeller();
-      // Sellers can change anything. A signed-in, active customer can also
-      // update a product doc, but ONLY as a stock decrement from checkout:
-      // "stock" must be the sole field that changed, both the old and new
-      // values must be numbers, and the new value must be smaller (but
-      // still non-negative) than what was there before. That blocks a
-      // client from rewriting price/name/imageUrl or from increasing
-      // stock, while still letting the transaction in CheckoutScreen.js
-      // decrement it atomically.
+      // ONLY a seller may update a product. There is no customer branch:
+      // checkout's stock decrement moved into the placeOrder Cloud
+      // Function (functions/index.js), which runs as Admin and bypasses
+      // this file, so no signed-in customer needs write access here any
+      // more.
       //
-      // NOTE: AdminAddProductScreen/AdminEditProductScreen now save
-      // "stock" as a real number, but any product created before that
-      // change still has it stored as a string, and `resource.data.stock
-      // is number` is false for those until a seller re-saves them once
-      // (via Edit Product) — until then this branch denies the decrement
-      // for that specific product, same as if stock were insufficient.
-      // A seller's edit must leave a well-typed document behind. Note this
-      // validates the RESULT, not the delta: AdminEditProductScreen sends
-      // every field on save (and migrates legacy string price/stock to
-      // numbers as it goes), so a legacy product becomes compliant the
-      // first time it's saved rather than being locked out.
+      // WHAT THE REMOVED BRANCH ALLOWED, recorded because it looked safe:
+      // it let any active signed-in user decrement "stock" on any product,
+      // requiring only that stock be the sole changed key and the new
+      // value be a smaller non-negative number. It could not rewrite
+      // price or name, so it read as tightly scoped — but it was never
+      // tied to an order. Anyone with an account could walk the catalogue
+      // and decrement every product to zero, one write at a time, with no
+      // purchase and nothing to refund; the store simply goes out of
+      // stock. Nothing in rules could have fixed that, because the
+      // constraint that makes a decrement legitimate ("it matches the
+      // quantities on an order I just paid for") requires reading a
+      // sibling write, which rules cannot do. That is precisely why the
+      // operation belongs on a server, and why this branch is deleted
+      // rather than narrowed.
       //
-      // The customer branch below is untouched by this — it already
-      // constrains itself to a single numeric field, far more tightly
-      // than the seller branch ever could.
+      // A SECOND THING THE REMOVAL FIXES, silently: the old branch
+      // required `resource.data.stock is number`, so a product created by
+      // an older build with stock stored as a string could not be
+      // decremented at all — checkout failed on it exactly as if it were
+      // out of stock, until a seller re-saved the product once. The
+      // function has no such limit: it coerces on read and writes a
+      // number back, so a legacy product migrates itself on its first
+      // sale. See utils/stock.js parseStockLimit.
+      //
+      // Seller updates still validate the RESULT, not the delta:
+      // AdminEditProductScreen sends every field on save (migrating
+      // legacy string price/stock to numbers as it goes), so a legacy
+      // product becomes compliant the first time it is saved rather than
+      // being locked out.
       //
       // ON THE CANCELLATION STOCK RESTORE: cancelling an order writes an
       // INCREMENTED stock here, in the same transaction as the order's
@@ -345,9 +357,9 @@ service cloud.firestore {
       // loosened — the existing seller branch already permits it, because
       // adjusting stock is the Store Manager's ordinary job (that is what
       // AdminEditProductScreen does), and the result still has to be a
-      // well-typed, non-negative number. The customer branch is untouched
-      // and still admits decrements only, so the restore path is not
-      // reachable by a customer.
+      // well-typed, non-negative number. Cancellation is a seller action
+      // performed from AdminOrdersScreen, so it needs no customer access
+      // and is unaffected by the branch removal above.
       //
       // HONEST LIMITATION, and the reason no narrower rule is attempted:
       // rules cannot tie this write to the order write it travels with.
@@ -366,18 +378,12 @@ service cloud.firestore {
       // What remains outside that fence is a Store Manager editing stock
       // directly through Edit Product, which is a granted power of the
       // role rather than a hole in this path, and which the activity log
-      // records. Closing it would take a server-side trigger (Cloud
-      // Functions), which this project doesn't use — same boundary the
+      // records. Closing it would take a server-side trigger. The project
+      // now has a functions/ codebase, so that is no longer impossible —
+      // only unbuilt, and deliberately so: a manager adjusting stock is a
+      // legitimate action, not an attack to be blocked. Same boundary the
       // activityLogs comment draws.
-      allow update: if (isSeller() && productFieldsAreWellTyped(request.resource.data)) ||
-        (
-          isActiveUser() &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock']) &&
-          resource.data.stock is number &&
-          request.resource.data.stock is number &&
-          request.resource.data.stock >= 0 &&
-          request.resource.data.stock < resource.data.stock
-        );
+      allow update: if isSeller() && productFieldsAreWellTyped(request.resource.data);
     }
     // Product reviews, restricted to verified purchases.
     //
@@ -396,15 +402,21 @@ service cloud.firestore {
     // THE VERIFIED-PURCHASE CHAIN, which is the entire claim this feature
     // makes, and the reason it lives in rules rather than in the client:
     //
-    //   1. users/{uid}/orders create pins status to 'pending' (above).
+    //   1. Clients cannot create orders at all (above). Only the
+    //      placeOrder Cloud Function writes them, and it sets
+    //      status: 'pending' as a literal — it accepts no status from the
+    //      caller. This link used to be a create rule here that pinned
+    //      the field; it is now enforced in functions/index.js instead.
     //   2. Only isSeller() may move an order to 'delivered' (above).
     //   3. create below demands the caller's OWN order, in status
     //      'delivered', containing the product being reviewed.
     //
-    // Every link is a rule, so "verified purchase" is a property of the
-    // stored data rather than a label the UI prints beside a review. Break
-    // any one link and the badge becomes decoration — which is why the
-    // order create rule was tightened in the same change as this one.
+    // "Verified purchase" is therefore a property of the stored data
+    // rather than a label the UI prints beside a review. Break any one
+    // link and the badge becomes decoration — so note that link 1 no
+    // longer lives in this file. A change to how placeOrder sets status
+    // is a change to what the review badge means, and the two must be
+    // reviewed together even though they sit in different files.
     //
     // ONE REVIEW PER ORDER LINE is structural, not a client convention:
     // the document id is derived — orderId + '_' + productId — and the
@@ -437,8 +449,8 @@ service cloud.firestore {
       // only moderation available (there is no delete, for anyone), that
       // the text survives exactly as its author wrote it, and that the
       // Store Manager who hid it is named in activityLogs. Enforcing the
-      // filter itself would take a server-side read path (Cloud
-      // Functions), which this project doesn't use — the same boundary the
+      // filter itself would take a server-side read path — buildable now
+      // that functions/ exists, but not built. The same boundary the
       // activityLogs comment draws.
       allow read: if request.auth != null;
 
@@ -581,8 +593,8 @@ service cloud.firestore {
     // cannot force a modified client to write one at all. This is an
     // operational activity log for monitoring, per the SRS, not a
     // tamper-proof security audit trail; guaranteeing that would take a
-    // server-side trigger (Cloud Functions), which this project doesn't
-    // use. See ROLES.md.
+    // server-side trigger. functions/ exists now (see placeOrder), so the
+    // door is open, but no such trigger has been written. See ROLES.md.
     function isValidLogEntry() {
       return request.resource.data.keys().hasOnly(
           ['action', 'actorId', 'actorEmail', 'targetId', 'targetLabel', 'summary', 'createdAt']
