@@ -18,8 +18,8 @@ sections — see [PRODUCT.md](PRODUCT.md) for the positioning and
   provably cannot be trusted with: placing an order (prices and totals are
   computed server-side, never accepted from the request), the two
   transactional emails, and re-sending one that failed. Everything else is
-  still enforced
-  declaratively in [firestore.rules](firestore.rules) — the functions
+  still enforced declaratively in [firestore.rules](firestore.rules) — the
+  functions
   codebase is deliberately small, and adding to it should need the same
   justification the first one did.
 - **Reanimated** for motion, gated throughout on `useReducedMotion()`.
