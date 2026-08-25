@@ -243,6 +243,61 @@ exports._renderOrderText = orderText;
 exports._renderSupportHtml = supportHtml;
 exports._renderSupportText = supportText;
 
+// The handlers are named functions rather than inline closures so
+// scripts/test-email.mjs can call them with a plain object instead of
+// constructing a CloudEvent. What they decide — which address to use,
+// whether there is one at all, what goes in Reply-To — is ordinary logic
+// that should not require a Cloud Functions harness to exercise.
+async function handleOrderCreated(order, orderId) {
+  if (!order) return;
+
+  // placeOrder writes the literal 'unknown' when it can find no address
+  // for the account — from the auth token, then the user document. There
+  // is nowhere to send in that case, and "unknown" is not an address, so
+  // it is filtered here rather than handed to Gmail to reject.
+  const to = order.customerEmail && order.customerEmail !== 'unknown'
+    ? order.customerEmail
+    : null;
+  if (!to) {
+    logger.warn(`order ${orderId} has no usable customerEmail, no receipt sent`);
+    return;
+  }
+
+  await sendMail({
+    key: `order-${orderId}`,
+    to,
+    subject: `Your PlainCo order ${formatOrderNumber(orderId)}`,
+    html: orderHtml(order, orderId),
+    text: orderText(order, orderId),
+    meta: { kind: 'orderConfirmation', orderId, customerId: order.customerId || null },
+  });
+}
+
+async function handleSupportCreated(request, requestId) {
+  if (!request) return;
+
+  // HelpScreen writes auth.currentUser?.email, which can legitimately be
+  // null for a provider that supplied none — the rules allow that
+  // explicitly. Without it there is nobody to reply to, so the manager
+  // is told so rather than being left to wonder.
+  const customerEmail = request.userEmail || null;
+
+  await sendMail({
+    key: `support-${requestId}`,
+    to: storeInbox(),
+    // Reply goes to the customer, not to the store's own inbox, so
+    // answering is one tap. Omitted when there is no address to use.
+    replyTo: customerEmail || undefined,
+    subject: `Support request from ${customerEmail || 'a PlainCo customer'}`,
+    html: supportHtml(request, requestId),
+    text: supportText(request, requestId),
+    meta: { kind: 'supportRequest', requestId, userId: request.userId || null },
+  });
+}
+
+exports._handleOrderCreated = handleOrderCreated;
+exports._handleSupportCreated = handleSupportCreated;
+
 exports.sendOrderConfirmation = onDocumentCreated(
   {
     document: 'users/{userId}/orders/{orderId}',
@@ -251,31 +306,7 @@ exports.sendOrderConfirmation = onDocumentCreated(
     retry: false,
   },
   async (event) => {
-    const order = event.data?.data();
-    if (!order) return;
-
-    const { orderId } = event.params;
-
-    // placeOrder writes the literal 'unknown' when it can find no address
-    // for the account — from the auth token, then the user document. There
-    // is nowhere to send in that case, and "unknown" is not an address, so
-    // it is filtered here rather than handed to Gmail to reject.
-    const to = order.customerEmail && order.customerEmail !== 'unknown'
-      ? order.customerEmail
-      : null;
-    if (!to) {
-      logger.warn(`order ${orderId} has no usable customerEmail, no receipt sent`);
-      return;
-    }
-
-    await sendMail({
-      key: `order-${orderId}`,
-      to,
-      subject: `Your PlainCo order ${formatOrderNumber(orderId)}`,
-      html: orderHtml(order, orderId),
-      text: orderText(order, orderId),
-      meta: { kind: 'orderConfirmation', orderId, customerId: order.customerId || null },
-    });
+    await handleOrderCreated(event.data?.data(), event.params.orderId);
   }
 );
 
@@ -287,26 +318,6 @@ exports.notifySupportRequest = onDocumentCreated(
     retry: false,
   },
   async (event) => {
-    const request = event.data?.data();
-    if (!request) return;
-
-    const { requestId } = event.params;
-    // HelpScreen writes auth.currentUser?.email, which can legitimately be
-    // null for a provider that supplied none — the rules allow that
-    // explicitly. Without it there is nobody to reply to, so the manager
-    // is told so rather than being left to wonder.
-    const customerEmail = request.userEmail || null;
-
-    await sendMail({
-      key: `support-${requestId}`,
-      to: storeInbox(),
-      // Reply goes to the customer, not to the store's own inbox, so
-      // answering is one tap. Omitted when there is no address to use.
-      replyTo: customerEmail || undefined,
-      subject: `Support request from ${customerEmail || 'a PlainCo customer'}`,
-      html: supportHtml(request, requestId),
-      text: supportText(request, requestId),
-      meta: { kind: 'supportRequest', requestId, userId: request.userId || null },
-    });
+    await handleSupportCreated(event.data?.data(), event.params.requestId);
   }
 );

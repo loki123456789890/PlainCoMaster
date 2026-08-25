@@ -1,5 +1,10 @@
 /**
- * Wrapper for `npm run test:rules`.
+ * Wrapper for the suites that need the Firestore emulator —
+ * `npm run test:rules` and `npm run test:email`.
+ *
+ * Takes the script to run as an argument and defaults to the rules suite,
+ * so both share this one piece of Java-finding awkwardness rather than
+ * growing a second copy of it.
  *
  * The Firestore emulator is a Java process, and firebase-tools finds Java
  * by spawning `java` from PATH. That fails in a very ordinary situation:
@@ -84,9 +89,10 @@ if (!javaOnPath(env)) {
 // `firebase` shim, so this doesn't depend on node_modules/.bin being on
 // PATH either — the same class of problem it exists to work around.
 const cli = join('node_modules', 'firebase-tools', 'lib', 'bin', 'firebase.js');
+const target = process.argv[2] || 'scripts/test-rules.mjs';
 const result = spawnSync(
   process.execPath,
-  [cli, 'emulators:exec', '--only', 'firestore', 'node scripts/test-rules.mjs'],
+  [cli, 'emulators:exec', '--only', 'firestore', `node ${target}`],
   { env, stdio: 'inherit' }
 );
 

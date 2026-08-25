@@ -140,31 +140,62 @@ function shell({ preheader, heading, intro, body }) {
 // mailLog is not declared in firestore.rules, and that file has no
 // catch-all match, so no client can read or write it. The Admin SDK here
 // bypasses rules entirely.
+// 'unconfigured' is the one status that does NOT count as claimed. It
+// means the message was never attempted because no credentials existed —
+// so the work is still outstanding, and a later attempt must be allowed
+// through. Every other status ('sending', 'sent', 'failed') means someone
+// already tried, and re-sending would be the duplicate this guard exists
+// to prevent.
+//
+// This was a create() until scripts/test-email.mjs (MAILER-2) proved the
+// comment above it was wrong: recordOutcome() uses set({merge:true}),
+// which CREATES the document, so the unconfigured path did leave one
+// behind and create() then refused the real send forever after. Every
+// receipt missed while the mailbox was unconfigured would have been
+// permanently unsendable — and with the Gmail placeholders in place, that
+// is currently every receipt.
+const CLAIMABLE_STATUSES = ['unconfigured'];
+
 async function claimOnce(key, meta) {
   const db = getFirestore();
+  const ref = db.collection('mailLog').doc(key);
   try {
-    await db.collection('mailLog').doc(key).create({
-      ...meta,
-      claimedAt: FieldValue.serverTimestamp(),
-      // The field AdminMailLogScreen orders by, and it must be written on
-      // EVERY path that creates one of these documents. Firestore's
-      // orderBy silently omits documents that lack the field it sorts on —
-      // not an error, just an absence — so a timestamp written on some
-      // paths and not others makes entries invisible in the one screen
-      // that exists to reveal them. claimedAt cannot serve: the
-      // unconfigured path never claims.
-      recordedAt: FieldValue.serverTimestamp(),
-      status: 'sending',
+    // A transaction rather than create(), because the check is now
+    // conditional on the existing status rather than on mere existence.
+    // Two concurrent deliveries still resolve to one send: one transaction
+    // commits, the other retries, reads 'sending' and backs out.
+    return await db.runTransaction(async (tx) => {
+      const snapshot = await tx.get(ref);
+      if (snapshot.exists && !CLAIMABLE_STATUSES.includes(snapshot.data().status)) {
+        logger.info(`mail ${key} already claimed, skipping`);
+        return false;
+      }
+      // No merge: a re-claim after 'unconfigured' should not inherit that
+      // attempt's detail line, which would describe a state that no longer
+      // applies.
+      tx.set(ref, {
+        ...meta,
+        detail: null,
+        claimedAt: FieldValue.serverTimestamp(),
+        // The field AdminMailLogScreen orders by, and it must be written
+        // on EVERY path that creates one of these documents. Firestore's
+        // orderBy silently omits documents lacking the field it sorts on —
+        // not an error, just an absence — so a timestamp written on some
+        // paths and not others makes entries invisible in the one screen
+        // that exists to reveal them. claimedAt cannot serve: the
+        // unconfigured path does not claim.
+        recordedAt: FieldValue.serverTimestamp(),
+        status: 'sending',
+      });
+      return true;
     });
-    return true;
   } catch (error) {
-    // gRPC status 6 is ALREADY_EXISTS. The string check is a fallback for
-    // emulator and transport variations that surface the code differently.
-    if (error.code === 6 || String(error.message).includes('ALREADY_EXISTS')) {
-      logger.info(`mail ${key} already claimed, skipping`);
-      return false;
-    }
-    throw error;
+    // A contended transaction that exhausts its retries surfaces here.
+    // Treated as "someone else has it" rather than rethrown, because the
+    // only way to lose that race is against another delivery of the same
+    // message — which is precisely the case where not sending is correct.
+    logger.warn(`mail ${key} could not be claimed: ${error.message}`);
+    return false;
   }
 }
 
@@ -216,6 +247,25 @@ function transport() {
   });
 }
 
+// The one seam scripts/test-email.mjs uses, and the smallest one that
+// makes this file testable.
+//
+// Everything worth asserting here — that a duplicate trigger delivery
+// sends once, that a failure is recorded rather than thrown, that an
+// unconfigured mailbox does not consume the one-shot claim — is logic
+// AROUND the send, not the send itself. Actually reaching Gmail proves
+// nothing about any of it and cannot run in CI. So the transport is
+// swappable and nothing else is: the tests exercise the real Firestore
+// interaction against the emulator, with only SMTP replaced.
+//
+// Deliberately not a general-purpose injection point. It is reset by the
+// test between cases and is never set in production.
+let transportOverride = null;
+function __setTransportForTests(fake) {
+  transportOverride = fake;
+}
+const activeTransport = () => transportOverride || transport();
+
 // Sends, and never throws. A failed email must not fail the trigger: with
 // retry disabled there is nothing useful a thrown error would achieve, and
 // an unhandled rejection in a background function is noise in the log
@@ -227,11 +277,16 @@ async function sendMail({ key, to, subject, html, text, replyTo, meta }) {
     return;
   }
 
-  // Deliberately does NOT claim: an unconfigured mailbox is a temporary
-  // state, and writing the one-shot guard here would mean that once
-  // credentials arrive, the backlog of messages missed in the meantime
-  // could never be sent by anything that reads mailLog. Recorded with
-  // set() instead, so that backlog is at least legible.
+  // Records the miss without consuming the one-shot claim — an
+  // unconfigured mailbox is a temporary state, and a message skipped for
+  // it is still outstanding work rather than a message already handled.
+  //
+  // The claim is not consumed because 'unconfigured' is in
+  // CLAIMABLE_STATUSES, NOT because nothing is written here. That
+  // distinction is the bug MAILER-2 caught: recordOutcome() uses
+  // set({merge:true}), which creates the document, so a comment claiming
+  // "this path does not write, therefore does not claim" was describing
+  // behaviour the code did not have. The exemption has to be explicit.
   if (!mailConfigured()) {
     logger.warn(
       `mail ${key} not sent: GMAIL_USER is unset or still the placeholder. ` +
@@ -249,7 +304,7 @@ async function sendMail({ key, to, subject, html, text, replyTo, meta }) {
   if (!(await claimOnce(key, { to, subject, ...meta }))) return;
 
   try {
-    await transport().sendMail({
+    await activeTransport().sendMail({
       from: `${FROM_NAME} <${GMAIL_USER.value()}>`,
       to,
       // Set on support notifications so a Store Manager can answer by
@@ -279,6 +334,8 @@ module.exports = {
   MAIL_SECRETS,
   sendMail,
   storeInbox,
+  __setTransportForTests,
+  UNCONFIGURED,
   shell,
   escapeHtml,
   peso,

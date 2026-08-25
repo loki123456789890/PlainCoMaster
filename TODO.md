@@ -155,9 +155,13 @@ deployment:
 
 ### Known gaps in what shipped
 
-- [ ] The email triggers have no test coverage. `scripts/test-rules.mjs`
-      exercises firestore.rules, and these bypass rules entirely; the
-      templates are checked by eye via `npm run preview:email`.
+- [x] The email triggers have test coverage — `npm run test:email`, 8
+      tests against the Firestore emulator with only SMTP faked, so the
+      one-shot claim is exercised as a real create/contention race. It
+      found a live bug on first run: `recordOutcome` uses
+      `set({merge:true})`, which CREATES the document, so the unconfigured
+      path did consume the claim and every receipt missed while the mailbox
+      was unconfigured would have been permanently unsendable.
 - [ ] `formatOrderNumber` now exists in three places —
       OrderConfirmationScreen, OrderDetailsScreen, and functions/mailer.js.
       The first two could move to `constants/`; the third cannot follow,
