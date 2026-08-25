@@ -26,6 +26,7 @@ import { useAdmin } from '../../context/AdminContext';
 import { useProducts } from '../../context/ProductContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
+import { MAIL_PROBLEM_STATUSES } from '../../constants/mail';
 import { stockLevel, parseStockLimit } from '../../utils/stock';
 import Card from '../../components/ui/Card';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
@@ -143,15 +144,16 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     // statuses that mean something went wrong, for the same reason as the
     // support query above: the card needs a count, not the history.
     //
-    // 'sending' counts as a problem. It means the mailer claimed a send
-    // and never recorded an outcome — the function died mid-flight — so
-    // whether that receipt arrived is genuinely unknown, and unknown
-    // belongs in front of someone rather than filed as fine.
+    // The status list is MAIL_PROBLEM_STATUSES and not a literal, because
+    // this card links to AdminMailLogScreen, which filters by the same
+    // definition. Written out twice they drifted, and the failure is
+    // quiet and confusing: a card saying one email did not send, opening
+    // a screen that says everything sent.
     //
     // A single-field `in` needs no composite index, so this adds nothing
     // to firestore.indexes.json.
     const unsubscribeMail = onSnapshot(
-      query(collection(db, 'mailLog'), where('status', 'in', ['failed', 'unconfigured', 'sending'])),
+      query(collection(db, 'mailLog'), where('status', 'in', MAIL_PROBLEM_STATUSES)),
       (snapshot) => {
         setMailProblemCount(snapshot.size);
         setMailLoading(false);

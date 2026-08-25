@@ -503,6 +503,42 @@ await test('DRIFT-1  the mailer formats order numbers identically to the app', a
   }
 });
 
+await test('DRIFT-2  the client and the mailer agree on what can be resent', async () => {
+  // constants/mail.js decides which rows get a "Send again" button and
+  // which the dashboard counts; functions/mailer.js decides what the
+  // server will actually accept. Same package boundary as DRIFT-1, same
+  // inability to import across it, same need to make the comment saying
+  // "keep these in step" into something that fails.
+  //
+  // This is not hypothetical. Adding 'retrying' updated one list and not
+  // the other, and the result was a dashboard card reading "1 email
+  // didn't send" that opened a screen reading "Everything sent".
+  const client = await import('../constants/mail.js');
+
+  assertEqual(
+    client.MAIL_RESENDABLE_STATUSES.join(','),
+    mailer.RETRYABLE_STATUSES.join(','),
+    'resendable statuses'
+  );
+  assertEqual(
+    client.MAIL_MAX_RETRY_ATTEMPTS,
+    mailer.MAX_RETRY_ATTEMPTS,
+    'retry cap'
+  );
+
+  // THE INVARIANT THAT MATTERS MOST, and the one neither list states on
+  // its own: every status offering a "Send again" button must also count
+  // as a problem. Otherwise the button lives on a row the dashboard's
+  // filter hides — an action that exists only on a screen you cannot
+  // reach from the alarm that should send you there.
+  for (const status of client.MAIL_RESENDABLE_STATUSES) {
+    assert(
+      client.MAIL_PROBLEM_STATUSES.includes(status),
+      `${status} is resendable but would not show as a problem`
+    );
+  }
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   for (const { name } of failures) console.error(`FAILED: ${name}`);

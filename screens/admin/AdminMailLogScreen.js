@@ -9,10 +9,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useReducedMotion, FadeIn, FadeInDown } from 'react-native-reanimated';
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, limit, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebaseConfig';
 import { showAppAlert } from '../../utils/appAlert';
+import {
+  MAIL_PROBLEM_STATUSES,
+  MAIL_RESENDABLE_STATUSES,
+  MAIL_MAX_RETRY_ATTEMPTS,
+} from '../../constants/mail';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
@@ -97,19 +102,11 @@ const UNKNOWN_STATUS = {
   blurb: 'This status was not recognised.',
 };
 
-const PROBLEM_STATUSES = ['failed', 'unconfigured', 'sending', 'retrying'];
-
-// Which entries offer "Send again". Mirrors RETRYABLE_STATUSES in
-// functions/mailer.js, and is only about whether to draw the button —
-// the callable re-checks every one of these server-side and is the
-// authority. A client that got this wrong would show a button that
-// refuses, not a button that sends something it shouldn't.
-const RESENDABLE_STATUSES = ['failed', 'unconfigured', 'retrying'];
-
-// Mirrors MAX_RETRY_ATTEMPTS in functions/mailer.js, for the same reason
-// and with the same caveat: this decides what the button says, not what
-// the server allows.
-const MAX_RETRY_ATTEMPTS = 3;
+// Shared with StoreManagerDashboardScreen's card, which links here. See
+// constants/mail.js for why these are not written out locally.
+const PROBLEM_STATUSES = MAIL_PROBLEM_STATUSES;
+const RESENDABLE_STATUSES = MAIL_RESENDABLE_STATUSES;
+const MAX_RETRY_ATTEMPTS = MAIL_MAX_RETRY_ATTEMPTS;
 
 const KIND_LABELS = {
   orderConfirmation: 'Order receipt',
@@ -127,7 +124,13 @@ function toneColor(tone) {
 // date. Someone opening this is almost always asking about something
 // recent, and "2h ago" answers that faster than a timestamp.
 function formatWhen(date) {
-  if (!date) return 'Just now';
+  // NOT "Just now". mailLog has no client write rule, so every one of
+  // these documents is written by a Cloud Function and its serverTimestamp
+  // is already resolved by the time a listener sees it — a null here does
+  // not mean "pending", it means the field was never written. Those are
+  // exactly the entries the second listener exists to surface, and dating
+  // them to this moment would misreport an old failure as a fresh one.
+  if (!date) return 'Time not recorded';
   const minutes = Math.floor((Date.now() - date.getTime()) / 60000);
   if (minutes < 1) return 'Just now';
   if (minutes < 60) return `${minutes}m ago`;
@@ -136,6 +139,24 @@ function formatWhen(date) {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// One shape, read by both listeners. A status defaulting to 'sending'
+// rather than to 'sent' matters: an entry with no status field at all is
+// a record of something that went wrong on a path that never finished
+// writing, and guessing "sent" would file it as fine.
+function toEntry(docSnap) {
+  const data = docSnap.data();
+  return {
+    id: docSnap.id,
+    status: data.status || 'sending',
+    kind: data.kind || '',
+    to: data.to || '',
+    subject: data.subject || '',
+    detail: data.detail || '',
+    retryCount: Number(data.retryCount) || 0,
+    recordedAt: data.recordedAt?.toDate?.() ?? null,
+  };
 }
 
 function EntrySkeleton() {
@@ -155,7 +176,9 @@ export default function AdminMailLogScreen({ navigation, route }) {
   // appears when there are problems and landing on a full list would make
   // the reader hunt for what the card just counted.
   const [problemsOnly, setProblemsOnly] = useState(route?.params?.problemsOnly === true);
-  const [entries, setEntries] = useState([]);
+  // Two sources, merged below. See the second listener for why.
+  const [recentEntries, setRecentEntries] = useState([]);
+  const [problemEntries, setProblemEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
@@ -229,24 +252,10 @@ export default function AdminMailLogScreen({ navigation, route }) {
     // looks: Firestore's orderBy omits documents missing the field rather
     // than erroring, so a timestamp written on only some paths would make
     // exactly the entries this screen exists for invisible.
-    const unsubscribe = onSnapshot(
+    const unsubscribeRecent = onSnapshot(
       query(collection(db, 'mailLog'), orderBy('recordedAt', 'desc'), limit(200)),
       (snapshot) => {
-        setEntries(
-          snapshot.docs.map((docSnap) => {
-            const data = docSnap.data();
-            return {
-              id: docSnap.id,
-              status: data.status || 'sending',
-              kind: data.kind || '',
-              to: data.to || '',
-              subject: data.subject || '',
-              detail: data.detail || '',
-              retryCount: Number(data.retryCount) || 0,
-              recordedAt: data.recordedAt?.toDate?.() ?? null,
-            };
-          })
-        );
+        setRecentEntries(snapshot.docs.map(toEntry));
         setLoadError(false);
         setLoading(false);
       },
@@ -257,8 +266,60 @@ export default function AdminMailLogScreen({ navigation, route }) {
       }
     );
 
-    return () => unsubscribe();
+    // A SECOND listener over the same collection, and not redundant.
+    //
+    // The query above sorts by recordedAt, and Firestore's orderBy OMITS
+    // any document that lacks the field it sorts on — silently, not as an
+    // error. So an entry written before recordedAt was added to every path
+    // in functions/mailer.js is invisible here while still being counted
+    // by the dashboard card, which filters by status and does not sort.
+    // Tapping a card reading "1 email didn't send" then landed on
+    // "Everything sent", and the entry it meant could never be seen or
+    // resent.
+    //
+    // This is the failure the comment on the query above warns about,
+    // arriving anyway. Warning about a hazard is not the same as being
+    // defended against it, so the fix is structural: fetch the problem
+    // entries by STATUS, the way the dashboard counts them, and merge.
+    // Anything that can be counted can now also be shown.
+    //
+    // Cheap by construction — it matches only undelivered mail, which is
+    // a handful of documents on any healthy store and zero on most.
+    const unsubscribeProblems = onSnapshot(
+      query(collection(db, 'mailLog'), where('status', 'in', PROBLEM_STATUSES)),
+      (snapshot) => setProblemEntries(snapshot.docs.map(toEntry)),
+      (error) => {
+        // Deliberately does NOT set loadError: the ordered listener above
+        // is the one that populates the screen, and failing this one means
+        // a possibly incomplete list rather than no list at all.
+        console.error('Error loading undelivered email:', error);
+      }
+    );
+
+    return () => {
+      unsubscribeRecent();
+      unsubscribeProblems();
+    };
   }, [retryToken]);
+
+  // The two listeners overlap almost entirely; the union is what the
+  // screen shows. Ordered newest-first, except that entries with no
+  // recordedAt sort to the TOP rather than the bottom — they are the
+  // anomalous ones this merge exists to surface, and burying them under
+  // 200 healthy rows would only half-fix the bug.
+  const entries = useMemo(() => {
+    const byId = new Map();
+    for (const entry of recentEntries) byId.set(entry.id, entry);
+    for (const entry of problemEntries) {
+      if (!byId.has(entry.id)) byId.set(entry.id, entry);
+    }
+    return [...byId.values()].sort((a, b) => {
+      if (!a.recordedAt && !b.recordedAt) return 0;
+      if (!a.recordedAt) return -1;
+      if (!b.recordedAt) return 1;
+      return b.recordedAt - a.recordedAt;
+    });
+  }, [recentEntries, problemEntries]);
 
   const problemCount = useMemo(
     () => entries.filter((entry) => PROBLEM_STATUSES.includes(entry.status)).length,

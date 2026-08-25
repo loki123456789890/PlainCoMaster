@@ -292,3 +292,31 @@ deployment:
       retries were effectively unbounded. The counter is now carried
       across explicitly, which is the general hazard with an overwriting
       write — anything that must outlive one attempt has to be named.
+
+- [x] The dashboard card and the mail log now share one definition of
+      "undelivered" (`constants/mail.js`), and the log can no longer hide
+      an entry the card counts.
+
+      Found by the user: the card said "1 email didn't send" and opened a
+      screen saying "Everything sent". TWO separate causes, both live.
+
+      1. Two hand-written copies of the status list. Adding 'retrying'
+         updated the log's and not the card's. `DRIFT-2` now fails on
+         exactly that drift, and also pins the invariant neither list
+         stated alone: anything resendable must also count as a problem,
+         or the button sits on a row the filter hides.
+
+      2. The card queries by status; the log sorted by `recordedAt`, and
+         Firestore's `orderBy` OMITS documents lacking the sort field —
+         silently. Any entry written before `recordedAt` was added to
+         every path was permanently counted and permanently invisible.
+         The log's own comment warned about this hazard and the screen
+         was not defended against it, which is the lesson: a comment
+         describing a trap is not a guard against it. There is now a
+         second listener keyed on status, merged in, so anything
+         countable is showable. Entries with no timestamp sort to the top
+         and read "Time not recorded" rather than "Just now".
+
+      NOT covered by any suite — it is client query behaviour, and the
+      emulator suites reach rules and functions only. Same blind spot as
+      the session paths.

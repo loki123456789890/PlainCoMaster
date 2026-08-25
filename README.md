@@ -171,7 +171,7 @@ or those screens will fail to load.
 ```bash
 npm run test:rules       # 83 — firestore.rules, every role
 npm run test:checkout    # 12 — placeOrder end to end
-npm run test:email       # 18 — the mail triggers and the retry callable
+npm run test:email       # 19 — the mail triggers and the retry callable
 npm run test:rate-limit  #  9 — the order throttle's arithmetic
 npm run test:order-number #  8 — the one string that crosses every boundary
 npm run preview:email    #      renders the templates for eyeballing
