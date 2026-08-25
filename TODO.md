@@ -185,10 +185,15 @@ deployment:
       reach this callable with no attestation, which is why the per-user
       rate limit is the compensating control rather than a nice-to-have.
 
-- [ ] Still unexercised by that pass: the session paths (steps 8–10 of the
-      README checklist). Cold start with a persisted session, logout, and
+- [x] Order-number search verified 2026-08-25, after the fix in f373d85 —
+      the displayed `#NOMDQMGO` form now finds the order, which is what a
+      customer actually quotes. It did not before, silently.
+
+- [ ] Still unexercised: the session paths (steps 8–10 of the README
+      checklist). Cold start with a persisted session, logout, and
       mid-session deactivation are all timing-dependent and none are
-      reachable from any suite.
+      reachable from any suite. These are now the newest client code in the
+      repo with no verification of any kind behind them.
 - [ ] iOS/HEIC photo upload confirmation, if the device test was Android
       only.
 - [ ] Real Gmail credentials. Worth more now that the claim bug is fixed:
