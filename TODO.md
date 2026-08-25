@@ -196,11 +196,25 @@ deployment:
       navigating. Reset now runs before the alert, independent of how it
       is closed.
 
-- [ ] Still unexercised: steps 8-9 of the README
-      checklist). Cold start with a persisted session, logout, and
-      mid-session deactivation are all timing-dependent and none are
-      reachable from any suite. These are now the newest client code in the
-      repo with no verification of any kind behind them.
+- [x] Steps 8-9 verified on device 2026-08-25 — persisted session skips
+      Landing, logout stays on Landing.
+
+- [x] Reactivation after deactivation — found by the user, fixed the same
+      day. `onSnapshot` fires from a local cache that OUTLIVES sign-out, so
+      a reactivated account was ejected by a stale snapshot the instant it
+      signed in, and could not log in at all until the app was killed.
+      Revocation now requires `!snapshot.metadata.fromCache`. Restarting
+      Metro emptied the cache and hid it, which is what made it look like a
+      bundler problem rather than a bug.
+
+      Worth remembering as a class, not an incident: every path here that
+      does something IRREVERSIBLE now demands a server-confirmed fact. An
+      error is not a deactivation; a cached value is not a confirmation.
+
+- [ ] The session paths have no automated coverage and cannot get any
+      from the current suites — they are client timing questions, and the
+      emulator suites only reach rules and functions. All four are verified
+      by hand as of 2026-08-25; a regression would be silent.
 - [ ] iOS/HEIC photo upload confirmation, if the device test was Android
       only.
 - [ ] Real Gmail credentials. Worth more now that the claim bug is fixed:

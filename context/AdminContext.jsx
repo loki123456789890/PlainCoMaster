@@ -206,7 +206,34 @@ export const AdminProvider = ({ children }) => {
           setAccountActive(active);
           setAdminLoading(false);
 
-          if (active === false) revokeSession();
+          // REVOKE ONLY ON A SERVER-CONFIRMED SNAPSHOT.
+          //
+          // onSnapshot fires immediately from Firestore's local cache
+          // before the server answers — latency compensation — and that
+          // cache belongs to the Firestore instance, so it OUTLIVES a
+          // sign-out. Without this check the sequence was:
+          //
+          //   1. account deactivated, revoked correctly, signed out
+          //   2. the cache still holds isActive: false
+          //   3. an admin reactivates the account
+          //   4. the customer signs in — and the fresh listener's first
+          //      snapshot is the stale cached one, so they are signed
+          //      straight back out again
+          //
+          // A reactivated account could not log in at all until the app
+          // was killed and relaunched, which empties the cache. Restarting
+          // Metro "fixed" it, which is what made it look like a tooling
+          // problem rather than this.
+          //
+          // Same principle as the error handler below: revocation is
+          // destructive and irreversible from the user's side, so it acts
+          // only on a fact the server has confirmed. A cached value is not
+          // a confirmation, exactly as an error is not a deactivation.
+          //
+          // Note this gates ONLY the revocation. role and accountActive
+          // still update from cache, because being fast and occasionally
+          // stale is right for rendering and wrong for ejecting someone.
+          if (active === false && !snapshot.metadata.fromCache) revokeSession();
         },
         (error) => {
           // A failed read must not leave the app stuck on withRoleGuard's

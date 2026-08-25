@@ -282,6 +282,17 @@ of them.
     button. You should still be on Landing — the navigation does not
     depend on which way the notice is closed.
 
+    d. Then set isActive back to true in the console and sign in again,
+       WITHOUT restarting the app or the Metro bundler. It must work.
+
+       This is the step that matters most and the one nothing tested for
+       a long time. Firestore's listener fires from a local cache that
+       survives sign-out, so a reactivated account used to be ejected the
+       instant it signed in, by a stale snapshot saying it was still
+       deactivated. Killing the app cleared the cache and hid it. If this
+       fails, that is what regressed.
+
+
     With two devices, Platform Admin → Users on the second works the same
     way — the point is only that the first session stays live.
 
