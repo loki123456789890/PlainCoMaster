@@ -16,23 +16,26 @@ Neither is a superset of the other; they are siblings, not a hierarchy.
 
 | Stored value | Called | Can do | Cannot do |
 |---|---|---|---|
-| `customer` (or field absent) | Customer | Browse, order, favourite, submit support requests, review items they have received | Reach any staff screen |
-| `seller` | **Store Manager** | Products, orders, support requests, review moderation | Read or modify user accounts |
-| `platformAdmin` | **Platform Admin** | User accounts: grant roles, activate/deactivate | Products, orders, support, reviews |
+| `customer` (or field absent) | Customer | Browse every store, order from several at once, favourite, submit support requests, review items they have received | Reach any staff screen |
+| `seller` | **Store Manager** | **One store's** products, orders, support requests, review moderation | Read or modify user accounts, or anything of another store |
+| `platformAdmin` | **Platform Admin** | User accounts: grant roles, activate/deactivate; open stores and assign their managers; answer general questions not about an order | Any store's products, orders, order questions, reviews |
 
 Suggested wording:
 
-> PlainCo defines three user roles. Customers browse, purchase, and may
-> review items they have received. Store Managers operate the shop —
-> products, orders, support requests, and review moderation. Platform
-> Admins manage user accounts and roles. The two staff roles are
+> PlainCo defines three user roles. Customers browse, purchase from one
+> or more stores, and may review items they have received. Each Store
+> Manager operates one store — its products, orders, support requests,
+> and review moderation — and cannot see any other store's. Platform
+> Admins manage user accounts and roles, open stores, and answer general
+> questions that are not about an order. The two staff roles are
 > deliberately non-overlapping: a Store Manager has no access to user
 > accounts, and a Platform Admin has no access to store data. This
 > separation is enforced by Cloud Firestore security rules, not merely by
 > hiding screens in the interface.
 
 Anywhere the SRS says "admin", decide which of the two it means and say
-that instead. The word "admin" alone is now ambiguous.
+that instead. The word "admin" alone is now ambiguous. Likewise "the
+store": PlainCo has several now (section 10).
 
 ---
 
@@ -94,21 +97,24 @@ writable collection:
 - **`supportRequests` create** — exact key allowlist, non-empty message
   capped at 2000 characters, `status` forced to `open`. Staff updates are
   confined to the `status` field only.
-- **`orders` create** — exact key allowlist, `customerId` bound to the
-  authenticated caller, numeric non-negative totals, server-set
-  `createdAt`, and `status` forced to `pending`. A customer cannot create
-  an order that arrives in any other state. See section 9 for why that
-  last clause matters more than it looks.
-- **`orders` update** — confined to the `status` field, restricted to the
-  five known statuses, and the transition to `cancelled` is allowed only
+- **`orders` create** — no client may create an order at all. Orders are
+  written only by the server (the `placeOrder` Cloud Function), which
+  prices the cart from the database, deducts stock, and always writes
+  `status: 'pending'`, one order per store (section 10). See section 9
+  for why "no order can arrive already Delivered" matters more than it
+  looks.
+- **`orders` update** — only by the Store Manager of the order's own
+  store, confined to the `status` field, restricted to the five known
+  statuses, and the transition to `cancelled` is allowed only
   from `pending` or `processing`. See section 4a.
 - **`reviews` create** — exact key allowlist, `userId` bound to the
   caller, `rating` an integer 1–5, `matchedDescription` a boolean, text
   capped at 1000 characters, `hidden` forced to `false`, server-set
   `createdAt`, and the document id required to match the `orderId` and
-  `productId` inside it. Updates are split into two disjoint branches: the
-  author may revise rating, answer, and text and nothing else; a Store
-  Manager may set `hidden` and nothing else. No role may delete. See
+  `productId` inside it, and `storeId` required to match the order's
+  store. Updates are split into two disjoint branches: the author may
+  revise rating, answer, and text and nothing else; the selling store's
+  manager may set `hidden` and nothing else. No role may delete. See
   section 9.
 - **Activity log collections** — see section 5.
 
@@ -169,7 +175,7 @@ same line as the roles:
 
 | Collection | Written by | Records | Readable by |
 |---|---|---|---|
-| `activityLogs` | Store Manager | Product create / edit / delete, order status changes | Store Manager |
+| `activityLogs` | Store Manager | Product create / edit / delete, order status changes, review moderation — per store | That store's Store Manager |
 | `accountLogs` | Platform Admin | Role grants, account activation / deactivation | Platform Admin |
 
 Both are surfaced in a single Activity screen that selects its collection
@@ -223,19 +229,29 @@ a chronological list with actor and timestamp.
 **Write a Review screen** (customer) — reached from a delivered order,
 one review per item on that order. See section 9.
 
-**Reviews screen** (Store Manager) — the moderation queue, opening on the
-reviews that reported an item did not match its description. See
-section 9.
+**Reviews screen** (Store Manager) — the moderation queue for their own
+store, opening on the reviews that reported an item did not match its
+description. See section 9.
+
+**Store page** (customer) — one store's catalogue with its profile and
+seller rating, opened from the Shop's "Shop by store" row or a product's
+"Sold by" line. Technically the Shop screen narrowed to one store rather
+than a separate screen. See section 10.
+
+**Stores in Edit User** (Platform Admin) — not a new screen: choosing
+Store Manager in Edit User now also asks which store, with "Open a new
+store". See section 10.
 
 ---
 
 ## 8. Verification — worth a short section if the SRS has one
 
-The security rules have an automated test suite: **79 tests** run against
+The security rules have an automated test suite: **114 tests** run against
 the Firestore emulator via `npm run test:rules`. Coverage includes
 privilege escalation attempts, role separation in both directions, field
 validation, checkout stock rules, order cancellation, audit log
-integrity, order creation, and the verified-purchase chain behind reviews.
+integrity, order creation, the verified-purchase chain behind reviews,
+and store separation (section 10).
 Notable cases:
 
 - A signup cannot set a privileged role.
@@ -249,47 +265,66 @@ Notable cases:
 - A product that was not on the order cannot be reviewed through it.
 - A review cannot be written against another customer's order.
 - A Store Manager may hide a review but cannot edit or delete one.
+- A Store Manager cannot read, change or cancel another store's products
+  or orders, and cannot move a product to another store.
+- A review must name the store that sold the item.
+- A support request goes to the store of the order it names, or to the
+  Platform Admin, and the rules check that routing against the order.
 
 ---
 
-## 9. Product reviews — NEW, from panel feedback
+## 9. Reviews and seller ratings — from panel feedback
 
-A panellist asked for "reviews for seller and customer". That suggestion
-assumes a **multi-vendor marketplace**, which PlainCo is not: there is one
-store, the `seller` role is that store's own manager, and products carry
-no `sellerId`. A seller rating would therefore be a single number with
-nothing to compare it against, and a customer rating would feed no
-decision the store ever makes — while publishing reputation data about
-consumers.
+A panellist asked for "reviews for seller and customer". PlainCo now has
+the first of those and deliberately not the second.
 
-What the suggestion was reaching for is the trust problem the SRS and
-`PRODUCT.md` both already name: shoppers must believe the condition of
-secondhand clothing bought sight-unseen. That is a claim about an **item**.
-So the implementation is **product reviews restricted to verified
-purchases**.
+**How the answer changed.** When reviews were first built PlainCo was a
+single store, and this section said so: a seller rating would have been
+one number with nothing to compare it against, so the feature was built
+as product reviews only. PlainCo is now multi-store (section 10), which is
+what the title always described — "Ukay-Ukay and Ready-to-Wear *Stores*".
+With several stores a seller rating finally carries information, so it has
+been added. It is built from the same product reviews rather than from a
+separate form; see "Seller ratings" below.
 
-Suggested wording:
+**Customer ratings are still declined.** A store accepts every order, so a
+rating of buyers would feed no decision any store makes, while publishing
+reputation data about consumers. If the SRS needs a sentence:
+
+> PlainCo does not rate customers. Stores accept every order, so a buyer
+> rating would inform no decision, and it would publish reputation data
+> about private individuals.
+
+Suggested wording for the feature:
 
 > Customers may review a product they have purchased, once the order
 > containing it has been marked Delivered. A review records a 1–5 star
 > rating, an answer to "did the item match its description?", and optional
 > free text. Reviews are visible to all signed-in users on the product
-> page. PlainCo does not rate sellers or customers: the system is a single
-> store, so neither rating would carry information.
+> page. Each review is filed with the store that sold the item, and a
+> store's seller rating is the summary of those reviews: its average
+> rating, how many reviews it has, and the share of buyers who said the
+> item matched its description. The seller rating is shown on the store's
+> page, beside the store in the Shop, and under "Sold by" on each of its
+> products.
 
 **The verified-purchase chain.** "Verified" is enforced in
 `firestore.rules`, not asserted by the interface, and it is a chain of
-three rules:
+four links:
 
-1. Order creation pins `status` to `'pending'` — a client cannot create an
-   order that arrives already Delivered.
-2. Only a Store Manager may move an order to `'delivered'`.
+1. Orders are created only by the server (the `placeOrder` Cloud
+   Function), always in status `'pending'`. No client can create an order
+   at all, so none can create one that arrives already Delivered.
+2. Only the Store Manager of the store that sold an order may move it to
+   `'delivered'`.
 3. A review is accepted only against the author's **own** order, in status
    `'delivered'`, containing the product being reviewed.
+4. The review must name the store on that order. A review cannot be filed
+   against a different store's rating.
 
-Link 1 was added in this change specifically to support link 3. Without
-it, a client could mint its own proof of purchase and review any product
-it named.
+Without link 1, a client could mint its own proof of purchase and review
+any product it named. Without link 4, a buyer from one store could lower
+another store's rating.
 
 **One review per order line** is structural rather than conventional: the
 review's document id is derived as `orderId_productId` and the rule
@@ -297,42 +332,72 @@ requires it to match the fields inside, so a duplicate is a write to a
 document that already exists. Buying the same item again on a later order
 earns a second review, which is correct.
 
+**Seller ratings.** There is no "rate this seller" form. A store's rating
+is its product reviews summarised, which gives it three properties a
+separate seller review would not have:
+
+- **Only real buyers count.** Every review behind it passed the chain
+  above, so every one is from a delivered order from that store.
+- **One store's record never leans on another's.** Each review carries
+  the store that sold the item, checked against the order.
+- **It is recent, and says so.** The rating is computed from the store's
+  most recent 100 reviews. Once a store has more than that, the app says
+  "last 100 reviews" rather than implying that is the full history.
+
+The average is shown with its review count beside it, so a perfect score
+from one review cannot pass for a perfect score from a hundred.
+
 **The ukay-ukay problem, and why "did it match the description?" exists.**
 Secondhand pieces are frequently one of a kind — stock 1, sold once — so a
 per-product average is a permanent sample of one, and most product pages
 would read "No reviews yet" forever. "Did it match the description?" is
-the same question about every listing in the store, so it aggregates
-store-wide and says something useful about an unreviewed item. A product
-with no reviews of its own shows that store-wide figure instead of an
-empty state.
+the same question about every listing a store makes, so it aggregates
+across the store and says something useful about an item nobody has
+reviewed yet. A product with no reviews of its own shows **its seller's**
+figure instead of an empty state ("Across Tindahan ni Lola's 12 reviews,
+92% said the item matched its description"). It is the seller's figure
+and not the whole platform's, because one store's honesty about condition
+says nothing about another's.
 
-**Moderation is hiding, never deletion.** A Store Manager may set a
-`hidden` flag and nothing else — the rules grant no delete on reviews to
-any role, and no write to a review's rating or text. This mirrors the
-existing decision that accounts are deactivated rather than deleted (SRS
-§2.4), and for the same reason: a store that can erase reviews can erase
-the unflattering ones, and no reader could tell a clean record from a
-cleaned one. Every hide and restore is written to the Store Activity log.
+**Moderation is hiding, never deletion.** Only the Store Manager of the
+store that sold the item may set a review's `hidden` flag, and nothing
+else — the rules grant no delete on reviews to any role, no write to a
+review's rating or text, and no moderation to other stores or to the
+Platform Admin. Hidden reviews are left out of the seller rating, and the
+rating updates immediately when one is hidden or restored. This mirrors
+the existing decision that accounts are deactivated rather than deleted
+(SRS §2.4), and for the same reason: a store that can erase reviews can
+erase the unflattering ones, and no reader could tell a clean record from
+a cleaned one. Every hide and restore is written to that store's activity
+log.
+
+State this plainly in the SRS, since it is the obvious objection: a store
+can hide reviews of its own items, and hiding does lift its rating. What
+the design guarantees is that the review itself survives unaltered, and
+that every hide is recorded under the manager's name in the store's
+activity log. Taking moderation away from the store — to the Platform
+Admin, say — is the stronger answer, and a reasonable future change.
 
 **Privacy.** A review displays the author's first name and last initial
 ("Hans V."), abbreviated at write time so the full name is never stored in
 a document other shoppers can read.
 
-**Honest limitations**, all the same boundary the activity log already
-draws (no Cloud Functions in this project):
+**Honest limitations:**
 
-- Rating aggregates are computed on the client from the reviews
-  themselves, not stored as counters on the product. A server-side trigger
-  is the production answer; a client-maintained counter would be
-  tamperable.
+- Ratings are computed on the device from the reviews themselves, not
+  stored as counters on the product or store. A server-side trigger
+  maintaining those counters is the production answer; the project now has
+  Cloud Functions, so it is buildable, but it has not been built. A
+  client-maintained counter would be tamperable, so none is kept.
 - Firestore rules cannot inspect a query's filters, so a hidden review is
   still fetchable by a client querying the collection directly. The app
-  filters them from every list it renders, and the rules guarantee that
-  hiding is the only moderation available and that it is logged.
-- Orders placed before this change carry no `productIds` field and their
-  lines cannot be reviewed. Failing in that direction is deliberate: the
-  alternative would make the check optional for any write that omitted the
-  field.
+  leaves hidden reviews out of every list and every rating it shows, and
+  the rules guarantee that hiding is the only moderation available and
+  that it is logged.
+- Orders placed before reviews existed carry no `productIds` field, and
+  their lines cannot be reviewed. Failing in that direction is deliberate:
+  the alternative would make the check optional for any write that
+  omitted the field.
 
 ### 9a. New use case — Write a Review
 
@@ -351,11 +416,13 @@ For the SRS's use-case section, in the same shape as the existing entries:
 > 3. The customer answers whether the item matched its description.
 > 4. The customer optionally writes up to 1000 characters of detail.
 > 5. The customer submits.
-> 6. The system stores the review and confirms.
+> 6. The system stores the review, filed with the store that sold the
+>    item, and confirms.
 >
 > **Postcondition:** The review is visible on the product page to all
-> signed-in users, attributed to the author's first name and last initial.
-> The order line now offers "Edit your review" instead.
+> signed-in users, attributed to the author's first name and last initial,
+> and counts toward the selling store's seller rating. The order line now
+> offers "Edit your review" instead.
 >
 > **Alternate flows:**
 > - *Already reviewed* — the form opens pre-filled with the existing
@@ -375,6 +442,10 @@ default, and "not yet answered" is held distinct from "no" in the
 interface. A field this central must not be able to record a complaint the
 customer never made by leaving it untouched.
 
+There is no separate use case for seller ratings: nobody writes one. It is
+a display that follows from Write a Review, and belongs in the Browse
+Products / View Store description (section 10).
+
 ### 9b. Data model — one new collection, one changed field
 
 **New collection: `reviews/{orderId}_{productId}`.** The document id is
@@ -385,17 +456,19 @@ above.
 |---|---|---|
 | `orderId` | string | The delivered order the review was earned on. Immutable after creation. |
 | `productId` | string | The item reviewed. Immutable after creation. |
+| `storeId` | string | The store that sold the item. Must equal the order's `storeId`; immutable. What the seller rating is grouped by. |
 | `productName` | string ≤ 120 | Snapshot at write time — a product can be renamed after the sale. |
 | `userId` | string | The author. Bound to the authenticated caller; immutable. |
 | `userName` | string ≤ 60 | First name and last initial. Snapshot, because `/users` is unreadable to other shoppers. |
 | `rating` | integer 1–5 | Whole stars only. |
 | `matchedDescription` | boolean | "Did the item match its description?" |
 | `text` | string ≤ 1000 | Optional free text. |
-| `hidden` | boolean | Moderation flag. Always `false` at creation; only a Store Manager may change it. |
+| `hidden` | boolean | Moderation flag. Always `false` at creation; only the selling store's manager may change it. |
 | `createdAt` | timestamp | Server-set; cannot be backdated. |
 | `updatedAt` | timestamp | Present only on a revised review. Server-set. |
 
-**Changed collection: `orders`** — one field added.
+**Changed collection: `orders`** — one field added for reviews (the
+multi-store fields are in section 10).
 
 | Field | Type | Notes |
 |---|---|---|
@@ -411,7 +484,165 @@ enforceable on the backend rather than trusting the client.
 
 ---
 
-## 10. Still outstanding — SRS-side only, no code changes needed
+## 10. Multi-store — NEW, from panel feedback
+
+The title promises an e-commerce app "for Ukay-Ukay and Ready-to-Wear
+**Stores**", plural, and a panellist asked for it. PlainCo is now
+multi-store: several stores sell through one app, each run by its own
+Store Manager, and a shopper can buy from several in one checkout.
+
+> **Status (22 Sep 2026):** built and tested on the `feature/multi-store`
+> branch, and deliberately kept out of the UAT build, which is still
+> single-store. Sections 9 and 10 describe the system **after** that
+> branch ships. Do not paste them into the SRS used for the UAT.
+
+**Replace every sentence in the SRS that says PlainCo is a single store.**
+Earlier drafts of these notes said so in writing (the old section 9); the
+phrases to look for are "the store", "one store", and "the seller".
+
+Suggested wording for the scope:
+
+> PlainCo is a multi-store platform. Independent ukay-ukay and
+> ready-to-wear stores each list and sell their own products through one
+> shared app. Each store is run by a Store Manager, who manages that
+> store's products, orders, customer questions and reviews, and cannot see
+> or change any other store's. A Platform Admin opens stores and assigns
+> their managers. Customers browse all stores together or one store at a
+> time, and may buy from several stores in a single checkout.
+
+### What changed, by SRS area
+
+**Roles (section 1).** A Store Manager now runs **one** store, named on
+their account, rather than "the shop". The Platform Admin additionally
+opens stores and answers general questions that are not about any store's
+order. Both are still enforced in `firestore.rules`, not by hiding
+screens.
+
+**Opening a store.** Stores are opened by a Platform Admin, from the same
+Edit User form that makes someone a Store Manager: choose Store Manager,
+then pick an existing store or "Open a new store" and name it. The store
+and its first manager are saved in one write, so there is never a store
+without a manager or a manager without a store. There is **no vendor
+self-signup**, for the same reason there is no staff signup (section 3).
+Stores can be renamed, never deleted, because products and past orders
+point at them.
+
+**Products.** Every product belongs to the store that listed it. A Store
+Manager can add, edit, restock and delete only their own store's
+products, and a product cannot be moved to another store.
+
+**Browsing (customer).** The Shop lists every store's products together,
+each marked with its store, and has a "Shop by store" row showing each
+store with its item count and seller rating. Tapping a store opens its
+page: the same catalogue narrowed to that store, with search and filters,
+and a short profile — what it sells (Ukay-Ukay, Ready-to-Wear or both,
+worked out from its own listings), when it joined PlainCo, and its seller
+rating. Every product page says "Sold by" and links to its store.
+
+**Checkout: one order per store.** A cart holding items from several
+stores checks out once, with one payment, and becomes **one order per
+store**. This is what lets each store see and fulfil only its own part.
+The split is done on the server by the `placeOrder` Cloud Function in a
+single transaction:
+
+- Every store's order is written, and every item's stock deducted, or
+  nothing is. One store being short on stock stops the whole checkout,
+  rather than charging the customer for half a cart.
+- A declined payment writes nothing for any store.
+- The orders share a checkout reference, and one payment covers them all.
+- The confirmation screen and the email receipt name the store beside
+  each order number, and list each store's items separately.
+- Shipping is currently free and is recorded per store's order, so per-
+  store shipping rates can be added later without changing the order
+  shape.
+
+Suggested addition to the Checkout use case:
+
+> **Alternate flow — items from several stores:** the system places one
+> order per store, each with its own order number, under a single payment.
+> If any item is out of stock, no order is placed for any store.
+
+**Orders (staff).** A Store Manager sees only their own store's orders,
+and only they may change an order's status or cancel it. Cancelling
+restores stock only to their own store's products (section 4a is
+unchanged otherwise). The customer still sees all their orders together,
+each labelled with its store.
+
+**Support: routed by order.** The Help form asks "Is this about an
+order?" and lists the customer's recent orders. A question about an order
+goes to **that order's store**. A general question goes to the
+**Platform Admin**, who answers it from an "Open questions" card in Manage
+Users. The rules check that the order named really is the customer's and
+really belongs to that store, so a question cannot be routed into another
+store's inbox. Email notifications and "Send again" follow the same
+routing.
+
+Suggested wording:
+
+> Customers may attach a support request to one of their orders, in which
+> case it is delivered to the store that fulfilled that order. Requests
+> not about an order are delivered to the Platform Admin.
+
+**Reviews and ratings.** Section 9.
+
+**Audit (section 5).** The store activity log is kept per store: each
+entry records its store, and a Store Manager reads only their own store's
+entries. The account log is unchanged.
+
+### Data model changes
+
+**New collection: `stores/{storeId}`.**
+
+| Field | Type | Notes |
+|---|---|---|
+| `name` | string, 1–60 | Shown to shoppers. Only a Platform Admin may set or change it. |
+| `createdAt` | timestamp | Server-set. Shown as "On PlainCo since". |
+
+**New field `storeId` on existing collections.**
+
+| Collection | Meaning | Rule |
+|---|---|---|
+| `users` | The store a Store Manager runs | Required for a Store Manager, absent for everyone else; set only by a Platform Admin. |
+| `products` | The store that listed it | Must be the listing manager's own store; cannot change afterwards. |
+| `orders` | The store fulfilling this order (also `storeName`, and `checkoutId` linking orders paid together) | Written by the server at checkout. |
+| `reviews` | The store that sold the item | Must equal the order's store. |
+| `activityLogs` | The store the entry is about | Must be the writer's own store. |
+| `supportRequests` | The store the question is for, or `null` for the Platform Admin | Checked against the named order. |
+| `mailLog` | The same routing as the request or order it is about | Written by the server. |
+
+**Existing data.** Accounts, products and orders created before stores
+existed have no `storeId`, and the rules leave them untouched rather than
+guess an owner. A one-time script (`scripts/migrate-to-stores.mjs`)
+assigns them to a first store. It shows what it will change before it
+changes anything, and running it twice changes nothing the second time.
+
+### Out of scope, and worth saying so in the SRS
+
+Payouts to stores, platform commissions, vendor self-signup and per-store
+shipping rates. Those make PlainCo a marketplace to *operate* rather than
+one to *demonstrate*, and each is a business decision as much as a
+technical one. Suggested wording:
+
+> Payment is collected by the platform on behalf of all stores. Settlement
+> between the platform and individual stores, commissions, and store
+> self-registration are outside the scope of this project.
+
+### Verification
+
+Every rule above is covered by the automated rules test suite (section
+8), including: a manager cannot change, cancel or read another store's
+products, orders or activity log; a product cannot be moved between
+stores; only a Platform Admin can open a store, and stores cannot be
+deleted; a review must name the store that sold the item, and another
+store cannot hide it; and a support request is routed by its order, and
+cannot be moved into another store's inbox. The checkout tests cover the
+split: a two-store cart becomes one order per store under one payment,
+and a decline, or one store being short on stock, writes nothing for
+either store.
+
+---
+
+## 11. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all

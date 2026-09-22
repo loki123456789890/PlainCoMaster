@@ -578,8 +578,10 @@ one comes after the boundary it depends on is solid.
       storeId (step 4). Hiding a review moves the number live. Also fixed
       the last card of an odd count stretching across both columns.
       Driven in the web build; rules 114/114.
-- [ ] Rewrite SRS §9 in SRS_UPDATE_NOTES.md for multi-store: seller
-      ratings now exist, so the "refused" answer there is out of date.
+- [x] SRS_UPDATE_NOTES.md: §9 rewritten (seller ratings exist; customer
+      ratings still declined, with the reason), new §10 Multi-store (scope
+      wording, what changed per SRS area, data model, out of scope), and
+      §1, §4, §5, §7, §8 brought in line. Marked as post-UAT.
 
 OUT OF SCOPE unless someone asks: payouts, commissions, vendor
 self-signup, per-store shipping rates. Those make it a marketplace to
