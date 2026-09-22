@@ -16,7 +16,10 @@
     "test:checkout": "node scripts/run-rules-tests.mjs scripts/test-checkout.mjs",
     "rules:deploy": "firebase deploy --only firestore:rules",
     "indexes:deploy": "firebase deploy --only firestore:indexes",
-    "storage:deploy": "firebase deploy --only storage"
+    "storage:deploy": "firebase deploy --only storage",
+    "emulators": "firebase emulators:start --only auth,firestore,functions",
+    "start:emulator": "node scripts/start-with-emulators.mjs",
+    "seed:emulator": "node scripts/seed-emulator.mjs"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
