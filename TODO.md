@@ -524,10 +524,18 @@ one comes after the boundary it depends on is solid.
 - [ ] Before this branch ships: run the migration against production
       (after the UAT), THEN deploy rules — in that order, or the live
       catalogue is frozen between the two.
-- [ ] Order splitting in `placeOrder`: one checkout writes one order per
+- [x] Order splitting in `placeOrder`: one checkout writes one order per
       store, in the same transaction. The riskiest step — two managers
       sharing one status field means neither owns it — so it lands after
-      the rules are right, with its own tests.
+      the rules are right, with its own tests. *(Each order carries
+      storeId, storeName and a shared checkoutId; one sandbox payment and
+      one paymentRef cover the whole checkout; a decline or a short store
+      writes nothing for any store. Order status updates and cancellation
+      are now `managesStore()`. Confirmation lists one number per store,
+      My Orders and Order Details name the store, receipts say "Sold by".
+      Checkout suite 17 → 22, rules 99 → 102; a two-store COD checkout
+      driven in the web build against the emulators. The migration now
+      stamps pre-store orders too.)*
 - [ ] Scope the admin screens (Products, Orders, Reviews, Activity) to
       the signed-in manager's store. Note AdminOrdersScreen currently
       reads `collectionGroup(db, 'orders')` with no scoping at all.

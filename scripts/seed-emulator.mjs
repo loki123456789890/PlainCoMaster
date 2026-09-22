@@ -92,6 +92,10 @@ const MANAGER_EMAIL = 'sam@example.com';
 const ADMIN_EMAIL = 'ada@example.com';
 
 await writeDoc(`stores/${STORE_ID}`, { name: 'Sandbox Ukay', createdAt: new Date() });
+// A second store with no manager of its own, so a cart holding both
+// products checks out as two orders — one per store.
+const OTHER_STORE_ID = 'sandbox-rtw';
+await writeDoc(`stores/${OTHER_STORE_ID}`, { name: 'Sandbox RTW', createdAt: new Date() });
 
 const managerUid = await ensureAccount(MANAGER_EMAIL);
 await writeDoc(`users/${managerUid}`, {
@@ -123,7 +127,7 @@ await writeDoc(`users/${uid}`, {
 
 const PRODUCTS = [
   { id: 'sandbox-jacket', name: 'Denim Jacket', price: 850, stock: 10, type: 'ukay' },
-  { id: 'sandbox-coat', name: 'Wool Overcoat', price: 1200, stock: 4, type: 'ready' },
+  { id: 'sandbox-coat', name: 'Wool Overcoat', price: 1200, stock: 4, type: 'ready', storeId: OTHER_STORE_ID },
 ];
 
 for (const p of PRODUCTS) {
@@ -143,7 +147,7 @@ for (const p of PRODUCTS) {
     createdAt: new Date(),
     // Without it the product has no manager and is frozen for everyone —
     // see managesStore() in firestore.rules.
-    storeId: STORE_ID,
+    storeId: p.storeId || STORE_ID,
   });
 }
 
@@ -151,5 +155,5 @@ console.log(`\nSeeded the emulators.\n`);
 console.log(`  customer   ${EMAIL} / ${PASSWORD}  (uid ${uid})`);
 console.log(`  manager    ${MANAGER_EMAIL} / ${PASSWORD}  (runs "Sandbox Ukay")`);
 console.log(`  admin      ${ADMIN_EMAIL} / ${PASSWORD}  (Platform Admin)`);
-for (const p of PRODUCTS) console.log(`  product    ${p.name} — P${p.price}, stock ${p.stock}`);
+for (const p of PRODUCTS) console.log(`  product    ${p.name} — P${p.price}, stock ${p.stock}  (${p.storeId || STORE_ID})`);
 console.log(`\nStock is the thing to watch: a declined sandbox payment must leave it untouched.\n`);

@@ -35,7 +35,7 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
 const require = createRequire(import.meta.url);
 const functions = require('../functions/index.js');
 const requireFromFunctions = createRequire(new URL('../functions/package.json', import.meta.url));
-const { getFirestore } = requireFromFunctions('firebase-admin/firestore');
+const { getFirestore, FieldValue } = requireFromFunctions('firebase-admin/firestore');
 
 const db = getFirestore();
 const placeOrder = functions._handlePlaceOrder;
@@ -61,7 +61,7 @@ const request = (items, overrides = {}) => ({
 });
 
 async function wipe() {
-  for (const path of ['products', 'rateLimits', 'mailLog']) {
+  for (const path of ['products', 'stores', 'rateLimits', 'mailLog']) {
     const snapshot = await db.collection(path).get();
     await Promise.all(snapshot.docs.map((d) => d.ref.delete()));
   }
@@ -79,17 +79,32 @@ async function seed({ stock = 10, price = 850, isActive = true, address = ADDRES
   if (isActive === false) user.isActive = false;
   await db.collection('users').doc('customer1').set(user);
 
+  // p1 and p2 share a store, so every test written before multi-store
+  // still describes a one-store checkout. p3 is the second store, for the
+  // split tests.
+  await db.collection('stores').doc('storeA').set({ name: 'Tindahan A' });
+  await db.collection('stores').doc('storeB').set({ name: 'RTW B' });
   await db.collection('products').doc('p1').set({
     name: 'Denim Jacket', price, stock, type: 'ukay',
     description: 'Well loved.', imageUrl: 'https://example.test/1.jpg',
-    colors: ['Blue'], sizes: ['M'],
+    colors: ['Blue'], sizes: ['M'], storeId: 'storeA',
   });
   await db.collection('products').doc('p2').set({
     name: 'Wool Overcoat', price: 1200, stock: 3, type: 'ready',
     description: 'Warm.', imageUrl: 'https://example.test/2.jpg',
-    colors: ['Grey'], sizes: ['L'],
+    colors: ['Grey'], sizes: ['L'], storeId: 'storeA',
+  });
+  await db.collection('products').doc('p3').set({
+    name: 'Linen Blouse', price: 450, stock: 4, type: 'ready',
+    description: 'Crisp.', imageUrl: 'https://example.test/3.jpg',
+    colors: ['White'], sizes: ['S'], storeId: 'storeB',
   });
 }
+
+const ordersOf = async () =>
+  (await db.collection('users').doc('customer1').collection('orders').get()).docs.map((d) => ({
+    id: d.id, ...d.data(),
+  }));
 
 async function test(name, fn) {
   try {
@@ -138,7 +153,7 @@ await test('CHECKOUT-1  an order is priced, written, and stock decremented', asy
   assertEqual(await stockOf('p1'), 8, 'stock after buying 2 of 10');
 
   const stored = (await db.collection('users').doc('customer1')
-    .collection('orders').doc(placed.orderId).get()).data();
+    .collection('orders').doc(placed.orders[0].orderId).get()).data();
   assertEqual(stored.status, 'pending', 'status is pinned to pending');
   assertEqual(stored.customerId, 'customer1', 'customerId');
   assertEqual(stored.total, 1700, 'stored total');
@@ -314,7 +329,7 @@ await test('CHECKOUT-13  an approved sandbox payment marks the order paid', asyn
   assert(/^SBX-/.test(placed.paymentRef), `reference is marked sandbox, got ${placed.paymentRef}`);
 
   const stored = (await db.collection('users').doc('customer1')
-    .collection('orders').doc(placed.orderId).get()).data();
+    .collection('orders').doc(placed.orders[0].orderId).get()).data();
   assertEqual(stored.paymentStatus, 'paid', 'stored paymentStatus');
   assertEqual(stored.paymentSandbox, true, 'stored sandbox stamp');
   assertEqual(stored.paymentRef, placed.paymentRef, 'the reference the customer was shown is the one stored');
@@ -373,6 +388,100 @@ await test('CHECKOUT-17  COD carrying a sandbox outcome is refused, not ignored'
   );
 
   assertEqual(await orderCount(), 0, 'a confused client gets no order at all');
+});
+
+console.log('\nCheckout — several stores in one cart');
+
+await test('CHECKOUT-18  a two-store cart becomes one order per store', async () => {
+  await seed({ stock: 10, price: 850 });
+
+  const placed = await placeOrder(request([
+    { productId: 'p1', quantity: 2 },
+    { productId: 'p3', quantity: 1 },
+    { productId: 'p2', quantity: 1 },
+  ]));
+
+  assertEqual(placed.orders.length, 2, 'two stores, two orders');
+  const [a, b] = placed.orders;
+  // In the order each store first appears in the cart.
+  assertEqual(a.storeId, 'storeA', 'first order is the first store in the cart');
+  assertEqual(a.storeName, 'Tindahan A', 'store name comes from the store document');
+  assertEqual(a.items.length, 2, 'storeA gets both of its lines');
+  assertEqual(a.total, 2 * 850 + 1200, 'storeA total is only its own lines');
+  assertEqual(b.storeId, 'storeB', 'second order is the other store');
+  assertEqual(b.total, 450, 'storeB total is only its own line');
+  assertEqual(placed.total, 2 * 850 + 1200 + 450, 'the checkout total is the sum of the two');
+
+  const stored = await ordersOf();
+  assertEqual(stored.length, 2, 'two order documents written');
+  const storedA = stored.find((o) => o.storeId === 'storeA');
+  const storedB = stored.find((o) => o.storeId === 'storeB');
+  assertEqual(storedA.total, a.total, 'stored storeA total');
+  assertEqual(storedB.productIds.join(), 'p3', 'productIds hold only that store\'s products');
+  assert(!storedA.productIds.includes('p3'), 'a review of p3 cannot be earned on storeA\'s order');
+  assertEqual(storedA.checkoutId, storedB.checkoutId, 'both orders share one checkoutId');
+  assertEqual(storedA.status, 'pending', 'each order starts pending on its own');
+  assertEqual(storedB.status, 'pending', 'each order starts pending on its own');
+});
+
+await test('CHECKOUT-19  one online payment covers every store\'s order', async () => {
+  await seed({ stock: 10, price: 500 });
+
+  const placed = await placeOrder(request(
+    [{ productId: 'p1', quantity: 1 }, { productId: 'p3', quantity: 1 }],
+    { paymentMethod: 'gcash', sandboxOutcome: 'approved' }
+  ));
+
+  const stored = await ordersOf();
+  assertEqual(stored.length, 2, 'two orders');
+  for (const order of stored) {
+    assertEqual(order.paymentRef, placed.paymentRef, 'every order carries the one reference');
+    assertEqual(order.paymentStatus, 'paid', 'every order is paid');
+  }
+});
+
+await test('CHECKOUT-20  a decline on a two-store cart writes nothing for EITHER store', async () => {
+  await seed({ stock: 10, price: 500 });
+
+  const error = await expectRefusal(
+    placeOrder(request(
+      [{ productId: 'p1', quantity: 1 }, { productId: 'p3', quantity: 2 }],
+      { paymentMethod: 'card', sandboxOutcome: 'declined' }
+    )),
+    'payment-declined'
+  );
+  assertEqual(error.details.amount, 500 + 900, 'the whole checkout was what went unpaid');
+  assertEqual(await orderCount(), 0, 'no order for either store');
+  assertEqual(await stockOf('p1'), 10, 'storeA stock untouched');
+  assertEqual(await stockOf('p3'), 4, 'storeB stock untouched');
+});
+
+await test('CHECKOUT-21  one store short on stock sinks the whole checkout', async () => {
+  // Not "place what can be placed". A customer who asked for two things
+  // together gets both or is told why not — the same all-or-nothing the
+  // one-store checkout always had.
+  await seed({ stock: 10 });
+
+  await expectRefusal(
+    placeOrder(request([{ productId: 'p1', quantity: 1 }, { productId: 'p3', quantity: 99 }])),
+    'insufficient-stock'
+  );
+  assertEqual(await orderCount(), 0, 'no partial order');
+  assertEqual(await stockOf('p1'), 10, 'the store that had stock was not decremented');
+});
+
+await test('CHECKOUT-22  a product with no store cannot be ordered', async () => {
+  // Written before stores existed and not yet migrated. No manager could
+  // ever move its order past pending, so it is refused as unavailable.
+  await seed();
+  await db.collection('products').doc('p1').update({ storeId: FieldValue.delete() });
+
+  const error = await expectRefusal(
+    placeOrder(request([{ productId: 'p1', quantity: 1 }])),
+    'unavailable'
+  );
+  assert(error.details.productIds.includes('p1'), 'the unassigned product is named');
+  assertEqual(await orderCount(), 0, 'no order');
 });
 
 console.log(`\n${passed} passed, ${failures.length} failed`);

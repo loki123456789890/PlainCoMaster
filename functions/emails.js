@@ -100,6 +100,9 @@ function orderHtml(order, orderId) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${LINE};border-radius:12px;padding:16px;margin-bottom:20px;">
   <tr><td style="font:600 11px/1.4 ${SANS};letter-spacing:0.08em;text-transform:uppercase;color:${ASH};padding-bottom:4px;">Your order number</td></tr>
   <tr><td style="font:700 22px/1.2 ${SANS};color:${CLAY};">${escapeHtml(formatOrderNumber(orderId))}</td></tr>
+  ${order.storeName
+    ? `<tr><td style="font:400 13px/1.5 ${SANS};color:${INK};padding-top:2px;">from ${escapeHtml(order.storeName)}</td></tr>`
+    : ''}
   <tr><td style="font:400 13px/1.5 ${SANS};color:${ASH};padding-top:6px;">Keep this if you need to ask us about the order.</td></tr>
 </table>
 
@@ -153,6 +156,9 @@ function orderText(order, orderId) {
     'PlainCo — order placed',
     '',
     `Order number: ${formatOrderNumber(orderId)}`,
+    // One receipt per order, and a multi-store cart is several orders, so
+    // each receipt says which store it is for.
+    ...(order.storeName ? [`Sold by: ${order.storeName}`] : []),
     'Keep this if you need to ask us about the order.',
     '',
     'What you ordered:',

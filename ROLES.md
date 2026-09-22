@@ -76,9 +76,13 @@ their own store's products (`managesStore()`).
   the Admin SDK because giving an existing product a store is exactly the
   write the rules forbid clients to make.
 
-Still any-manager for now, until orders are split per store: orders,
-support requests, review moderation, and the activity and mail logs. See
-TODO.md, "Multi-store".
+A cart holding products from several stores checks out as **one order
+per store** (`placeOrder`), and only that store's manager may move an
+order's status or cancel it.
+
+Still any-manager for now, until the admin screens are scoped: reading
+orders, support requests, review moderation, and the activity and mail
+logs. See TODO.md, "Multi-store".
 
 The person-add button in the Manage Users header explains these three
 steps in-app, so the flow isn't folklore.

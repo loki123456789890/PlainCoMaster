@@ -282,7 +282,16 @@ service cloud.firestore {
         // field was mandatory may not carry a status at all, and dot
         // notation on a missing field errors out as a permission denial
         // that can't be told apart from a real one.
-        allow update: if isSeller() &&
+        //
+        // MULTI-STORE: placeOrder writes one order per store, stamped with
+        // storeId, and only THAT store's manager may work it. An order
+        // from before stores existed has no storeId and is frozen until
+        // scripts/migrate-to-stores.mjs stamps it — see managesStore().
+        //
+        // Reads are still any-manager (above and in the collection-group
+        // rule below) until AdminOrdersScreen queries by store; a read
+        // rule on storeId would refuse its current unfiltered query.
+        allow update: if managesStore(resource.data.get('storeId', null)) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
           request.resource.data.status in
             ['pending', 'processing', 'shipped', 'delivered', 'cancelled'] &&

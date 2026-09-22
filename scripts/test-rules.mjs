@@ -144,7 +144,7 @@ async function seed() {
         { productId: 'p1', name: 'Denim Jacket', price: 850, quantity: 2 },
         { productId: 'p3', name: 'Wool Scarf', price: 200, quantity: 3 },
       ],
-      total: 2300, status: 'pending',
+      total: 2300, status: 'pending', storeId: 'store1',
     });
     // A DELIVERED order, which is the state the reviews rules gate on.
     // Two products, so "reviewing something that was not on the order" is
@@ -157,7 +157,7 @@ async function seed() {
         { productId: 'p3', name: 'Wool Scarf', price: 200, quantity: 1 },
       ],
       productIds: ['p1', 'p3'],
-      total: 1050, status: 'delivered',
+      total: 1050, status: 'delivered', storeId: 'store1',
     });
     // Delivered, but written before productIds existed — REVIEW-16 asserts
     // its lines are unreviewable rather than silently admitted.
@@ -165,7 +165,7 @@ async function seed() {
       customerId: 'customer1',
       customerEmail: 'cathy@example.com',
       items: [{ productId: 'p1', name: 'Denim Jacket', price: 850, quantity: 1 }],
-      total: 850, status: 'delivered',
+      total: 850, status: 'delivered', storeId: 'store1',
     });
     // One line of delivered1 already reviewed, leaving the other (p1) free
     // for the create tests. This one is what the update and delete tests
@@ -196,7 +196,7 @@ async function seed() {
     await setDoc(doc(db, 'users/deactivatedCustomer/orders/delivered2'), {
       customerId: 'deactivatedCustomer', customerEmail: 'dee@example.com',
       items: [{ productId: 'p1', name: 'Denim Jacket', price: 850, quantity: 1 }],
-      productIds: ['p1'], total: 850, status: 'delivered',
+      productIds: ['p1'], total: 850, status: 'delivered', storeId: 'store1',
     });
   });
 }
@@ -208,7 +208,7 @@ async function seedOrderWithStatus(orderId, status) {
       customerId: 'customer1',
       customerEmail: 'cathy@example.com',
       items: [{ productId: 'p1', name: 'Denim Jacket', price: 850, quantity: 2 }],
-      total: 1700, status,
+      total: 1700, status, storeId: 'store1',
     });
   });
 }
@@ -795,6 +795,39 @@ await test('OWN-6  a cancellation cannot restore stock to another store\'s produ
   await assertFails(cancelBatch(asSeller(), { restores: { p1: 12, p4: 99 } }));
   assertEqual(await readStock('p4'), 6, 'p4 stock after a refused cross-store restore');
   assertEqual(await readStock('p1'), 10, 'p1 stock after the batch was refused');
+});
+
+await test('OWN-7  only the store that sold an order may move its status', async () => {
+  // o1 is store1's. Two managers sharing one status field would mean
+  // neither owns it — which is why placeOrder splits carts per store.
+  await assertFails(
+    updateDoc(doc(asOtherSeller(), 'users/customer1/orders/o1'), { status: 'processing' })
+  );
+  await assertSucceeds(
+    updateDoc(doc(asSeller(), 'users/customer1/orders/o1'), { status: 'processing' })
+  );
+});
+
+await test('OWN-8  another store cannot cancel an order, even with its own stock', async () => {
+  // The restore lines here are store2's own product, so the product half
+  // would pass on its own; the ORDER half is what refuses, and the batch
+  // dies with it.
+  await assertFails(cancelBatch(asOtherSeller(), { restores: { p4: 7 } }));
+  assertEqual(await readStock('p4'), 6, 'p4 stock after a refused foreign cancellation');
+});
+
+await test('OWN-9  an order from before stores existed is frozen until migrated', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'users/customer1/orders/unmigrated'), {
+      customerId: 'customer1', items: [], total: 0, status: 'pending',
+    });
+  });
+  await assertFails(
+    updateDoc(doc(asSeller(), 'users/customer1/orders/unmigrated'), { status: 'processing' })
+  );
+  await assertFails(
+    updateDoc(doc(asUnassignedSeller(), 'users/customer1/orders/unmigrated'), { status: 'processing' })
+  );
 });
 
 // ---------------------------------------------------------------------------

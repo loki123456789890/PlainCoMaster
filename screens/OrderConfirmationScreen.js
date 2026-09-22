@@ -90,7 +90,15 @@ export default function OrderConfirmationScreen({ navigation, route }) {
     );
   }
 
-  const items = order.items || [];
+  // One checkout can produce several orders — one per store in the cart,
+  // each with its own number, status and parcel (see placeOrder). The
+  // fallback shape covers a result from before the split, which carried a
+  // single orderId at the top level.
+  const placedOrders = Array.isArray(order.orders) && order.orders.length > 0
+    ? order.orders
+    : [{ orderId: order.orderId, items: order.items || [] }];
+  const splitAcrossStores = placedOrders.length > 1;
+  const itemCount = placedOrders.reduce((sum, placed) => sum + (placed.items || []).length, 0);
   const payOnDelivery = isPayOnDelivery(order.paymentMethod);
   const address = order.shippingAddress;
 
@@ -105,9 +113,11 @@ export default function OrderConfirmationScreen({ navigation, route }) {
           entering={reduceMotion ? undefined : FadeIn.duration(240).easing(EASE_OUT_QUART)}
         >
           <SuccessMark reduceMotion={reduceMotion} />
-          <Text style={styles.heroTitle}>Order placed</Text>
+          <Text style={styles.heroTitle}>{splitAcrossStores ? 'Orders placed' : 'Order placed'}</Text>
           <Text style={styles.heroSubtitle}>
-            Thanks — we&apos;re getting it ready for you.
+            {splitAcrossStores
+              ? `Your cart came from ${placedOrders.length} stores, so it ships as ${placedOrders.length} orders.`
+              : "Thanks — we're getting it ready for you."}
           </Text>
         </Animated.View>
 
@@ -116,12 +126,26 @@ export default function OrderConfirmationScreen({ navigation, route }) {
             rather than transcribed by hand. */}
         <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(240).delay(60).easing(EASE_OUT_QUART)}>
           <Card variant="flat" style={styles.orderNumberCard}>
-            <Text style={styles.orderNumberLabel}>Your order number</Text>
-            <Text style={styles.orderNumberValue} selectable>
-              {formatOrderNumber(order.orderId)}
+            <Text style={styles.orderNumberLabel}>
+              {splitAcrossStores ? 'Your order numbers' : 'Your order number'}
             </Text>
+            {/* Each number is named by the store that will know it by
+                that number — support for one store's parcel is asked of
+                that store. */}
+            {placedOrders.map((placed) => (
+              <View key={placed.orderId} style={styles.orderNumberRow}>
+                <Text style={styles.orderNumberValue} selectable>
+                  {formatOrderNumber(placed.orderId)}
+                </Text>
+                {placed.storeName ? (
+                  <Text style={styles.orderNumberStore}>from {placed.storeName}</Text>
+                ) : null}
+              </View>
+            ))}
             <Text style={styles.orderNumberHint}>
-              Keep this if you need to ask us about the order.
+              {splitAcrossStores
+                ? 'Keep these if you need to ask about an order.'
+                : 'Keep this if you need to ask us about the order.'}
             </Text>
           </Card>
         </Animated.View>
@@ -158,29 +182,36 @@ export default function OrderConfirmationScreen({ navigation, route }) {
           </Card>
         </Animated.View>
 
-        {/* Items */}
-        <Text style={styles.sectionHeading}>
-          {items.length} {items.length === 1 ? 'item' : 'items'}
-        </Text>
-        {items.map((item, index) => (
-          <View key={`${item.productId || 'item'}-${index}`} style={styles.itemRow}>
-            {item.image ? (
-              <ProductImage uri={item.image} style={styles.itemImage} />
-            ) : (
-              <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
-                <Ionicons name="shirt-outline" size={20} color={Colors.light.icon} />
-              </View>
-            )}
-            <View style={styles.itemDetails}>
-              <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
-              <Text style={styles.itemMeta}>
-                {[item.size, item.color].filter(Boolean).join(' · ')}
-                {item.size || item.color ? ' · ' : ''}Qty {item.quantity || 1}
-              </Text>
-            </View>
-            <Text style={styles.itemPrice}>
-              ₱{(Number(item.price) * (item.quantity || 1)).toFixed(2)}
+        {/* Items, grouped by the store shipping them. With one store the
+            heading is just the count, as it always was. */}
+        {placedOrders.map((placed) => (
+          <View key={placed.orderId}>
+            <Text style={styles.sectionHeading}>
+              {splitAcrossStores && placed.storeName
+                ? `${placed.storeName} · ${formatOrderNumber(placed.orderId)}`
+                : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
             </Text>
+            {(placed.items || []).map((item, index) => (
+              <View key={`${item.productId || 'item'}-${index}`} style={styles.itemRow}>
+                {item.image ? (
+                  <ProductImage uri={item.image} style={styles.itemImage} />
+                ) : (
+                  <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
+                    <Ionicons name="shirt-outline" size={20} color={Colors.light.icon} />
+                  </View>
+                )}
+                <View style={styles.itemDetails}>
+                  <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
+                  <Text style={styles.itemMeta}>
+                    {[item.size, item.color].filter(Boolean).join(' · ')}
+                    {item.size || item.color ? ' · ' : ''}Qty {item.quantity || 1}
+                  </Text>
+                </View>
+                <Text style={styles.itemPrice}>
+                  ₱{(Number(item.price) * (item.quantity || 1)).toFixed(2)}
+                </Text>
+              </View>
+            ))}
           </View>
         ))}
 
@@ -289,6 +320,8 @@ const styles = StyleSheet.create({
     marginVertical: Spacing.xs,
   },
   orderNumberHint: { fontSize: 12, color: Colors.light.icon, textAlign: 'center' },
+  orderNumberRow: { alignItems: 'center', marginBottom: Spacing.xs },
+  orderNumberStore: { fontSize: 13, color: Colors.light.icon, marginTop: -2 },
 
   nextCard: { marginBottom: Spacing.md, gap: Spacing.sm },
   sectionTitle: { fontSize: 15, fontWeight: '600', color: Colors.light.text },

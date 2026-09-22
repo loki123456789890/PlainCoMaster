@@ -366,7 +366,14 @@ export default function OrderDetailsScreen({ navigation, route }) {
         </Animated.View>
 
         {/* Items */}
-        <Text style={styles.sectionTitle}>Items ({items.length})</Text>
+        <Text style={[styles.sectionTitle, order.storeName && styles.sectionTitleWithSub]}>
+          Items ({items.length})
+        </Text>
+        {/* The store to ask about this parcel. One order is one store's —
+            a cart spanning several becomes several orders. */}
+        {order.storeName ? (
+          <Text style={styles.soldBy}>Sold by {order.storeName}</Text>
+        ) : null}
         {items.length === 0 ? (
           <Text style={styles.emptyItemsText}>No item details available for this order.</Text>
         ) : (
@@ -554,6 +561,8 @@ const styles = StyleSheet.create({
   heroMetaRight: { alignItems: 'flex-end' },
   heroMetaLabel: { fontSize: 11, color: Colors.light.icon, marginBottom: 2 },
   heroMetaValue: { fontSize: 13, fontWeight: '600', color: Colors.light.text },
+  sectionTitleWithSub: { marginBottom: 2 },
+  soldBy: { fontSize: 13, color: Colors.light.icon, marginBottom: 12 },
 
   cancelledNote: {
     marginTop: 16,

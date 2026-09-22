@@ -368,7 +368,19 @@ async function handlePlaceOrder(request) {
   const quantityByProductId = totalQuantityByProductId(lines);
   const productIds = [...quantityByProductId.keys()];
 
-  const orderRef = db.collection('users').doc(uid).collection('orders').doc();
+  // ONE CHECKOUT, ONE ORDER PER STORE. Each store's manager owns the status
+  // of their own order — two managers sharing one status field would mean
+  // neither owns it, and cancelling one store's half would have to restore
+  // stock the other store still means to ship.
+  //
+  // Refs are allocated here, before the transaction, for the same reason
+  // the payment reference is derived from an id rather than generated:
+  // the callback may run more than once, and the ids the customer is shown
+  // must be the ids finally written. A cart never spans more stores than it
+  // has lines, so MAX_LINE_ITEMS bounds this too. Refs that go unused (the
+  // cart spans fewer stores) cost nothing — nothing is written to them.
+  const ordersRef = db.collection('users').doc(uid).collection('orders');
+  const orderRefPool = productIds.map(() => ordersRef.doc());
 
   const placed = await db.runTransaction(async (tx) => {
     // Every read first — Firestore allows no read after the first write in
@@ -416,6 +428,15 @@ async function handlePlaceOrder(request) {
       }
 
       const data = snap.data();
+
+      // A product with no store has no one to fulfil it, and no manager
+      // could ever move its order past 'pending'. Refused as unavailable,
+      // the same as a product that has stopped existing — the fix is the
+      // migration script, not a guess at which store should ship it.
+      if (typeof data.storeId !== 'string' || data.storeId === '') {
+        missing.push(productId);
+        return;
+      }
       const price = parsePrice(data.price);
       const stock = parseStock(data.stock);
 
@@ -440,7 +461,10 @@ async function handlePlaceOrder(request) {
         return;
       }
 
-      priceByProductId.set(productId, { price, stock: available, name: data.name || '', imageUrl: data.imageUrl || null });
+      priceByProductId.set(productId, {
+        price, stock: available, name: data.name || '', imageUrl: data.imageUrl || null,
+        storeId: data.storeId,
+      });
     });
 
     if (missing.length > 0) {
@@ -457,6 +481,16 @@ async function handlePlaceOrder(request) {
       });
     }
 
+    // Store names, for the order and the customer's confirmation. Still in
+    // the read phase — no write has happened yet. A store document that is
+    // missing does not refuse the order: the product's storeId is what
+    // assigns ownership, and the name is only a label.
+    const storeIds = [...new Set([...priceByProductId.values()].map((p) => p.storeId))];
+    const storeSnaps = await tx.getAll(...storeIds.map((id) => db.collection('stores').doc(id)));
+    const storeNameById = new Map(
+      storeSnaps.map((snap, i) => [storeIds[i], (snap.exists && snap.data().name) || ''])
+    );
+
     // THE POINT OF THIS WHOLE FUNCTION: prices come from the documents
     // just read, never from the request. The client cannot make an item
     // cost less by saying so.
@@ -470,11 +504,37 @@ async function handlePlaceOrder(request) {
         size: line.size,
         color: line.color,
         image: product.imageUrl,
+        storeId: product.storeId,
       };
     });
 
-    const subtotal = round2(items.reduce((sum, item) => sum + item.price * item.quantity, 0));
-    const total = round2(subtotal + SHIPPING_FEE);
+    // Grouped in the order each store first appears in the cart, so the
+    // confirmation lists stores the way the customer added them.
+    const groups = [];
+    for (const item of items) {
+      let group = groups.find((g) => g.storeId === item.storeId);
+      if (!group) {
+        group = { storeId: item.storeId, storeName: storeNameById.get(item.storeId), items: [] };
+        groups.push(group);
+      }
+      group.items.push(item);
+    }
+    for (const [index, group] of groups.entries()) {
+      group.orderRef = orderRefPool[index];
+      group.subtotal = round2(group.items.reduce((sum, item) => sum + item.price * item.quantity, 0));
+      // Per order, because each store ships its own parcel. Zero today;
+      // when shipping costs something this is where per-store rates go.
+      group.shipping = SHIPPING_FEE;
+      group.total = round2(group.subtotal + group.shipping);
+    }
+
+    const subtotal = round2(groups.reduce((sum, g) => sum + g.subtotal, 0));
+    const shipping = round2(groups.reduce((sum, g) => sum + g.shipping, 0));
+    const total = round2(subtotal + shipping);
+
+    // Links the orders one checkout produced. The first order's id, which
+    // is fixed before the transaction opens and so stable across retries.
+    const checkoutId = groups[0].orderRef.id;
 
     // THE AUTHORISATION, and note where it sits: after the total is known
     // from the catalogue, before the first write. A gateway cannot charge
@@ -500,9 +560,14 @@ async function handlePlaceOrder(request) {
     // reference printed on the confirmation is not the one finally
     // written. The id is fixed before the transaction opens, so this is
     // stable across retries.
+    //
+    // ONE payment for the whole checkout, whatever the number of stores:
+    // the customer authorised one amount, once. Every order it produced
+    // carries the same reference, which is how a store reconciles its
+    // share against the gateway.
     const paymentRef = isPayOnDelivery(paymentMethod)
       ? null
-      : `SBX-${orderRef.id.slice(0, 10).toUpperCase()}`;
+      : `SBX-${checkoutId.slice(0, 10).toUpperCase()}`;
 
     // Writes start here.
     for (let index = 0; index < productIds.length; index += 1) {
@@ -513,17 +578,12 @@ async function handlePlaceOrder(request) {
       tx.update(productRefs[index], { stock: stock - quantityByProductId.get(productId) });
     }
 
-    const orderData = {
+    // What every order from this checkout shares. The per-store part —
+    // lines, money, store — is added for each group below.
+    const sharedOrderData = {
       customerId: uid,
       customerEmail: request.auth.token?.email || userData.email || 'unknown',
-      items,
-      // Denormalised because rules cannot read a field out of each map in
-      // a list, and the reviews rule needs to answer "is this product on
-      // this order?" to accept a verified purchase.
-      productIds,
-      subtotal,
-      shipping: SHIPPING_FEE,
-      total,
+      checkoutId,
       paymentMethod,
       // 'unpaid' for COD is the resting state, not a failure — the rider
       // collects on arrival. A declined online payment never reaches this
@@ -551,7 +611,27 @@ async function handlePlaceOrder(request) {
       createdAt: FieldValue.serverTimestamp(),
     };
 
-    tx.set(orderRef, orderData);
+    for (const group of groups) {
+      tx.set(group.orderRef, {
+        ...sharedOrderData,
+        // Which store fulfils this order. The rules let only that store's
+        // manager move its status — see managesStore() on orders.
+        storeId: group.storeId,
+        // A snapshot, like the line names and prices: the order records
+        // who sold it at the time, and a later rename does not rewrite
+        // history. Also saves every order list a read per row.
+        storeName: group.storeName,
+        items: group.items,
+        // Denormalised because rules cannot read a field out of each map
+        // in a list, and the reviews rule needs to answer "is this product
+        // on this order?" to accept a verified purchase. Per order, so a
+        // review is tied to the store that actually sold the item.
+        productIds: [...new Set(group.items.map((item) => item.productId))],
+        subtotal: group.subtotal,
+        shipping: group.shipping,
+        total: group.total,
+      });
+    }
 
     // Clear the cart lines this order consumed. Buy Now lines carry no
     // cartItemId and are correctly skipped.
@@ -563,17 +643,30 @@ async function handlePlaceOrder(request) {
     // Returned to the client so the confirmation screen can render without
     // a follow-up read. createdAt is deliberately absent — it is a
     // sentinel at this point, not a date.
+    //
+    // subtotal, shipping and total are for the WHOLE checkout — what the
+    // customer paid, or will pay the rider. `orders` breaks that down by
+    // store, each with the order number that store will know it by.
     return {
-      orderId: orderRef.id,
+      checkoutId,
+      orders: groups.map((group) => ({
+        orderId: group.orderRef.id,
+        storeId: group.storeId,
+        storeName: group.storeName,
+        items: group.items,
+        subtotal: group.subtotal,
+        shipping: group.shipping,
+        total: group.total,
+      })),
       items,
       subtotal,
-      shipping: SHIPPING_FEE,
+      shipping,
       total,
       paymentMethod,
-      paymentStatus: orderData.paymentStatus,
+      paymentStatus: sharedOrderData.paymentStatus,
       paymentRef,
-      paymentSandbox: orderData.paymentSandbox,
-      shippingAddress: orderData.shippingAddress,
+      paymentSandbox: sharedOrderData.paymentSandbox,
+      shippingAddress: sharedOrderData.shippingAddress,
     };
   });
 

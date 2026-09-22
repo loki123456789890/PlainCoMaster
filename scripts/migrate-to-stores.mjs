@@ -11,10 +11,11 @@
  *     node scripts/migrate-to-stores.mjs --name "PlainCo Ukay" --apply
  *
  * Opens one store (id `plainco` unless --id says otherwise) and assigns it
- * everything written before stores existed: every product with no
- * storeId, and every Store Manager with no storeId. Until that happens,
- * firestore.rules freezes those products for everyone and leaves those
- * managers able to change nothing — see managesStore().
+ * everything written before stores existed: every product, Store Manager
+ * and order with no storeId. Until that happens, firestore.rules freezes
+ * those products and orders for everyone, leaves those managers able to
+ * change nothing, and placeOrder refuses the products as unavailable —
+ * see managesStore().
  *
  * WHY THE ADMIN SDK, when seed-catalog.mjs deliberately goes through the
  * rules: no client may give an existing product a store. The rules refuse
@@ -81,6 +82,9 @@ const storeSnap = await storeRef.get();
 const products = (await db.collection('products').get()).docs.filter((d) => !hasStore(d.data()));
 const managers = (await db.collection('users').where('role', '==', 'seller').get()).docs
   .filter((d) => !hasStore(d.data()));
+// Every order placed before stores existed came from the one store there
+// was. Without a storeId no manager may move it past its current status.
+const orders = (await db.collectionGroup('orders').get()).docs.filter((d) => !hasStore(d.data()));
 
 console.log(
   storeSnap.exists
@@ -91,6 +95,8 @@ console.log(`${WILL} assign ${products.length} product(s) with no store:`);
 for (const d of products) console.log(`  product  ${d.data().name ?? d.id}`);
 console.log(`${WILL} assign ${managers.length} Store Manager(s) with no store:`);
 for (const d of managers) console.log(`  manager  ${d.data().email ?? d.id}`);
+// Counted, not listed: a live store can have hundreds.
+console.log(`${WILL} assign ${orders.length} order(s) with no store.`);
 
 if (!APPLY) {
   console.log('\nRe-run with --apply to write.\n');
@@ -101,13 +107,23 @@ if (!storeSnap.exists) {
   await storeRef.set({ name: STORE_NAME, createdAt: FieldValue.serverTimestamp() });
 }
 
+// Orders get the name too, as placeOrder writes it: a snapshot of who sold
+// it, so order lists need no read per row.
+const storeName = storeSnap.exists ? storeSnap.data().name : STORE_NAME;
+const pending = [
+  ...[...products, ...managers].map((d) => [d.ref, { storeId: STORE_ID }]),
+  ...orders.map((d) => [d.ref, { storeId: STORE_ID, storeName }]),
+];
+
 // Firestore caps a batch at 500 writes; 400 leaves room.
-const pending = [...products, ...managers];
 for (let i = 0; i < pending.length; i += 400) {
   const batch = db.batch();
-  for (const d of pending.slice(i, i + 400)) batch.update(d.ref, { storeId: STORE_ID });
+  for (const [ref, fields] of pending.slice(i, i + 400)) batch.update(ref, fields);
   await batch.commit();
 }
 
-console.log(`\nDone. ${products.length} product(s) and ${managers.length} manager(s) now belong to ${STORE_ID}.\n`);
+console.log(
+  `\nDone. ${products.length} product(s), ${managers.length} manager(s) and ` +
+  `${orders.length} order(s) now belong to ${STORE_ID}.\n`
+);
 process.exit(0);

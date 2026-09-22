@@ -100,7 +100,8 @@ function OrderCard({ order, index, onPress }) {
   const reduceMotion = useReducedMotion();
   const statusColor = getStatusColor(order.status);
   const statusLabel = order.status.charAt(0).toUpperCase() + order.status.slice(1);
-  const itemsLabel = `${order.itemCount} item${order.itemCount === 1 ? '' : 's'}`;
+  const itemsLabel = `${order.itemCount} item${order.itemCount === 1 ? '' : 's'}` +
+    (order.storeName ? ` · ${order.storeName}` : '');
 
   return (
     <Animated.View
@@ -124,7 +125,7 @@ function OrderCard({ order, index, onPress }) {
           <View style={styles.orderInfo}>
             <Text style={styles.orderNumber} numberOfLines={1}>{order.displayName}</Text>
             <Text style={styles.orderDate}>{order.date}</Text>
-            <Text style={styles.orderItems}>{itemsLabel}</Text>
+            <Text style={styles.orderItems} numberOfLines={1}>{itemsLabel}</Text>
             <Text style={styles.orderTotal}>₱{Number(order.total).toFixed(2)}</Text>
           </View>
           <View style={styles.orderStatusContainer}>
@@ -193,6 +194,9 @@ export default function OrdersScreen({ navigation }) {
           // get no button rather than a button that fails on submit.
           productIds: data.productIds || [],
           image: firstItem.image || firstItem.imageUrl || null,
+          // Which store is shipping it. Absent on orders from before
+          // stores existed and not yet migrated, which just show no name.
+          storeName: data.storeName || null,
           shippingAddress: data.shippingAddress || null,
           paymentMethod: data.paymentMethod || null,
         };
