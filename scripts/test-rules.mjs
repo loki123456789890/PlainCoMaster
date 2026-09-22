@@ -38,6 +38,8 @@ import {
   runTransaction,
   serverTimestamp,
   deleteField,
+  query,
+  where,
   setLogLevel,
 } from 'firebase/firestore';
 
@@ -174,7 +176,7 @@ async function seed() {
       orderId: 'delivered1', productId: 'p3', productName: 'Wool Scarf',
       userId: 'customer1', userName: 'Cathy C.', rating: 4,
       matchedDescription: true, text: 'Warm and clean.', hidden: false,
-      createdAt: new Date(),
+      createdAt: new Date(), storeId: 'store1',
     });
     await setDoc(doc(db, 'users/deactivatedCustomer'), {
       uid: 'deactivatedCustomer', name: 'Dee Activated', email: 'dee@example.com',
@@ -237,6 +239,12 @@ const asAdmin = () => testEnv.authenticatedContext('admin1').firestore();
 const asDeactivatedSeller = () => testEnv.authenticatedContext('deactivatedSeller').firestore();
 const asDeactivatedCustomer = () => testEnv.authenticatedContext('deactivatedCustomer').firestore();
 const asGuest = () => testEnv.unauthenticatedContext().firestore();
+
+// How AdminOrdersScreen and the dashboard read orders: every customer's,
+// as one collection group, filtered to one store. Rules are not filters —
+// the query has to carry the filter the rule requires.
+const storeOrders = (db, storeId) =>
+  query(collectionGroup(db, 'orders'), where('storeId', '==', storeId));
 
 // The exact shape ProductContext.addProduct writes. Defined up here
 // because the role-separation tests need it too: a denial asserted with a
@@ -397,8 +405,8 @@ await test('SPLIT-4  a platform admin CANNOT manage products', async () => {
   await assertFails(deleteDoc(doc(db, 'products/p1')));
 });
 
-await test('SPLIT-5  a store manager can read all orders', async () => {
-  await assertSucceeds(getDocs(collectionGroup(asSeller(), 'orders')));
+await test('SPLIT-5  a store manager can read their store\'s orders', async () => {
+  await assertSucceeds(getDocs(storeOrders(asSeller(), 'store1')));
 });
 
 await test('SPLIT-6  a platform admin CANNOT read orders', async () => {
@@ -954,19 +962,27 @@ const logEntry = (actorId, overrides = {}) => ({
   targetLabel: 'Denim Jacket',
   summary: 'Edited "Denim Jacket"',
   createdAt: serverTimestamp(),
+  storeId: 'store1',
   ...overrides,
 });
+// The account log has no store: same entry, minus storeId.
+const accountEntry = (actorId, overrides = {}) => {
+  const { storeId: _storeId, ...entry } = logEntry(actorId, overrides);
+  return entry;
+};
+const storeLog = (db, storeId) =>
+  query(collection(db, 'activityLogs'), where('storeId', '==', storeId));
 
 await test('LOG-1  a store manager can write and read store activity', async () => {
   const db = asSeller();
   await assertSucceeds(setDoc(doc(db, 'activityLogs/l1'), logEntry('seller1')));
-  await assertSucceeds(getDocs(collection(db, 'activityLogs')));
+  await assertSucceeds(getDocs(storeLog(db, 'store1')));
 });
 
 await test('LOG-2  a platform admin can write and read account activity', async () => {
   const db = asAdmin();
   await assertSucceeds(
-    setDoc(doc(db, 'accountLogs/l1'), logEntry('admin1', { action: 'user.role' }))
+    setDoc(doc(db, 'accountLogs/l1'), accountEntry('admin1', { action: 'user.role' }))
   );
   await assertSucceeds(getDocs(collection(db, 'accountLogs')));
 });
@@ -975,7 +991,7 @@ await test('LOG-3  each role is shut out of the OTHER log', async () => {
   await assertFails(getDocs(collection(asAdmin(), 'activityLogs')));
   await assertFails(getDocs(collection(asSeller(), 'accountLogs')));
   await assertFails(setDoc(doc(asAdmin(), 'activityLogs/x'), logEntry('admin1')));
-  await assertFails(setDoc(doc(asSeller(), 'accountLogs/x'), logEntry('seller1')));
+  await assertFails(setDoc(doc(asSeller(), 'accountLogs/x'), accountEntry('seller1')));
 });
 
 await test('LOG-4  entries cannot be attributed to someone else', async () => {
@@ -997,6 +1013,7 @@ await test('LOG-6  the log is append-only — no edits, no deletes', async () =>
     await setDoc(doc(ctx.firestore(), 'activityLogs/existing'), {
       action: 'product.deleted', actorId: 'seller1', actorEmail: 'sam@example.com',
       targetId: 'p1', targetLabel: 'Denim Jacket', summary: 'Deleted product', createdAt: new Date(),
+      storeId: 'store1',
     });
   });
   // The author of an entry cannot rewrite or erase it afterwards. This is
@@ -1227,6 +1244,8 @@ const reviewDoc = (overrides = {}) => ({
   text: 'Exactly as described — no marks, fits as listed.',
   hidden: false,
   createdAt: serverTimestamp(),
+  // delivered1 is store1's order; the rule checks the review names it.
+  storeId: 'store1',
   ...overrides,
 });
 
@@ -1415,6 +1434,59 @@ await test('REVIEW-18  any signed-in shopper can read reviews; a guest cannot', 
   await assertSucceeds(getDocs(collection(asOtherCustomer(), 'reviews')));
   await assertSucceeds(getDocs(collection(asSeller(), 'reviews')));
   await assertFails(getDocs(collection(asGuest(), 'reviews')));
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nStore scoping — each manager sees only their own store');
+// ---------------------------------------------------------------------------
+
+await test('SCOPE-1  a manager cannot read another store\'s orders', async () => {
+  // o1 is store1's, and carries a customer's name, phone and address.
+  await assertFails(getDoc(doc(asOtherSeller(), 'users/customer1/orders/o1')));
+  await assertFails(getDocs(storeOrders(asOtherSeller(), 'store1')));
+  // Their own store's list is fine, even when it is empty.
+  await assertSucceeds(getDocs(storeOrders(asOtherSeller(), 'store2')));
+});
+
+await test('SCOPE-2  an unfiltered order query is refused, even for a manager', async () => {
+  // Rules are not filters: a query that COULD return another store's
+  // order is refused whole. This is why the screens must filter.
+  await assertFails(getDocs(collectionGroup(asSeller(), 'orders')));
+});
+
+await test('SCOPE-3  the customer still reads their own orders, whichever store', async () => {
+  await assertSucceeds(getDocs(collection(asCustomer(), 'users/customer1/orders')));
+});
+
+await test('SCOPE-4  a manager with no store reads no orders', async () => {
+  await assertFails(getDoc(doc(asUnassignedSeller(), 'users/customer1/orders/o1')));
+});
+
+await test('SCOPE-5  a review must name the store that sold the item', async () => {
+  // Otherwise a reviewer could file a review into any store's queue.
+  await assertFails(
+    setDoc(doc(asCustomer(), 'reviews/delivered1_p1'), reviewDoc({ storeId: 'store2' }))
+  );
+  const { storeId: _storeId, ...noStore } = reviewDoc();
+  await assertFails(setDoc(doc(asCustomer(), 'reviews/delivered1_p1'), noStore));
+  await assertSucceeds(setDoc(doc(asCustomer(), 'reviews/delivered1_p1'), reviewDoc()));
+});
+
+await test('SCOPE-6  another store cannot hide a store\'s reviews', async () => {
+  // A competitor suppressing reviews is the abuse moderation must not
+  // enable.
+  await assertFails(updateDoc(doc(asOtherSeller(), 'reviews/delivered1_p3'), { hidden: true }));
+  await assertSucceeds(updateDoc(doc(asSeller(), 'reviews/delivered1_p3'), { hidden: true }));
+});
+
+await test('SCOPE-7  a manager logs and reads only their own store\'s activity', async () => {
+  await assertFails(
+    setDoc(doc(asSeller(), 'activityLogs/wrongStore'), logEntry('seller1', { storeId: 'store2' }))
+  );
+  const { storeId: _storeId, ...noStore } = logEntry('seller1');
+  await assertFails(setDoc(doc(asSeller(), 'activityLogs/noStore'), noStore));
+  await assertFails(getDocs(storeLog(asOtherSeller(), 'store1')));
+  await assertFails(getDocs(collection(asSeller(), 'activityLogs')));
 });
 
 // ---------------------------------------------------------------------------

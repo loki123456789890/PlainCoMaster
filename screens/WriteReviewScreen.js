@@ -53,13 +53,14 @@ const RATING_LABELS = {
  * is deliberate duplication: the screen keeps the button honest, and the
  * rule keeps the data honest.
  *
- * Route params: { orderId, item } where `item` is the order line itself
+ * Route params: { orderId, item, storeId } where `storeId` is the order's
+ * store (the review is filed with it), and `item` is the order line itself
  * (productId, name, image, size, color), not the product document. The line
  * is what was actually bought — a product's photo and name can change after
  * the sale, and a review should be anchored to the thing that arrived.
  */
 export default function WriteReviewScreen({ navigation, route }) {
-  const { orderId, item } = route.params || {};
+  const { orderId, item, storeId } = route.params || {};
   const productId = item?.productId;
 
   const [rating, setRating] = useState(0);
@@ -176,6 +177,11 @@ export default function WriteReviewScreen({ navigation, route }) {
           // Must be serverTimestamp(): the rule requires createdAt to equal
           // request.time, so a client-supplied date is rejected outright.
           createdAt: serverTimestamp(),
+          // The store that sold the item, so the review reaches its
+          // moderation queue. The rule checks it against the order, so
+          // it comes from the order rather than from anything editable.
+          // The line's own copy covers a nav that predates the param.
+          storeId: storeId || item?.storeId || null,
         });
       }
 

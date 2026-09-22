@@ -98,6 +98,20 @@ export function recentStoreReviewsQuery(max = STORE_SUMMARY_LIMIT) {
   );
 }
 
+// One store's reviews, newest first — the Store Manager's moderation
+// queue. Each review names the store that sold the item (checked against
+// the order by firestore.rules), and only that store may hide it. Unlike
+// the two queries above this one needs a composite index, (storeId,
+// createdAt desc), declared in firestore.indexes.json.
+export function storeReviewsQuery(storeId, max = STORE_SUMMARY_LIMIT) {
+  return query(
+    collection(db, REVIEWS_COLLECTION),
+    where('storeId', '==', storeId),
+    orderBy('createdAt', 'desc'),
+    limit(max)
+  );
+}
+
 export function sortByNewest(reviews) {
   return [...reviews].sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
 }

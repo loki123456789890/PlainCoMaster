@@ -197,6 +197,9 @@ export default function OrdersScreen({ navigation }) {
           // Which store is shipping it. Absent on orders from before
           // stores existed and not yet migrated, which just show no name.
           storeName: data.storeName || null,
+          // Passed on to a review, which must name the store that sold the
+          // item — the rules check it against this order.
+          storeId: data.storeId || null,
           shippingAddress: data.shippingAddress || null,
           paymentMethod: data.paymentMethod || null,
         };

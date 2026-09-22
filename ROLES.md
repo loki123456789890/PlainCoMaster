@@ -80,9 +80,12 @@ A cart holding products from several stores checks out as **one order
 per store** (`placeOrder`), and only that store's manager may move an
 order's status or cancel it.
 
-Still any-manager for now, until the admin screens are scoped: reading
-orders, support requests, review moderation, and the activity and mail
-logs. See TODO.md, "Multi-store".
+A manager also **reads** only their own store: its orders, its review
+moderation queue, and its store activity log. A review is filed with the
+store that sold the item, checked against the order.
+
+Still shared by every manager: support requests and the mail log. A
+support request names no store. See TODO.md, "Multi-store".
 
 The person-add button in the Manage Users header explains these three
 steps in-app, so the flow isn't folklore.
@@ -169,7 +172,7 @@ the roles:
 
 | Collection | Written by | Records | Read by |
 |---|---|---|---|
-| `activityLogs` | Store Manager | Product create/edit/delete, order status changes | Store Manager |
+| `activityLogs` | Store Manager | Product create/edit/delete, order status changes, review moderation — per store | That store's Store Manager |
 | `accountLogs` | Platform Admin | Role grants, account activate/deactivate | Platform Admin |
 
 Both are reached from the same screen

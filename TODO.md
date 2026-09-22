@@ -521,9 +521,12 @@ one comes after the boundary it depends on is solid.
       and the cancellation stock restore is per-store as a result. Rules
       suite 83 → 99. Orders, support, reviews and logs are still
       any-manager; they follow from the order split below.
-- [ ] Before this branch ships: run the migration against production
-      (after the UAT), THEN deploy rules — in that order, or the live
-      catalogue is frozen between the two.
+- [ ] Before this branch ships (after the UAT), in this order:
+      `npm run indexes:deploy` and wait for the indexes to finish
+      building; run the migration against production; deploy functions
+      and rules; then ship the app. Rules before the migration freezes
+      the live catalogue; the app before the indexes shows managers a
+      failed-query error instead of their orders.
 - [x] Order splitting in `placeOrder`: one checkout writes one order per
       store, in the same transaction. The riskiest step — two managers
       sharing one status field means neither owns it — so it lands after
@@ -536,9 +539,19 @@ one comes after the boundary it depends on is solid.
       Checkout suite 17 → 22, rules 99 → 102; a two-store COD checkout
       driven in the web build against the emulators. The migration now
       stamps pre-store orders too.)*
-- [ ] Scope the admin screens (Products, Orders, Reviews, Activity) to
-      the signed-in manager's store. Note AdminOrdersScreen currently
-      reads `collectionGroup(db, 'orders')` with no scoping at all.
+- [x] Scope the admin screens (Products, Orders, Reviews, Activity) to
+      the signed-in manager's store. *(Rules now refuse another store's
+      orders, review moderation and activity entries, and refuse an
+      unfiltered order or log query outright; the screens query
+      `where('storeId', '==', …)`. Reviews carry the order's storeId,
+      checked by the rule. Three composite indexes and a collection-group
+      field override added to firestore.indexes.json — the emulator does
+      not enforce indexes, so `indexes:deploy` must precede the app.
+      Rules 102 → 109; each manager driven in the web build sees only
+      their own store.)*
+- [ ] Support requests and the mail log are still shared by every
+      manager. A support request names no store, so who should see it is
+      a product decision, not a scoping bug.
 - [ ] Store pages in Shop: browse by store, store profile.
 - [ ] THEN seller ratings become meaningful — the thing the panellist
       actually asked for in §9, refused at the time because one seller

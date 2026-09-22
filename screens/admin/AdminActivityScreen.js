@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useReducedMotion, FadeIn, FadeInDown } from 'react-native-reanimated';
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
@@ -95,8 +95,12 @@ function EntrySkeleton() {
 }
 
 export default function AdminActivityScreen({ navigation }) {
-  const { role } = useAdmin();
+  const { role, storeId } = useAdmin();
   const view = VIEWS[role] ?? VIEWS.seller;
+  // The store log is per store: a manager reads their own store's entries
+  // and the rules refuse the rest, including an unfiltered query. The
+  // account log has no store.
+  const scopedToStore = view.collectionName === STORE_ACTIVITY;
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -106,6 +110,14 @@ export default function AdminActivityScreen({ navigation }) {
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
+    // A manager with no store has no store log to read.
+    if (scopedToStore && !storeId) {
+      setEntries([]);
+      setLoadError(false);
+      setLoading(false);
+      return undefined;
+    }
+
     setLoading(true);
     setLoadError(false);
 
@@ -113,7 +125,13 @@ export default function AdminActivityScreen({ navigation }) {
     // unbounded listener on a collection that grows with every privileged
     // action would download more history on every cold start forever.
     const unsubscribe = onSnapshot(
-      query(collection(db, view.collectionName), orderBy('createdAt', 'desc'), limit(200)),
+      query(
+        collection(db, view.collectionName),
+        // Needs the (storeId, createdAt desc) index in firestore.indexes.json.
+        ...(scopedToStore ? [where('storeId', '==', storeId)] : []),
+        orderBy('createdAt', 'desc'),
+        limit(200)
+      ),
       (snapshot) => {
         setEntries(
           snapshot.docs.map((docSnap) => {
@@ -141,7 +159,7 @@ export default function AdminActivityScreen({ navigation }) {
     );
 
     return () => unsubscribe();
-  }, [view.collectionName, retryToken]);
+  }, [view.collectionName, retryToken, scopedToStore, storeId]);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

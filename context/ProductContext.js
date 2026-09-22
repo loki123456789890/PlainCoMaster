@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useMemo } from 'react';
 import {
   collection,
   onSnapshot,
@@ -145,6 +145,15 @@ export const ProductProvider = ({ children }) => {
 
   const retryFetchProducts = () => setRetryToken((t) => t + 1);
 
+  // The signed-in Store Manager's own catalogue. `products` stays the whole
+  // shop, which is what shoppers browse; the staff screens use this, since
+  // a manager can edit, restock and delete only their own store's items
+  // (managesStore() in firestore.rules). Empty for a manager with no store.
+  const storeProducts = useMemo(
+    () => (storeId ? products.filter((product) => product.storeId === storeId) : []),
+    [products, storeId]
+  );
+
   const addProduct = async (productData) => {
     // Refused here with a sentence a manager can act on, rather than
     // sent to the rules to come back as "insufficient permissions".
@@ -179,6 +188,7 @@ export const ProductProvider = ({ children }) => {
       // Not awaited: the product exists at this point, so the caller's
       // success path shouldn't wait on (or fail with) the log write.
       logStoreActivity({
+        storeId,
         action: ACTIONS.PRODUCT_CREATED,
         targetId: docRef.id,
         targetLabel: productData.name,
@@ -215,6 +225,7 @@ export const ProductProvider = ({ children }) => {
       const changed = diffChangedKeys(previous, updatedData).join(', ');
       const label = updatedData.name || previous?.name || productId;
       logStoreActivity({
+        storeId,
         action: ACTIONS.PRODUCT_UPDATED,
         targetId: productId,
         targetLabel: label,
@@ -236,6 +247,7 @@ export const ProductProvider = ({ children }) => {
     try {
       await deleteDoc(doc(db, 'products', productId));
       logStoreActivity({
+        storeId,
         action: ACTIONS.PRODUCT_DELETED,
         targetId: productId,
         targetLabel: label,
@@ -252,6 +264,7 @@ export const ProductProvider = ({ children }) => {
     <ProductContext.Provider
       value={{
         products,
+        storeProducts,
         loading,
         error,
         addProduct,

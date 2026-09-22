@@ -92,15 +92,23 @@ const MANAGER_EMAIL = 'sam@example.com';
 const ADMIN_EMAIL = 'ada@example.com';
 
 await writeDoc(`stores/${STORE_ID}`, { name: 'Sandbox Ukay', createdAt: new Date() });
-// A second store with no manager of its own, so a cart holding both
-// products checks out as two orders — one per store.
+// A second store with its own manager, so a cart holding both products
+// checks out as two orders — one per store — and each manager can be
+// seen to get only their own.
 const OTHER_STORE_ID = 'sandbox-rtw';
+const OTHER_MANAGER_EMAIL = 'ria@example.com';
 await writeDoc(`stores/${OTHER_STORE_ID}`, { name: 'Sandbox RTW', createdAt: new Date() });
 
 const managerUid = await ensureAccount(MANAGER_EMAIL);
 await writeDoc(`users/${managerUid}`, {
   uid: managerUid, name: 'Sam Manager', email: MANAGER_EMAIL,
   role: 'seller', isActive: true, storeId: STORE_ID,
+});
+
+const otherManagerUid = await ensureAccount(OTHER_MANAGER_EMAIL);
+await writeDoc(`users/${otherManagerUid}`, {
+  uid: otherManagerUid, name: 'Ria Manager', email: OTHER_MANAGER_EMAIL,
+  role: 'seller', isActive: true, storeId: OTHER_STORE_ID,
 });
 
 const adminUid = await ensureAccount(ADMIN_EMAIL);
@@ -154,6 +162,7 @@ for (const p of PRODUCTS) {
 console.log(`\nSeeded the emulators.\n`);
 console.log(`  customer   ${EMAIL} / ${PASSWORD}  (uid ${uid})`);
 console.log(`  manager    ${MANAGER_EMAIL} / ${PASSWORD}  (runs "Sandbox Ukay")`);
+console.log(`  manager    ${OTHER_MANAGER_EMAIL} / ${PASSWORD}  (runs "Sandbox RTW")`);
 console.log(`  admin      ${ADMIN_EMAIL} / ${PASSWORD}  (Platform Admin)`);
 for (const p of PRODUCTS) console.log(`  product    ${p.name} — P${p.price}, stock ${p.stock}  (${p.storeId || STORE_ID})`);
 console.log(`\nStock is the thing to watch: a declined sandbox payment must leave it untouched.\n`);

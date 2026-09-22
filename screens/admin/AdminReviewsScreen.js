@@ -16,6 +16,7 @@ import { onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { showAppAlert } from '../../utils/appAlert';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { useAdmin } from '../../context/AdminContext';
 import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
 import { Colors, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
@@ -27,7 +28,7 @@ import SkeletonBlock from '../../components/ui/Skeleton';
 import StarRating from '../../components/ui/StarRating';
 import {
   REVIEWS_COLLECTION,
-  recentStoreReviewsQuery,
+  storeReviewsQuery,
   mapReviewDoc,
   summarizeReviews,
   formatAverage,
@@ -82,14 +83,25 @@ export default function AdminReviewsScreen({ navigation }) {
   const [retryToken, setRetryToken] = useState(0);
 
   const { isConnected } = useNetworkStatus();
+  // Only this store's reviews: another store's are not this manager's to
+  // moderate, and firestore.rules refuses them the hide.
+  const { storeId } = useAdmin();
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
+    // No store, no queue. The empty state below says why.
+    if (!storeId) {
+      setReviews([]);
+      setLoadError(false);
+      setLoading(false);
+      return undefined;
+    }
+
     setLoading(true);
     setLoadError(false);
 
     const unsubscribe = onSnapshot(
-      recentStoreReviewsQuery(MODERATION_LIMIT),
+      storeReviewsQuery(storeId, MODERATION_LIMIT),
       (snapshot) => {
         setReviews(snapshot.docs.map((docSnap) => mapReviewDoc(docSnap)));
         setLoadError(false);
@@ -103,7 +115,7 @@ export default function AdminReviewsScreen({ navigation }) {
     );
 
     return () => unsubscribe();
-  }, [retryToken]);
+  }, [retryToken, storeId]);
 
   const handleRetry = () => setRetryToken((token) => token + 1);
 
@@ -168,6 +180,7 @@ export default function AdminReviewsScreen({ navigation }) {
               // accountable rather than silent, which is the whole reason
               // hiding is permitted where deleting is not.
               logStoreActivity({
+                storeId,
                 action: ACTIONS.REVIEW_MODERATED,
                 targetId: review.id,
                 targetLabel: review.productName || 'Review',
@@ -310,6 +323,14 @@ export default function AdminReviewsScreen({ navigation }) {
             <ReviewCardSkeleton />
             <ReviewCardSkeleton />
           </>
+        ) : !storeId ? (
+          <View style={styles.centerBlock}>
+            <EmptyState
+              icon="storefront-outline"
+              title="No store assigned"
+              subtitle="Your account isn't assigned to a store yet. Ask a Platform Admin to assign you one in Manage Users."
+            />
+          </View>
         ) : loadError ? (
           <View style={styles.centerBlock}>
             <EmptyState

@@ -44,7 +44,9 @@ function ProductCardSkeleton() {
 }
 
 export default function AdminProductsScreen({ navigation, route }) {
-  const { products, loading, error, deleteProduct, refreshProducts, retryFetchProducts } = useProducts();
+  // storeProducts, not products: this screen manages the signed-in
+  // manager's own store, and every other store's items are refused them.
+  const { storeProducts: products, loading, error, deleteProduct, refreshProducts, retryFetchProducts } = useProducts();
   const [searchQuery, setSearchQuery] = useState('');
   // Set when arriving from the dashboard's restocking card. Held in state
   // rather than read from route.params directly so it can be cleared

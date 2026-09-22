@@ -54,9 +54,10 @@ const formatCurrency = (value) => {
 const formatCount = (value) => groupThousands(String(Number(value) || 0));
 
 export default function StoreManagerDashboardScreen({ navigation }) {
-  const { logoutAsAdmin } = useAdmin();
+  const { logoutAsAdmin, storeId } = useAdmin();
   const {
-    products,
+    // This manager's own store only — see ProductContext.
+    storeProducts: products,
     loading: productsLoading,
     error: productsError,
     retryFetchProducts,
@@ -97,32 +98,43 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     setSupportError(false);
 
     // Same collectionGroup shape AdminOrdersScreen uses to read orders
-    // across every user's subcollection. No orderBy here since only the
-    // count and total are needed, which avoids requiring the composite
-    // index that screen needs for sorting.
-    const unsubscribeOrders = onSnapshot(
-      collectionGroup(db, 'orders'),
-      (snapshot) => {
-        setOrderCount(snapshot.size);
+    // across every user's subcollection, filtered to this manager's store
+    // — the rules refuse any query that could return another store's
+    // order. No orderBy here since only the count and total are needed;
+    // the equality filter alone uses the single-field collection-group
+    // index on storeId declared in firestore.indexes.json.
+    //
+    // A manager with no store has no orders, so no query at all.
+    let unsubscribeOrders = () => {};
+    if (!storeId) {
+      setOrderCount(0);
+      setTotalOrderValue(0);
+      setOrdersLoading(false);
+    } else {
+      unsubscribeOrders = onSnapshot(
+        query(collectionGroup(db, 'orders'), where('storeId', '==', storeId)),
+        (snapshot) => {
+          setOrderCount(snapshot.size);
 
-        // Same calculation AdminOrdersScreen uses for its totalRevenue
-        // stat: sum of order totals, excluding cancelled orders. Reused
-        // here from the same snapshot rather than a second listener.
-        const value = snapshot.docs.reduce((sum, docSnap) => {
-          const data = docSnap.data();
-          if (data.status === 'cancelled') return sum;
-          return sum + Number(data.total || 0);
-        }, 0);
-        setTotalOrderValue(value);
+          // Same calculation AdminOrdersScreen uses for its totalRevenue
+          // stat: sum of order totals, excluding cancelled orders. Reused
+          // here from the same snapshot rather than a second listener.
+          const value = snapshot.docs.reduce((sum, docSnap) => {
+            const data = docSnap.data();
+            if (data.status === 'cancelled') return sum;
+            return sum + Number(data.total || 0);
+          }, 0);
+          setTotalOrderValue(value);
 
-        setOrdersLoading(false);
-      },
-      (error) => {
-        console.error('Error fetching order count:', error);
-        setOrdersError(true);
-        setOrdersLoading(false);
-      }
-    );
+          setOrdersLoading(false);
+        },
+        (error) => {
+          console.error('Error fetching order count:', error);
+          setOrdersError(true);
+          setOrdersLoading(false);
+        }
+      );
+    }
 
     // Filtered server-side to only "open" requests — a dashboard count
     // card only needs the number, so there's no reason to also download
@@ -170,7 +182,7 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       unsubscribeSupport();
       unsubscribeMail();
     };
-  }, [retryToken]);
+  }, [retryToken, storeId]);
 
   const handleRetry = () => setRetryToken((t) => t + 1);
 

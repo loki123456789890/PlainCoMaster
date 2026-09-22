@@ -36,7 +36,7 @@ export const ACTIONS = {
   USER_STATUS: 'user.status',
 };
 
-async function write(collectionName, { action, targetId, targetLabel, summary }) {
+async function write(collectionName, { action, targetId, targetLabel, summary }, extra = {}) {
   const user = auth.currentUser;
   // No signed-in user means no attributable actor, and firestore.rules
   // would refuse the write anyway (actorId must equal request.auth.uid).
@@ -56,6 +56,7 @@ async function write(collectionName, { action, targetId, targetLabel, summary })
       // Must be serverTimestamp(): the rules require createdAt to equal
       // request.time, so a client-supplied date is rejected outright.
       createdAt: serverTimestamp(),
+      ...extra,
     });
   } catch (error) {
     // Deliberately swallowed — see the fire-and-forget note above. Logged
@@ -64,9 +65,16 @@ async function write(collectionName, { action, targetId, targetLabel, summary })
   }
 }
 
-// Store operations — products and orders. Written by a seller.
-export function logStoreActivity(entry) {
-  return write(STORE_ACTIVITY, entry);
+// Store operations — products and orders. Written by a seller, and
+// stamped with the store it happened in: each manager reads only their own
+// store's log, and firestore.rules refuses an entry for any other store.
+// No store means no entry, rather than one the rules would refuse.
+export function logStoreActivity({ storeId, ...entry }) {
+  if (!storeId) {
+    console.error(`Not logging ${entry.action}: no store assigned to this account`);
+    return Promise.resolve();
+  }
+  return write(STORE_ACTIVITY, entry, { storeId });
 }
 
 // Account management — roles and activation. Written by a platformAdmin.

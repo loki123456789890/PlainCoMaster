@@ -25,12 +25,14 @@ import { db } from '../../firebaseConfig';
 import {
   collectionGroup,
   query,
+  where,
   orderBy,
   onSnapshot,
   doc,
   runTransaction,
 } from 'firebase/firestore';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { useAdmin } from '../../context/AdminContext';
 import { parseStock, totalQuantityByProductId } from '../../utils/stock';
 import { orderNumber, normalizeOrderNumberQuery } from '../../utils/orderNumber';
 import { Colors, Spacing, Radius } from '../../constants/theme';
@@ -181,6 +183,10 @@ export default function AdminOrdersScreen({ navigation }) {
   // silently stuck on an unrecoverable listener.
   const [retryToken, setRetryToken] = useState(0);
   const { isConnected } = useNetworkStatus();
+  // The store this manager runs. Their order list is that store's orders
+  // and nothing else — firestore.rules refuses any other order to them,
+  // and refuses an unfiltered query outright.
+  const { storeId } = useAdmin();
   const reduceMotion = useReducedMotion();
 
   // Ticks once a minute so "2h ago" style timestamps and the "needs
@@ -193,17 +199,31 @@ export default function AdminOrdersScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
+    // A manager with no store has no orders to see, and the query below
+    // would be refused anyway. Shown as its own empty state rather than
+    // as a load error, because retrying cannot fix it.
+    if (!storeId) {
+      setOrders([]);
+      setOrdersError(false);
+      setLoading(false);
+      return undefined;
+    }
+
     setLoading(true);
     setOrdersError(false);
 
     // collectionGroup reads the "orders" subcollection across every user
-    // document at once (users/{uid}/orders), which is how the admin sees
-    // orders placed by all customers instead of just one.
-    // NOTE: this requires a Firestore index on the "orders" collection group,
-    // and Firestore security rules that allow the admin account to read
-    // across all users' order subcollections — regular per-user rules will
-    // block this query for anyone who isn't authorized as an admin.
-    const ordersQuery = query(collectionGroup(db, 'orders'), orderBy('createdAt', 'desc'));
+    // document at once (users/{uid}/orders), which is how a manager sees
+    // orders placed by all customers instead of just one — filtered to
+    // their own store. The filter is not optional: firestore.rules only
+    // admits a query that cannot return another store's order.
+    // Needs the (storeId, createdAt desc) collection-group index in
+    // firestore.indexes.json.
+    const ordersQuery = query(
+      collectionGroup(db, 'orders'),
+      where('storeId', '==', storeId),
+      orderBy('createdAt', 'desc')
+    );
 
     const unsubscribe = onSnapshot(
       ordersQuery,
@@ -247,7 +267,7 @@ export default function AdminOrdersScreen({ navigation }) {
     );
 
     return () => unsubscribe();
-  }, [retryToken]);
+  }, [retryToken, storeId]);
 
   const handleRetry = () => setRetryToken((t) => t + 1);
 
@@ -393,6 +413,7 @@ export default function AdminOrdersScreen({ navigation }) {
           ? `, ${restoredUnits} item(s) returned to stock`
           : '';
       logStoreActivity({
+        storeId,
         action: ACTIONS.ORDER_STATUS,
         targetId: selectedOrder.id,
         targetLabel: `Order #${selectedOrder.orderNumber || selectedOrder.id}`,
@@ -622,6 +643,14 @@ export default function AdminOrdersScreen({ navigation }) {
             <OrderCardSkeleton />
             <OrderCardSkeleton />
             <OrderCardSkeleton />
+          </View>
+        ) : !storeId ? (
+          <View style={styles.emptyStateWrap}>
+            <EmptyState
+              icon="storefront-outline"
+              title="No store assigned"
+              subtitle="Your account isn't assigned to a store yet. Ask a Platform Admin to assign you one in Manage Users."
+            />
           </View>
         ) : ordersError ? (
           <View style={styles.emptyStateWrap}>

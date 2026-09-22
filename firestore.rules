@@ -216,7 +216,14 @@ service cloud.firestore {
         // only isSeller() may write here. Delete is intentionally absent
         // for every role — order records are preserved for audit and
         // transaction history per SRS §2.4.
-        allow read: if isOwner(userId) || isSeller();
+        //
+        // A Store Manager reads only their OWN store's orders: another
+        // store's order carries a customer's name, phone and address, and
+        // one seller has no business seeing who buys from another. A list
+        // query must therefore filter on storeId == the manager's store —
+        // rules are not filters, so an unfiltered query is refused whole,
+        // which is what AdminOrdersScreen's where('storeId') is for.
+        allow read: if isOwner(userId) || managesStore(resource.data.get('storeId', null));
         // NO CREATE RULE, for anyone. Orders are written exclusively by
         // the placeOrder Cloud Function (functions/index.js), which runs
         // with Admin SDK credentials and so bypasses this file entirely.
@@ -288,9 +295,6 @@ service cloud.firestore {
         // from before stores existed has no storeId and is frozen until
         // scripts/migrate-to-stores.mjs stamps it — see managesStore().
         //
-        // Reads are still any-manager (above and in the collection-group
-        // rule below) until AdminOrdersScreen queries by store; a read
-        // rule on storeId would refuse its current unfiltered query.
         allow update: if managesStore(resource.data.get('storeId', null)) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
           request.resource.data.status in
@@ -311,8 +315,11 @@ service cloud.firestore {
         allow read, write: if isActiveOwner(userId);
       }
     }
+    // Same store-only read as above, for AdminOrdersScreen and the
+    // dashboard, which read every customer's orders as one collection
+    // group — filtered to where('storeId', '==', their store).
     match /{path=**}/orders/{orderId} {
-      allow read: if isSeller();
+      allow read: if managesStore(resource.data.get('storeId', null));
     }
     // Field validation for products, delivering the "strict data type
     // enforcement on the backend" the SRS promises (Security, p.29).
@@ -538,13 +545,20 @@ service cloud.firestore {
     //
     // Reads three documents, plus the two isActiveUser() spends: five,
     // inside the ten-access ceiling a single-document request allows.
-    function isDeliveredPurchase(orderId, productId) {
+    //
+    // storeId must be the ORDER's store, so the review lands in the
+    // moderation queue of the store that sold the item — and cannot be
+    // pointed at a store of the reviewer's choosing. Same order document,
+    // so no extra access.
+    function isDeliveredPurchase(orderId, productId, storeId) {
       return exists(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId))
           .data.get('status', '') == 'delivered' &&
         productId in
           get(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId))
-            .data.get('productIds', []);
+            .data.get('productIds', []) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId))
+          .data.get('storeId', null) == storeId;
     }
     match /reviews/{reviewId} {
       // Any signed-in user, matching /products — a review the next shopper
@@ -579,12 +593,14 @@ service cloud.firestore {
       allow create: if isActiveUser() &&
         request.resource.data.keys().hasOnly(
           ['orderId', 'productId', 'productName', 'userId', 'userName',
-           'rating', 'matchedDescription', 'text', 'hidden', 'createdAt']
+           'rating', 'matchedDescription', 'text', 'hidden', 'createdAt',
+           'storeId']
         ) &&
         request.resource.data.keys().hasAll(
           ['orderId', 'productId', 'userId', 'rating', 'matchedDescription',
-           'hidden', 'createdAt']
+           'hidden', 'createdAt', 'storeId']
         ) &&
+        request.resource.data.storeId is string &&
         request.resource.data.userId == request.auth.uid &&
         request.resource.data.orderId is string &&
         request.resource.data.productId is string &&
@@ -601,7 +617,11 @@ service cloud.firestore {
         request.resource.data.get('userName', '').size() <= 60 &&
         request.resource.data.hidden == false &&
         request.resource.data.createdAt == request.time &&
-        isDeliveredPurchase(request.resource.data.orderId, request.resource.data.productId);
+        isDeliveredPurchase(
+          request.resource.data.orderId,
+          request.resource.data.productId,
+          request.resource.data.storeId
+        );
 
       // Two disjoint branches, neither able to reach the other's fields.
       //
@@ -634,7 +654,10 @@ service cloud.firestore {
         )
         ||
         (
-          isSeller() &&
+          // The store that sold the item moderates its reviews, and no
+          // other store can hide them — a competitor suppressing reviews
+          // is exactly the abuse moderation must not enable.
+          managesStore(resource.data.get('storeId', null)) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hidden']) &&
           request.resource.data.hidden is bool
         );
@@ -704,12 +727,17 @@ service cloud.firestore {
     // tamper-proof security audit trail; guaranteeing that would take a
     // server-side trigger. functions/ exists now (see placeOrder), so the
     // door is open, but no such trigger has been written. See ROLES.md.
-    function isValidLogEntry() {
+    //
+    // extraKeys: fields one log requires beyond the shared seven — storeId
+    // for the store log, nothing for the account log.
+    function isValidLogEntry(extraKeys) {
       return request.resource.data.keys().hasOnly(
           ['action', 'actorId', 'actorEmail', 'targetId', 'targetLabel', 'summary', 'createdAt']
+            .concat(extraKeys)
         ) &&
         request.resource.data.keys().hasAll(
           ['action', 'actorId', 'actorEmail', 'targetId', 'targetLabel', 'summary', 'createdAt']
+            .concat(extraKeys)
         ) &&
         // An entry cannot be attributed to anyone but its author, so a
         // privileged account can't log its own actions under someone
@@ -733,15 +761,22 @@ service cloud.firestore {
     // read and create are stated separately on purpose: isValidLogEntry()
     // reads request.resource, which only exists on a write, so folding
     // them into one `allow read, create` would make every read fail.
+    //
+    // MULTI-STORE: each entry names the store it happened in, a manager may
+    // only write entries for their own store, and reads only those. One
+    // store's product edits and cancellations are not another store's
+    // business. Entries from before stores existed carry no storeId and
+    // are unreadable until the migration stamps them.
     match /activityLogs/{logId} {
-      allow read: if isSeller();
-      allow create: if isSeller() && isValidLogEntry();
+      allow read: if managesStore(resource.data.get('storeId', null));
+      allow create: if managesStore(request.resource.data.get('storeId', null)) &&
+        isValidLogEntry(['storeId']);
     }
     // Account management: role grants and activation changes. The Platform
     // Admin's domain.
     match /accountLogs/{logId} {
       allow read: if isPlatformAdmin();
-      allow create: if isPlatformAdmin() && isValidLogEntry();
+      allow create: if isPlatformAdmin() && isValidLogEntry([]);
     }
     // Delivery record for transactional email, written by functions/mailer.js
     // with Admin credentials. READ ONLY, and read by one role.

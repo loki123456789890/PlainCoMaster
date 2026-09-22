@@ -85,6 +85,10 @@ const managers = (await db.collection('users').where('role', '==', 'seller').get
 // Every order placed before stores existed came from the one store there
 // was. Without a storeId no manager may move it past its current status.
 const orders = (await db.collectionGroup('orders').get()).docs.filter((d) => !hasStore(d.data()));
+// Reviews and store-activity entries are read per store too: without a
+// storeId they would vanish from every manager's moderation queue and log.
+const reviews = (await db.collection('reviews').get()).docs.filter((d) => !hasStore(d.data()));
+const activity = (await db.collection('activityLogs').get()).docs.filter((d) => !hasStore(d.data()));
 
 console.log(
   storeSnap.exists
@@ -97,6 +101,7 @@ console.log(`${WILL} assign ${managers.length} Store Manager(s) with no store:`)
 for (const d of managers) console.log(`  manager  ${d.data().email ?? d.id}`);
 // Counted, not listed: a live store can have hundreds.
 console.log(`${WILL} assign ${orders.length} order(s) with no store.`);
+console.log(`${WILL} assign ${reviews.length} review(s) and ${activity.length} activity entries with no store.`);
 
 if (!APPLY) {
   console.log('\nRe-run with --apply to write.\n');
@@ -111,7 +116,7 @@ if (!storeSnap.exists) {
 // it, so order lists need no read per row.
 const storeName = storeSnap.exists ? storeSnap.data().name : STORE_NAME;
 const pending = [
-  ...[...products, ...managers].map((d) => [d.ref, { storeId: STORE_ID }]),
+  ...[...products, ...managers, ...reviews, ...activity].map((d) => [d.ref, { storeId: STORE_ID }]),
   ...orders.map((d) => [d.ref, { storeId: STORE_ID, storeName }]),
 ];
 
@@ -123,7 +128,8 @@ for (let i = 0; i < pending.length; i += 400) {
 }
 
 console.log(
-  `\nDone. ${products.length} product(s), ${managers.length} manager(s) and ` +
-  `${orders.length} order(s) now belong to ${STORE_ID}.\n`
+  `\nDone. ${products.length} product(s), ${managers.length} manager(s), ` +
+  `${orders.length} order(s), ${reviews.length} review(s) and ` +
+  `${activity.length} activity entries now belong to ${STORE_ID}.\n`
 );
 process.exit(0);
