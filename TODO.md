@@ -420,6 +420,74 @@ they are the reason running the app is not the same as running the tests.
       is fragile whatever the navigator does today. Carrying what the
       submission needs makes the question moot.
 
+### SRS updates still owed for the sandbox payment
+
+The code is done; the SRS still describes the old behaviour. Each item
+below is a place the document currently says something the app no longer
+does. Same treatment as `SRS_UPDATE_NOTES.md` — the SRS is the thing a
+panel reads, so a gap here reads as a gap in the system.
+
+- [ ] **Constraint: "payment options are included in the UI design and
+      not yet integrated."** No longer accurate. Replace with something
+      like:
+
+      > GCash, Maya, and Card run through a sandbox payment gateway. The
+      > customer selects a simulated gateway response; the server
+      > authorises or refuses the order accordingly. No real money moves,
+      > no live gateway is contacted, and no card details are collected.
+      > Cash on Delivery is the only method that settles real money.
+
+- [ ] **Functional requirements — checkout.** Add the payment step
+      between choosing a method and the order being placed:
+      - Online methods (GCash, Maya, Card) open the Sandbox Payment screen.
+      - The customer chooses one of four gateway responses: Payment
+        succeeds, Declined by the bank, Not enough balance, No response
+        at all.
+      - A successful payment places the order marked **Paid**, with a
+        sandbox reference (`SBX-…`).
+      - Any other response **refuses the order entirely** — no order is
+        recorded and no stock is deducted. The cart is kept so the
+        customer can retry or choose another method.
+      - Cash on Delivery skips the payment step and is recorded as
+        **Pay on delivery**.
+
+- [ ] **Security / business rules.** The payment outcome is decided by
+      the server (`placeOrder`), never written by the app. Customers
+      cannot create or edit order documents directly, so they cannot mark
+      an order as paid. A payment refusal and the order write happen in
+      one transaction, so a failed payment can never leave a half-placed
+      order or deducted stock.
+
+- [ ] **Data dictionary — `orders`.** Three new fields:
+
+      | Field | Type | Meaning |
+      | --- | --- | --- |
+      | `paymentStatus` | string | `paid` (online, approved) or `unpaid` (COD). `failed` is reserved for a future real gateway. |
+      | `paymentRef` | string / null | Sandbox reference such as `SBX-A9BBIEQPFP`; null for COD. |
+      | `paymentSandbox` | boolean | `true` on every online-method order, so no report or screen can mistake a simulated payment for a real one. |
+
+- [ ] **Module / screen list.** Add **Sandbox Payment** (customer side).
+      Note that Order Confirmation, Order Details, and the Store Manager's
+      order view now show payment status and the sandbox reference.
+
+- [ ] **Help / FAQ content.** Two answers changed — "What payment methods
+      do you accept?" and "Is my payment information secure?" — to say
+      the online methods run in sandbox mode. Update any copy of the FAQ
+      in the SRS appendix to match `screens/HelpScreen.js`.
+
+- [ ] **Testing section.** `test:checkout` grew from 12 to 17 cases:
+      CHECKOUT-13 approved payment marked paid, 14 COD unpaid and never
+      enters the sandbox, 15 a declined payment writes nothing, 16 an
+      online order cannot skip the payment step, 17 COD carrying a
+      sandbox outcome is refused. Also worth stating the sandbox was
+      verified in the running app, where two navigation bugs surfaced
+      that the tests could not see (above).
+
+- [ ] **Limitations / future work.** State plainly that payments are
+      simulated, and that a real gateway (PayMongo, whose test mode
+      covers GCash, Maya, and Card) is the planned next step — the order
+      fields and the server-decides boundary are already shaped for it.
+
 ## Multi-store — a real requirement, deliberately deferred
 
 A panellist raised it. It is not optional, and it is not what
