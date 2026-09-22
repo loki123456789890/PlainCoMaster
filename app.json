@@ -47,6 +47,11 @@
     "experiments": {
       "reactCompiler": true
     },
-    "primaryColor": "#78371E"
+    "primaryColor": "#78371E",
+    "extra": {
+      "eas": {
+        "projectId": "70c16b6e-6be0-4c37-bb86-e8f53fe093b2"
+      }
+    }
   }
 }
