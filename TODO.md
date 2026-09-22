@@ -65,9 +65,20 @@ design or a server.
       doc, and without it every upload fails.
 - [x] Verified on device: permissions, upload, progress, and the
       resulting URL rendering in the preview all work.
-- [ ] Confirm on the second platform. HEIC is iOS-specific, so if the
-      device test was Android only, whether iOS actually yields JPEG is
-      still unverified.
+- [ ] Confirm on the second platform. No iOS device or simulator is
+      available (Windows machine), so this was closed in code instead of
+      by observation: an unidentified type used to be relabelled
+      `image/jpeg`, and since storage.rules checks the declared
+      contentType rather than the bytes, a HEIC would have been stored
+      looking correct to the iPhone that sent it and broken on every
+      Android. `mimeTypeFromUri()` now names HEIC/HEIF so they are
+      REFUSED, and the early guard no longer skips itself when the picker
+      reports no mimeType. Worst case on iOS is now a clear
+      "unsupported format" message rather than a silently corrupt photo.
+
+      What is still unverified is whether upload SUCCEEDS on iOS at all —
+      that needs a real handset (Expo Go on a borrowed one would do it)
+      and is not blocking, since failure there is loud rather than silent.
 - [x] Live product subscription on Productscreen — was a frozen nav
       param, so stock and price went stale while a shopper read the page
 - [x] Order confirmation screen, with the order number the customer
@@ -218,8 +229,9 @@ deployment:
       from the current suites — they are client timing questions, and the
       emulator suites only reach rules and functions. All four are verified
       by hand as of 2026-08-25; a regression would be silent.
-- [ ] iOS/HEIC photo upload confirmation, if the device test was Android
-      only.
+- [ ] iOS/HEIC photo upload: the silent-corruption half is closed in code
+      (see Batch 4). Only the does-it-work-at-all half is open, and it
+      needs a physical iPhone.
 - [x] Real Gmail credentials set and verified 2026-08-25. Both secrets are
       at version 2 in Secret Manager (version 1 is still the placeholder,
       enabled but unused); `sendOrderConfirmation` and

@@ -32,6 +32,31 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 // their own phone and is broken for half the customers.
 export const ACCEPTED_MIME = /^image\/(jpeg|png|webp)$/;
 
+// What the file extension says it is, for when the picker reports no
+// mimeType of its own — which it does not always do.
+//
+// HEIC and HEIF are mapped deliberately, even though they are refused a
+// moment later: naming them is what lets them be REFUSED rather than
+// falling past an empty type into the JPEG default further down. An
+// unknown type relabelled as JPEG passes storage.rules, because the rule
+// checks the contentType the client declares and not the bytes behind it
+// — so the relabelling was the one path that could put a HEIC in the
+// bucket under a name that makes it look fine on the iPhone that uploaded
+// it and broken on every Android.
+const EXTENSION_MIME = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+};
+
+function mimeTypeFromUri(uri) {
+  const match = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(uri || '');
+  return match ? EXTENSION_MIME[match[1].toLowerCase()] || '' : '';
+}
+
 // Storage has no auto-id the way Firestore's doc() does, so object names
 // are generated here. Time-prefixed so the bucket sorts chronologically
 // when someone browses it in the console, with a random suffix because two
@@ -71,14 +96,26 @@ export async function uploadProductImage(uri, { onProgress, mimeType: declaredTy
       return { success: false, error: 'too-large' };
     }
 
-    // Preference order: what the picker declared, then what the blob
-    // reports, then JPEG. blob.type comes back empty for some URI schemes
-    // on both platforms, and the picker's own mimeType is the more
-    // reliable of the two. Anything unrecognised falls back to JPEG
-    // because that is what pickProductImage() forces the picker to
-    // produce; storage.rules is the authority either way and refuses
-    // anything outside the three accepted types.
-    const candidate = declaredType || blob.type || '';
+    // Preference order: what the picker declared, then what the file
+    // extension says, then what the blob reports. The picker's own
+    // mimeType is the most reliable, and blob.type comes back empty for
+    // some URI schemes on both platforms, which is why the extension sits
+    // between them rather than last.
+    const candidate = declaredType || mimeTypeFromUri(uri) || blob.type || '';
+
+    // A type we can name and do not accept is refused outright. It used to
+    // fall through to the JPEG default below, which put the wrong label on
+    // real bytes: storage.rules checks the declared contentType, so a HEIC
+    // called image/jpeg is stored happily and then fails to render for
+    // every Android customer. Refusing costs the manager one message;
+    // relabelling costs them a photo that looks right to them and is
+    // broken for half the shop.
+    if (candidate && !ACCEPTED_MIME.test(candidate)) {
+      return { success: false, error: 'unsupported-format' };
+    }
+
+    // Only a genuinely unidentifiable type still defaults to JPEG, which is
+    // what PICKER_OPTIONS forces the picker to produce.
     const mimeType = ACCEPTED_MIME.test(candidate) ? candidate : 'image/jpeg';
 
     const path = `${PRODUCT_IMAGE_PATH}/${generateImageName(mimeType)}`;
@@ -168,11 +205,15 @@ export async function pickAndUploadProductImage({ source = 'library', onProgress
     // back a type the app cannot render, refuse it here with something a
     // manager can act on rather than letting storage.rules reject it
     // after the upload has already spent their data.
-    if (asset.mimeType && !ACCEPTED_MIME.test(asset.mimeType)) {
+    // Falls back to the extension for the same reason uploadProductImage
+    // does: asset.mimeType is not always populated, and this check is only
+    // worth having if it still fires when that happens.
+    const assetType = asset.mimeType || mimeTypeFromUri(asset.uri);
+    if (assetType && !ACCEPTED_MIME.test(assetType)) {
       return { success: false, error: 'unsupported-format' };
     }
 
-    return uploadProductImage(asset.uri, { onProgress, mimeType: asset.mimeType });
+    return uploadProductImage(asset.uri, { onProgress, mimeType: assetType });
   } catch (error) {
     console.error('Error picking product image:', error?.code, error?.message);
     return { success: false, error: error?.code || 'picker-failed' };
