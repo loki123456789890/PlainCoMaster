@@ -23,8 +23,10 @@ import Animated, {
   FadeInDown,
 } from 'react-native-reanimated';
 import { db } from '../../firebaseConfig';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
+import { useAdmin } from '../../context/AdminContext';
+import { formatOrderNumber } from '../../utils/orderNumber';
 import { Colors, Radius } from '../../constants/theme';
 import Card from '../../components/ui/Card';
 import EmptyState from '../../components/ui/EmptyState';
@@ -82,6 +84,16 @@ export default function AdminSupportScreen({ navigation }) {
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
 
+  // Two inboxes share this screen. A Store Manager answers questions about
+  // their own store's orders; the Platform Admin answers general questions,
+  // which name no store (storeId null). handlesSupport() in firestore.rules
+  // is the real boundary — each query below is filtered to exactly what it
+  // admits, because an unfiltered one would be refused whole.
+  const { role, storeId } = useAdmin();
+  const isPlatformAdmin = role === 'platformAdmin';
+  const queueStoreId = isPlatformAdmin ? null : storeId;
+  const hasQueue = isPlatformAdmin || Boolean(storeId);
+
   // Ticks once a minute so "2h ago" timestamps and the "needs attention"
   // aging check stay accurate through a long admin session, without needing
   // a re-render on every Firestore update to notice.
@@ -92,10 +104,22 @@ export default function AdminSupportScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
+    // A manager with no store has no queue; the empty state says why.
+    if (!hasQueue) {
+      setRequests([]);
+      setRequestsError(false);
+      setLoading(false);
+      return undefined;
+    }
+
     setLoading(true);
     setRequestsError(false);
-
-    const requestsQuery = query(collection(db, 'supportRequests'), orderBy('createdAt', 'desc'));
+    // Needs the (storeId, createdAt desc) index in firestore.indexes.json.
+    const requestsQuery = query(
+      collection(db, 'supportRequests'),
+      where('storeId', '==', queueStoreId),
+      orderBy('createdAt', 'desc')
+    );
 
     const unsubscribe = onSnapshot(
       requestsQuery,
@@ -106,6 +130,8 @@ export default function AdminSupportScreen({ navigation }) {
             id: docSnap.id,
             message: data.message || '',
             userEmail: data.userEmail || 'Unknown',
+            // Which order the customer was asking about, if any.
+            orderId: data.orderId || null,
             status: data.status || 'open',
             date: data.createdAt?.toDate ? data.createdAt.toDate() : null,
           };
@@ -122,7 +148,7 @@ export default function AdminSupportScreen({ navigation }) {
     );
 
     return () => unsubscribe();
-  }, [retryToken]);
+  }, [retryToken, hasQueue, queueStoreId]);
 
   const handleRetry = () => setRetryToken((t) => t + 1);
 
@@ -248,7 +274,9 @@ export default function AdminSupportScreen({ navigation }) {
         >
           <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </AnimatedPressable>
-        <Text style={styles.headerTitle} accessibilityRole="header">Support Requests</Text>
+        <Text style={styles.headerTitle} accessibilityRole="header">
+          {isPlatformAdmin ? 'General Support' : 'Support Requests'}
+        </Text>
         <View style={styles.placeholder} />
       </View>
 
@@ -358,6 +386,14 @@ export default function AdminSupportScreen({ navigation }) {
             <RequestCardSkeleton />
             <RequestCardSkeleton />
           </>
+        ) : !hasQueue ? (
+          <View style={styles.emptyStateWrap}>
+            <EmptyState
+              icon="storefront-outline"
+              title="No store assigned"
+              subtitle="Your account isn't assigned to a store yet. Ask a Platform Admin to assign you one in Manage Users."
+            />
+          </View>
         ) : requestsError ? (
           <View style={styles.emptyStateWrap}>
             <EmptyState
@@ -404,6 +440,14 @@ export default function AdminSupportScreen({ navigation }) {
                           {request.userEmail}
                         </Text>
                       </View>
+                      {request.orderId ? (
+                        <View style={styles.requestEmailRow}>
+                          <Ionicons name="receipt-outline" size={12} color={Colors.light.icon} />
+                          <Text style={styles.requestEmail} numberOfLines={1}>
+                            About order {formatOrderNumber(request.orderId)}
+                          </Text>
+                        </View>
+                      ) : null}
                       <Text style={styles.requestDate}>{formatRelativeTime(request.date)}</Text>
                     </View>
                     <View style={styles.requestActions}>
@@ -541,6 +585,14 @@ export default function AdminSupportScreen({ navigation }) {
                     {selectedRequest.userEmail}
                   </Text>
                 </View>
+                {selectedRequest.orderId ? (
+                  <View style={styles.modalInfoRow}>
+                    <Text style={styles.modalInfoLabel}>Order:</Text>
+                    <Text style={styles.modalInfoValue} selectable>
+                      {formatOrderNumber(selectedRequest.orderId)}
+                    </Text>
+                  </View>
+                ) : null}
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Submitted:</Text>
                   <Text style={styles.modalInfoValue}>{formatDate(selectedRequest.date)}</Text>

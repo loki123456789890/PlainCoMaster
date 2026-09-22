@@ -279,7 +279,12 @@ async function handleOrderCreated(order, orderId) {
     subject: `Your PlainCo order ${formatOrderNumber(orderId)}`,
     html: orderHtml(order, orderId),
     text: orderText(order, orderId),
-    meta: { kind: 'orderConfirmation', orderId, customerId: order.customerId || null },
+    // storeId decides who may read this entry and press Send again — the
+    // store's own manager (firestore.rules, handleRetryMail).
+    meta: {
+      kind: 'orderConfirmation', orderId, customerId: order.customerId || null,
+      storeId: order.storeId || null,
+    },
   });
 }
 
@@ -301,7 +306,12 @@ async function handleSupportCreated(request, requestId) {
     subject: `Support request from ${customerEmail || 'a PlainCo customer'}`,
     html: supportHtml(request, requestId),
     text: supportText(request, requestId),
-    meta: { kind: 'supportRequest', requestId, userId: request.userId || null },
+    // Same routing as the request itself: its store, or null for a
+    // general question, which the Platform Admin handles.
+    meta: {
+      kind: 'supportRequest', requestId, userId: request.userId || null,
+      storeId: request.storeId || null,
+    },
   });
 }
 
@@ -455,11 +465,15 @@ async function handleRetryMail(request) {
   // bypasses that file entirely, so the check has to be repeated here or
   // it is not a check.
   //
-  // Store Manager and not Platform Admin, matching who mailLog is for:
-  // the two roles are siblings, and email delivery is a store duty.
+  // MULTI-STORE: whoever may READ the entry may resend it, and nobody
+  // else — handlesSupport() in firestore.rules, repeated here because the
+  // Admin SDK bypasses that file. A store's mail belongs to its own
+  // manager; a general question's notification (storeId null) to the
+  // Platform Admin.
   const actor = await db.doc(`users/${uid}`).get();
   const actorData = actor.exists ? actor.data() : null;
-  if (!actorData || actorData.role !== 'seller' || actorData.isActive === false) {
+  if (!actorData || actorData.isActive === false ||
+      !['seller', 'platformAdmin'].includes(actorData.role)) {
     throw new HttpsError(
       'permission-denied',
       'Only an active Store Manager can send email again.'
@@ -469,6 +483,17 @@ async function handleRetryMail(request) {
   const entrySnapshot = await db.collection('mailLog').doc(key).get();
   if (!entrySnapshot.exists) {
     throw new HttpsError(...RETRY_REFUSALS['not-found']);
+  }
+
+  const entryStoreId = entrySnapshot.data().storeId || null;
+  const handlesEntry = entryStoreId
+    ? actorData.role === 'seller' && actorData.storeId === entryStoreId
+    : actorData.role === 'platformAdmin';
+  if (!handlesEntry) {
+    throw new HttpsError(
+      'permission-denied',
+      'That email belongs to another store, or to the Platform Admin.'
+    );
   }
 
   const send = await resendAction(db, key, entrySnapshot.data());

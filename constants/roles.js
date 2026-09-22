@@ -30,12 +30,12 @@ export const ROLES = [
   {
     value: ROLE_SELLER,
     label: 'Store Manager',
-    capability: 'Runs products, orders, and support. No access to user accounts.',
+    capability: 'Runs one store’s products, orders, and support. No access to user accounts.',
   },
   {
     value: ROLE_PLATFORM_ADMIN,
     label: 'Platform Admin',
-    capability: 'Manages user accounts and roles only. No access to the store.',
+    capability: 'Manages accounts, roles and stores, and answers general questions. No access to any store’s products or orders.',
   },
 ];
 

@@ -61,7 +61,11 @@ const GuardedAdminAddProductScreen = withRoleGuard(AdminAddProductScreen, 'selle
 const GuardedAdminEditProductScreen = withRoleGuard(AdminEditProductScreen, 'seller');
 const GuardedAdminOrdersScreen = withRoleGuard(AdminOrdersScreen, 'seller');
 const GuardedAdminUsersScreen = withRoleGuard(AdminUsersScreen, 'platformAdmin');
-const GuardedAdminSupportScreen = withRoleGuard(AdminSupportScreen, 'seller');
+// Both roles, with disjoint data, like Activity below: a Store Manager's
+// queue is questions about their store's orders, the Platform Admin's is
+// general questions that name no store (handlesSupport() in
+// firestore.rules). The screen picks the queue from the signed-in role.
+const GuardedAdminSupportScreen = withRoleGuard(AdminSupportScreen, ['seller', 'platformAdmin']);
 // Reviews are store content, so moderating them is the Store Manager's job,
 // not the Platform Admin's — same side of the split as products, orders and
 // support requests. firestore.rules agrees: only isSeller() may write the

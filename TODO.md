@@ -549,9 +549,14 @@ one comes after the boundary it depends on is solid.
       not enforce indexes, so `indexes:deploy` must precede the app.
       Rules 102 → 109; each manager driven in the web build sees only
       their own store.)*
-- [ ] Support requests and the mail log are still shared by every
-      manager. A support request names no store, so who should see it is
-      a product decision, not a scoping bug.
+- [x] Support requests and the mail log, routed by order (decided
+      2026-09-22): the Help form offers the customer's recent orders; a
+      question about one goes to that order's store, a general one
+      (`storeId: null`) to the Platform Admin via an "Open questions"
+      card in Manage Users. Rules check the order is the customer's and
+      the store is its store; the mail log and retryMail follow the same
+      routing. Rules 109 → 114, email 19 → 20. Driven in the web build
+      with the functions emulator OFF, so no real email was sent.
 - [ ] Store pages in Shop: browse by store, store profile.
 - [ ] THEN seller ratings become meaningful — the thing the panellist
       actually asked for in §9, refused at the time because one seller

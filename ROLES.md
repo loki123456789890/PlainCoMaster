@@ -8,8 +8,8 @@ values never change; only their display labels do (see
 | Stored value | Shown as | Can do | Cannot do |
 |---|---|---|---|
 | *(absent)* / `customer` | Customer | Browse, order, favorite, send support requests | Reach any staff screen |
-| `seller` | **Store Manager** | Products, orders, support requests, review moderation | Read or modify user accounts |
-| `platformAdmin` | **Platform Admin** | User accounts: change roles, activate/deactivate | Touch products, orders, or support |
+| `seller` | **Store Manager** | One store's products, orders, support requests about its orders, review moderation | Read or modify user accounts, or anything of another store |
+| `platformAdmin` | **Platform Admin** | User accounts, roles and stores; general support questions | Touch any store's products, orders, or store support |
 
 The two privileged roles are **siblings, not a hierarchy**. Neither is a
 superset of the other — a Store Manager cannot read `/users`, and a
@@ -84,8 +84,17 @@ A manager also **reads** only their own store: its orders, its review
 moderation queue, and its store activity log. A review is filed with the
 store that sold the item, checked against the order.
 
-Still shared by every manager: support requests and the mail log. A
-support request names no store. See TODO.md, "Multi-store".
+**Support is routed by order.** The Help form lets a customer say which
+of their orders a message is about. A question about an order goes to
+that order's store; a general question (`storeId: null`) goes to the
+Platform Admin, who opens that inbox from the "Open questions" card in
+Manage Users. The rules check the named order really is the customer's
+and really is that store's (`handlesSupport()`), and the mail log and
+"Send again" follow the same routing.
+
+This widens the Platform Admin role, which was accounts-only: answering
+general questions is platform work no single store can do. It still
+cannot reach any store's requests, orders or products.
 
 The person-add button in the Manage Users header explains these three
 steps in-app, so the flow isn't folklore.

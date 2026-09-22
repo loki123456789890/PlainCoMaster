@@ -668,6 +668,21 @@ service cloud.firestore {
       // no reader can tell a clean record apart from a cleaned one. Hiding
       // leaves the document, its author, and its text intact.
     }
+    // Who answers a support request, or reads the mail it produced.
+    //
+    // A request about an ORDER goes to the store that sold it; a general
+    // question goes to the Platform Admin, because no single store can
+    // answer for the app. storeId is null for the second kind — present
+    // and null, not absent, so the Platform Admin's inbox can query
+    // where('storeId', '==', null), which does not match a missing field.
+    //
+    // This does widen the Platform Admin role, which was accounts-only:
+    // it now answers general questions too, and still cannot reach any
+    // store's requests, orders or products. See ROLES.md.
+    function handlesSupport(storeId) {
+      return (storeId == null && isPlatformAdmin()) ||
+        (storeId != null && managesStore(storeId));
+    }
     match /supportRequests/{requestId} {
       // Same treatment as products: an exact key allowlist plus types and
       // length caps, matching what HelpScreen.js submits.
@@ -679,12 +694,29 @@ service cloud.firestore {
       // userEmail is allowed to be null, not just a string: HelpScreen
       // writes auth.currentUser?.email, and a provider that supplied no
       // email would store null there rather than omit the field.
+      //
+      // Routing is checked, not trusted. A request that names an order must
+      // name the caller's OWN order and that order's store — otherwise a
+      // customer could drop a message into any store's queue, or attach a
+      // stranger's order to it. A general request names neither.
       allow create: if request.auth != null &&
         request.resource.data.keys().hasOnly(
-          ['message', 'userId', 'userEmail', 'status', 'createdAt']
+          ['message', 'userId', 'userEmail', 'status', 'createdAt', 'orderId', 'storeId']
         ) &&
         request.resource.data.keys().hasAll(
-          ['message', 'userId', 'status', 'createdAt']
+          ['message', 'userId', 'status', 'createdAt', 'storeId']
+        ) &&
+        (
+          (
+            request.resource.data.storeId == null &&
+            !('orderId' in request.resource.data)
+          ) || (
+            request.resource.data.orderId is string &&
+            request.resource.data.storeId is string &&
+            exists(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(request.resource.data.orderId)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(request.resource.data.orderId))
+              .data.get('storeId', null) == request.resource.data.storeId
+          )
         ) &&
         request.resource.data.userId == request.auth.uid &&
         request.resource.data.message is string &&
@@ -694,14 +726,15 @@ service cloud.firestore {
          request.resource.data.userEmail == null) &&
         request.resource.data.status == 'open' &&
         request.resource.data.createdAt == request.time;
-      allow read: if isSeller();
+      allow read: if handlesSupport(resource.data.get('storeId', null));
       // Working a request means moving it between exactly two states, and
-      // that is the only change this rule permits — a seller cannot edit
-      // the customer's message or reassign the request to another user.
-      allow update: if isSeller() &&
+      // that is the only change this rule permits — whoever handles it
+      // cannot edit the customer's message, reassign the request to
+      // another user, or move it to another store's queue.
+      allow update: if handlesSupport(resource.data.get('storeId', null)) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
         request.resource.data.status in ['open', 'resolved'];
-      allow delete: if isSeller();
+      allow delete: if handlesSupport(resource.data.get('storeId', null));
     }
     // Activity logging (SRS Constraint 2.4.5, "Audit Functions").
     //
@@ -801,8 +834,14 @@ service cloud.firestore {
     // new exposure — a seller already reads customerEmail on every order
     // and userEmail on every support request, which are the same two
     // sources these are copied from.
+    //
+    // MULTI-STORE: each entry carries the storeId of the order or support
+    // request it was about, and is read by whoever handles that — a store's
+    // receipts by its manager, a general question's notification by the
+    // Platform Admin (see handlesSupport). One store has no business
+    // reading who another store emailed.
     match /mailLog/{entryId} {
-      allow read: if isSeller();
+      allow read: if handlesSupport(resource.data.get('storeId', null));
     }
   }
 }

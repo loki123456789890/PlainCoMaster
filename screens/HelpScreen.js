@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -29,9 +29,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { db, auth } from '../firebaseConfig';
 import { showAppAlert } from '../utils/appAlert';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { Colors } from '../constants/theme';
+import { Colors, Radius, Spacing } from '../constants/theme';
+import { formatOrderNumber } from '../utils/orderNumber';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
@@ -269,6 +270,36 @@ export default function HelpScreen({ navigation }) {
   const [supportMessage, setSupportMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { isConnected } = useNetworkStatus();
+
+  // Which order, if any, this message is about. It decides who reads it:
+  // a question about an order goes to the store that sold it, and a
+  // general one to the Platform Admin (handlesSupport() in
+  // firestore.rules). null means "general".
+  const [recentOrders, setRecentOrders] = useState([]);
+  const [aboutOrderId, setAboutOrderId] = useState(null);
+
+  // One-shot, not a listener: the list only needs to be right when the
+  // customer opens the form, and a guest has no orders to offer.
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    getDocs(query(collection(db, 'users', uid, 'orders'), orderBy('createdAt', 'desc'), limit(5)))
+      .then((snapshot) => {
+        setRecentOrders(
+          snapshot.docs
+            // An order from before stores existed has nowhere to be
+            // routed, so it is not offered; the question can still be
+            // sent as a general one.
+            .filter((docSnap) => typeof docSnap.data().storeId === 'string')
+            .map((docSnap) => ({
+              id: docSnap.id,
+              storeId: docSnap.data().storeId,
+              storeName: docSnap.data().storeName || '',
+            }))
+        );
+      })
+      .catch((error) => console.error('Could not load recent orders for support:', error));
+  }, []);
   const reduceMotion = useReducedMotion();
 
   // Refs for scroll-to-section behavior (replaces the web-only document.getElementById approach)
@@ -382,18 +413,24 @@ export default function HelpScreen({ navigation }) {
       // Writes the request to Firestore so it's durable and admin-reviewable.
       // There's no email/push pipeline yet (would need Cloud Functions + a
       // mail provider) — this is the real, persisted equivalent of "sent".
+      const aboutOrder = recentOrders.find((order) => order.id === aboutOrderId);
       await addDoc(collection(db, 'supportRequests'), {
         message: supportMessage.trim(),
         userId: auth.currentUser?.uid || null,
         userEmail: auth.currentUser?.email || null,
         status: 'open',
         createdAt: serverTimestamp(),
+        // Routing. The rules check the order is this customer's and that
+        // storeId is its store, so both come from the order itself.
+        ...(aboutOrder
+          ? { orderId: aboutOrder.id, storeId: aboutOrder.storeId }
+          : { storeId: null }),
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showAppAlert(
         'Message Sent!',
         'Thank you for reaching out. Our support team will respond within 24 hours.',
-        [{ text: 'OK', onPress: () => setSupportMessage('') }]
+        [{ text: 'OK', onPress: () => { setSupportMessage(''); setAboutOrderId(null); } }]
       );
     } catch (error) {
       console.error('Error submitting support request:', error);
@@ -677,6 +714,44 @@ export default function HelpScreen({ navigation }) {
                   textAlignVertical="top"
                   accessibilityLabel="Describe your issue"
                 />
+                {/* Only shown when there is an order to pick. The store that
+                    sold it can actually answer, and a general question goes
+                    to PlainCo itself. */}
+                {recentOrders.length > 0 && (
+                  <View style={styles.aboutOrder}>
+                    <Text style={styles.formLabel}>Is this about an order?</Text>
+                    <View style={styles.aboutOrderChips}>
+                      {[{ id: null, label: 'No, a general question' }, ...recentOrders.map((order) => ({
+                        id: order.id,
+                        label: `${formatOrderNumber(order.id)}${order.storeName ? ` · ${order.storeName}` : ''}`,
+                      }))].map((option) => {
+                        const active = aboutOrderId === option.id;
+                        return (
+                          <AnimatedPressable
+                            key={option.id || 'general'}
+                            style={[styles.aboutOrderChip, active && styles.aboutOrderChipActive]}
+                            onPress={() => {
+                              Haptics.selectionAsync();
+                              setAboutOrderId(option.id);
+                            }}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: active }}
+                            accessibilityLabel={option.id ? `About order ${option.label}` : option.label}
+                          >
+                            <Text style={[styles.aboutOrderChipText, active && styles.aboutOrderChipTextActive]}>
+                              {option.label}
+                            </Text>
+                          </AnimatedPressable>
+                        );
+                      })}
+                    </View>
+                    <Text style={styles.aboutOrderHint}>
+                      {aboutOrderId
+                        ? 'This goes to the store that sold the order.'
+                        : 'This goes to the PlainCo team.'}
+                    </Text>
+                  </View>
+                )}
                 <View style={styles.submitButtonWrap}>
                   <Button
                     variant="primary"
@@ -950,6 +1025,42 @@ const styles = StyleSheet.create({
   },
   supportForm: {
     marginTop: 8,
+  },
+  aboutOrder: {
+    marginTop: Spacing.md,
+  },
+  aboutOrderChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  // Same tinted-outline selection as the role picker in AdminUsersScreen:
+  // Clay fill is kept for the one primary action below, Send Message.
+  aboutOrderChip: {
+    minHeight: 36,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  aboutOrderChipActive: {
+    backgroundColor: Colors.light.tint + '12',
+    borderColor: Colors.light.tint,
+  },
+  aboutOrderChipText: {
+    fontSize: 13,
+    color: Colors.light.text,
+  },
+  aboutOrderChipTextActive: {
+    color: Colors.light.tint,
+    fontWeight: '600',
+  },
+  aboutOrderHint: {
+    fontSize: 12,
+    color: Colors.light.icon,
+    marginTop: Spacing.sm,
   },
   formLabel: {
     fontSize: 14,

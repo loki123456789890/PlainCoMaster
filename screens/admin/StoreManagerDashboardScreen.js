@@ -92,6 +92,20 @@ export default function StoreManagerDashboardScreen({ navigation }) {
   const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
+    // Every count on this screen is one store's, and a manager with no
+    // store has none. Zeros rather than error states: the listeners would
+    // be refused, and retrying cannot fix an unassigned account.
+    if (!storeId) {
+      setOrderCount(0);
+      setTotalOrderValue(0);
+      setOpenSupportCount(0);
+      setMailProblemCount(0);
+      setOrdersLoading(false);
+      setSupportLoading(false);
+      setMailLoading(false);
+      return undefined;
+    }
+
     setOrdersLoading(true);
     setOrdersError(false);
     setSupportLoading(true);
@@ -103,44 +117,41 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     // order. No orderBy here since only the count and total are needed;
     // the equality filter alone uses the single-field collection-group
     // index on storeId declared in firestore.indexes.json.
-    //
-    // A manager with no store has no orders, so no query at all.
-    let unsubscribeOrders = () => {};
-    if (!storeId) {
-      setOrderCount(0);
-      setTotalOrderValue(0);
-      setOrdersLoading(false);
-    } else {
-      unsubscribeOrders = onSnapshot(
-        query(collectionGroup(db, 'orders'), where('storeId', '==', storeId)),
-        (snapshot) => {
-          setOrderCount(snapshot.size);
+    const unsubscribeOrders = onSnapshot(
+      query(collectionGroup(db, 'orders'), where('storeId', '==', storeId)),
+      (snapshot) => {
+        setOrderCount(snapshot.size);
 
-          // Same calculation AdminOrdersScreen uses for its totalRevenue
-          // stat: sum of order totals, excluding cancelled orders. Reused
-          // here from the same snapshot rather than a second listener.
-          const value = snapshot.docs.reduce((sum, docSnap) => {
-            const data = docSnap.data();
-            if (data.status === 'cancelled') return sum;
-            return sum + Number(data.total || 0);
-          }, 0);
-          setTotalOrderValue(value);
+        // Same calculation AdminOrdersScreen uses for its totalRevenue
+        // stat: sum of order totals, excluding cancelled orders. Reused
+        // here from the same snapshot rather than a second listener.
+        const value = snapshot.docs.reduce((sum, docSnap) => {
+          const data = docSnap.data();
+          if (data.status === 'cancelled') return sum;
+          return sum + Number(data.total || 0);
+        }, 0);
+        setTotalOrderValue(value);
 
-          setOrdersLoading(false);
-        },
-        (error) => {
-          console.error('Error fetching order count:', error);
-          setOrdersError(true);
-          setOrdersLoading(false);
-        }
-      );
-    }
+        setOrdersLoading(false);
+      },
+      (error) => {
+        console.error('Error fetching order count:', error);
+        setOrdersError(true);
+        setOrdersLoading(false);
+      }
+    );
 
     // Filtered server-side to only "open" requests — a dashboard count
     // card only needs the number, so there's no reason to also download
     // every already-resolved request just to filter them out client-side.
+    // And to this store's queue: questions about its own orders. The rules
+    // refuse any other request, so that filter is required, not tidy.
     const unsubscribeSupport = onSnapshot(
-      query(collection(db, 'supportRequests'), where('status', '==', 'open')),
+      query(
+        collection(db, 'supportRequests'),
+        where('storeId', '==', storeId),
+        where('status', '==', 'open')
+      ),
       (snapshot) => {
         setOpenSupportCount(snapshot.size);
         setSupportLoading(false);
@@ -162,10 +173,14 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     // quiet and confusing: a card saying one email did not send, opening
     // a screen that says everything sent.
     //
-    // A single-field `in` needs no composite index, so this adds nothing
-    // to firestore.indexes.json.
+    // This store's mail only, like everything else here. Uses the
+    // (storeId, status) index in firestore.indexes.json.
     const unsubscribeMail = onSnapshot(
-      query(collection(db, 'mailLog'), where('status', 'in', MAIL_PROBLEM_STATUSES)),
+      query(
+        collection(db, 'mailLog'),
+        where('storeId', '==', storeId),
+        where('status', 'in', MAIL_PROBLEM_STATUSES)
+      ),
       (snapshot) => {
         setMailProblemCount(snapshot.size);
         setMailLoading(false);

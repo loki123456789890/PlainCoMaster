@@ -10,6 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useReducedMotion, FadeIn, FadeInDown } from 'react-native-reanimated';
 import { collection, onSnapshot, query, orderBy, limit, where } from 'firebase/firestore';
+import { useAdmin } from '../../context/AdminContext';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebaseConfig';
 import { showAppAlert } from '../../utils/appAlert';
@@ -188,6 +189,10 @@ export default function AdminMailLogScreen({ navigation, route }) {
   // rare enough not to complicate the state for.
   const [resending, setResending] = useState(null);
   const { isConnected } = useNetworkStatus();
+  // This store's mail only: receipts for its orders and alerts for its
+  // support queue. firestore.rules refuses any other entry, and any query
+  // not filtered to the store (handlesSupport).
+  const { storeId } = useAdmin();
   const reduceMotion = useReducedMotion();
 
   // Not memoised on purpose — httpsCallable is cheap and hoisting it to
@@ -239,6 +244,15 @@ export default function AdminMailLogScreen({ navigation, route }) {
   };
 
   useEffect(() => {
+    // No store, no mail to show — and both queries would be refused.
+    if (!storeId) {
+      setRecentEntries([]);
+      setProblemEntries([]);
+      setLoadError(false);
+      setLoading(false);
+      return undefined;
+    }
+
     setLoading(true);
     setLoadError(false);
 
@@ -253,7 +267,13 @@ export default function AdminMailLogScreen({ navigation, route }) {
     // than erroring, so a timestamp written on only some paths would make
     // exactly the entries this screen exists for invisible.
     const unsubscribeRecent = onSnapshot(
-      query(collection(db, 'mailLog'), orderBy('recordedAt', 'desc'), limit(200)),
+      // Uses the (storeId, recordedAt desc) index in firestore.indexes.json.
+      query(
+        collection(db, 'mailLog'),
+        where('storeId', '==', storeId),
+        orderBy('recordedAt', 'desc'),
+        limit(200)
+      ),
       (snapshot) => {
         setRecentEntries(snapshot.docs.map(toEntry));
         setLoadError(false);
@@ -286,7 +306,11 @@ export default function AdminMailLogScreen({ navigation, route }) {
     // Cheap by construction — it matches only undelivered mail, which is
     // a handful of documents on any healthy store and zero on most.
     const unsubscribeProblems = onSnapshot(
-      query(collection(db, 'mailLog'), where('status', 'in', PROBLEM_STATUSES)),
+      query(
+        collection(db, 'mailLog'),
+        where('storeId', '==', storeId),
+        where('status', 'in', PROBLEM_STATUSES)
+      ),
       (snapshot) => setProblemEntries(snapshot.docs.map(toEntry)),
       (error) => {
         // Deliberately does NOT set loadError: the ordered listener above
@@ -300,7 +324,7 @@ export default function AdminMailLogScreen({ navigation, route }) {
       unsubscribeRecent();
       unsubscribeProblems();
     };
-  }, [retryToken]);
+  }, [retryToken, storeId]);
 
   // The two listeners overlap almost entirely; the union is what the
   // screen shows. Ordered newest-first, except that entries with no

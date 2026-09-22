@@ -124,6 +124,9 @@ const order = (overrides = {}) => ({
     city: 'Cebu City', province: 'Cebu', zipCode: '6000',
   },
   status: 'pending',
+  // One store's order, so its mail is that store's manager's to resend.
+  storeId: 'store1',
+  storeName: 'Tindahan ni Sam',
   ...overrides,
 });
 
@@ -132,6 +135,9 @@ const supportRequest = (overrides = {}) => ({
   userEmail: 'cathy@example.com',
   message: 'Can I swap a jacket for the next size up?',
   status: 'open',
+  // About an order, so routed to that order's store.
+  orderId: 'o1',
+  storeId: 'store1',
   ...overrides,
 });
 
@@ -258,7 +264,9 @@ console.log('\nResending (retryMail)');
 // actually exist — the whole point of the design is that a log entry
 // alone is not enough to send anything.
 async function seedActors() {
-  await db.doc('users/seller1').set({ role: 'seller', isActive: true, email: 'manager@plainco.test' });
+  await db.doc('users/seller1').set({ role: 'seller', isActive: true, email: 'manager@plainco.test', storeId: 'store1' });
+  await db.doc('users/seller2').set({ role: 'seller', isActive: true, email: 'other@plainco.test', storeId: 'store2' });
+  await db.doc('users/admin1').set({ role: 'platformAdmin', isActive: true, email: 'admin@plainco.test' });
   await db.doc('users/customer1').set({ role: 'customer', isActive: true, email: 'cathy@example.com' });
   await db.doc('users/gone').set({ role: 'seller', isActive: false, email: 'former@plainco.test' });
 }
@@ -442,6 +450,37 @@ await test('RETRY-8  a support alert resends to the store, not the customer', as
   assertEqual(result.status, 'sent', 'the retry sent it');
   assertEqual(transport.sent[0].to, 'shop@plainco.test', 'to the store inbox');
   assertEqual(transport.sent[0].replyTo, 'cathy@example.com', 'replying to the customer');
+});
+
+await test('RETRY-12  only whoever handles the entry may resend it', async (transport) => {
+  // store1's receipt: not store2's manager, not the Platform Admin.
+  await seedFailedReceipt(transport, 'r12');
+  await expectReject(
+    () => emails._handleRetryMail({ auth: { uid: 'seller2' }, data: { key: 'order-r12' } }),
+    'permission-denied',
+    'another store\'s manager is refused'
+  );
+  await expectReject(
+    () => emails._handleRetryMail({ auth: { uid: 'admin1' }, data: { key: 'order-r12' } }),
+    'permission-denied',
+    'the Platform Admin is refused a store\'s receipt'
+  );
+  assertEqual((await entry('order-r12')).status, 'failed', 'neither refusal touched the entry');
+
+  // A general question's notification is the Platform Admin's, and no store's.
+  const general = supportRequest({ orderId: undefined, storeId: null });
+  delete general.orderId;
+  await db.doc('supportRequests/r12').set(general);
+  transport.failNext('Connection timed out');
+  await emails._handleSupportCreated(general, 'r12');
+  assertEqual((await entry('support-r12')).storeId, null, 'the entry is routed to no store');
+  await expectReject(
+    () => emails._handleRetryMail(asSeller('support-r12')),
+    'permission-denied',
+    'a store manager is refused a general question'
+  );
+  const result = await emails._handleRetryMail({ auth: { uid: 'admin1' }, data: { key: 'support-r12' } });
+  assertEqual(result.status, 'sent', 'the Platform Admin can resend it');
 });
 
 await test('RETRY-9  a key cannot escape mailLog', async () => {

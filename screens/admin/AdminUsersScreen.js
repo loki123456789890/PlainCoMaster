@@ -26,6 +26,8 @@ import { signOut } from 'firebase/auth';
 import { db, auth } from '../../firebaseConfig';
 import {
   collection,
+  query,
+  where,
   onSnapshot,
   doc,
   updateDoc,
@@ -99,6 +101,10 @@ export default function AdminUsersScreen({ navigation }) {
   // opens stores and assigns managers to them; see firestore.rules
   // /stores and storeAssignmentIsValid().
   const [stores, setStores] = useState([]);
+  // Open general questions — support requests that name no store, which
+  // this role answers (handlesSupport() in firestore.rules). null while
+  // unknown, so a failed read shows a dash rather than a false zero.
+  const [openGeneralSupport, setOpenGeneralSupport] = useState(null);
   // Tracks which single user's activate/deactivate write is in flight, so
   // one row updating doesn't disable every other row's action button too.
   const [togglingUserId, setTogglingUserId] = useState(null);
@@ -192,6 +198,22 @@ export default function AdminUsersScreen({ navigation }) {
         setStores(list);
       },
       (error) => console.error('Error fetching stores:', error)
+    );
+    return () => unsubscribe();
+  }, [retryToken]);
+
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      query(
+        collection(db, 'supportRequests'),
+        where('storeId', '==', null),
+        where('status', '==', 'open')
+      ),
+      (snapshot) => setOpenGeneralSupport(snapshot.size),
+      (error) => {
+        console.error('Error counting general support requests:', error);
+        setOpenGeneralSupport(null);
+      }
     );
     return () => unsubscribe();
   }, [retryToken]);
@@ -614,6 +636,28 @@ export default function AdminUsersScreen({ navigation }) {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.statsContainer}
         >
+          {/* The way into this role's support inbox: general questions that
+              no single store can answer. Questions about an order go to
+              that order's store instead. First in the row because it is
+              the only card that does anything, and the row scrolls — at
+              phone width a fourth card starts off-screen. */}
+          <AnimatedPressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              navigation.navigate('AdminSupport');
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={`General support, ${openGeneralSupport ?? 'unknown number of'} open questions. Opens the inbox.`}
+          >
+            <Card variant="flat" style={[styles.statCard, styles.supportStatCard]}>
+              <Text style={[styles.statValue, { color: Colors.light.tint }]}>
+                {openGeneralSupport ?? '—'}
+              </Text>
+              <Text style={styles.statLabel}>
+                Open {openGeneralSupport === 1 ? 'question' : 'questions'}
+              </Text>
+            </Card>
+          </AnimatedPressable>
           <Card variant="flat" style={styles.statCard}>
             <Text style={styles.statValue}>{stats.totalUsers}</Text>
             <Text style={styles.statLabel}>Total {stats.totalUsers === 1 ? 'User' : 'Users'}</Text>
@@ -1278,6 +1322,13 @@ const styles = StyleSheet.create({
   statCard: {
     minWidth: 100,
     alignItems: 'center',
+  },
+  // The one tappable stat, so it reads as a control: the same tinted
+  // outline the role and store pickers use for "this does something".
+  supportStatCard: {
+    borderWidth: 1,
+    borderColor: Colors.light.tint,
+    backgroundColor: Colors.light.tint + '12',
   },
   // Matches AdminOrdersScreen.js's statValue exactly (no lineHeight /
   // includeFontPadding overrides) — those were added earlier as a guess at

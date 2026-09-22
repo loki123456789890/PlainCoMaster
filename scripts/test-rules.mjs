@@ -194,6 +194,8 @@ async function seed() {
       status: 'failed',
       detail: 'Invalid login: 535-5.7.8 Username and Password not accepted',
       recordedAt: serverTimestamp(),
+      // A receipt for store1's order, so read by store1's manager only.
+      storeId: 'store1',
     });
     await setDoc(doc(db, 'users/deactivatedCustomer/orders/delivered2'), {
       customerId: 'deactivatedCustomer', customerEmail: 'dee@example.com',
@@ -914,6 +916,9 @@ const supportDoc = (uid, overrides = {}) => ({
   userEmail: 'cathy@example.com',
   status: 'open',
   createdAt: serverTimestamp(),
+  // A general question: present and null, which routes it to the
+  // Platform Admin. SUPPORT-2 covers requests about an order.
+  storeId: null,
   ...overrides,
 });
 
@@ -939,6 +944,7 @@ await test('VALID-9  a seller may only move a request between open and resolved'
     await setDoc(doc(ctx.firestore(), 'supportRequests/s9'), {
       message: 'Where is my order?', userId: 'customer1',
       userEmail: 'cathy@example.com', status: 'open', createdAt: new Date(),
+      orderId: 'o1', storeId: 'store1',
     });
   });
   const db = asSeller();
@@ -1068,7 +1074,7 @@ await test('MAIL-1  a store manager can read the mail log, and only read it', as
   await assertFails(deleteDoc(doc(asSeller(), 'mailLog/order-o1')));
 });
 
-await test('MAIL-2  customers and platform admins cannot read the mail log', async () => {
+await test('MAIL-2  customers and platform admins cannot read a store\'s mail log', async () => {
   // Entries carry recipient email addresses. A customer must not read
   // other people's, and a platformAdmin is excluded on the same principle
   // that keeps them out of orders (SPLIT-6): these entries are store
@@ -1487,6 +1493,67 @@ await test('SCOPE-7  a manager logs and reads only their own store\'s activity',
   await assertFails(setDoc(doc(asSeller(), 'activityLogs/noStore'), noStore));
   await assertFails(getDocs(storeLog(asOtherSeller(), 'store1')));
   await assertFails(getDocs(collection(asSeller(), 'activityLogs')));
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nSupport routing — by order to its store, otherwise to the Platform Admin');
+// ---------------------------------------------------------------------------
+
+const supportQueue = (db, storeId) =>
+  query(collection(db, 'supportRequests'), where('storeId', '==', storeId));
+
+await test('SUPPORT-1  a general question goes to the Platform Admin, not to any store', async () => {
+  await assertSucceeds(setDoc(doc(asCustomer(), 'supportRequests/g1'), supportDoc('customer1')));
+  await assertSucceeds(getDocs(supportQueue(asAdmin(), null)));
+  await assertSucceeds(updateDoc(doc(asAdmin(), 'supportRequests/g1'), { status: 'resolved' }));
+  await assertFails(getDoc(doc(asSeller(), 'supportRequests/g1')));
+  await assertFails(getDocs(supportQueue(asSeller(), null)));
+});
+
+await test('SUPPORT-2  a question about an order goes to that order\'s store only', async () => {
+  await assertSucceeds(
+    setDoc(doc(asCustomer(), 'supportRequests/o1q'), supportDoc('customer1', { orderId: 'o1', storeId: 'store1' }))
+  );
+  await assertSucceeds(getDocs(supportQueue(asSeller(), 'store1')));
+  await assertSucceeds(updateDoc(doc(asSeller(), 'supportRequests/o1q'), { status: 'resolved' }));
+  await assertFails(getDoc(doc(asOtherSeller(), 'supportRequests/o1q')));
+  await assertFails(getDoc(doc(asAdmin(), 'supportRequests/o1q')));
+});
+
+await test('SUPPORT-3  routing is checked against the order, not trusted', async () => {
+  const db = asCustomer();
+  // The right order, the wrong store: a message dropped into any queue.
+  await assertFails(setDoc(doc(db, 'supportRequests/x1'), supportDoc('customer1', { orderId: 'o1', storeId: 'store2' })));
+  // A store with no order to justify it.
+  await assertFails(setDoc(doc(db, 'supportRequests/x2'), supportDoc('customer1', { storeId: 'store1' })));
+  // An order with no store: it would land in the Platform Admin's inbox.
+  await assertFails(setDoc(doc(db, 'supportRequests/x3'), supportDoc('customer1', { orderId: 'o1' })));
+  // Someone else's order.
+  await assertFails(
+    setDoc(doc(asOtherCustomer(), 'supportRequests/x4'), supportDoc('customer2', { orderId: 'o1', storeId: 'store1' }))
+  );
+  // No routing field at all.
+  const { storeId: _storeId, ...unrouted } = supportDoc('customer1');
+  await assertFails(setDoc(doc(db, 'supportRequests/x5'), unrouted));
+});
+
+await test('SUPPORT-4  a request cannot be moved into another queue', async () => {
+  await assertFails(updateDoc(doc(asSeller(), 'supportRequests/s9'), { storeId: 'store2' }));
+  await assertFails(updateDoc(doc(asSeller(), 'supportRequests/s9'), { storeId: null }));
+});
+
+await test('SUPPORT-5  the mail log follows the same routing', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'mailLog/support-g1'), {
+      kind: 'supportRequest', requestId: 'g1', status: 'failed', storeId: null, recordedAt: new Date(),
+    });
+  });
+  await assertSucceeds(getDoc(doc(asAdmin(), 'mailLog/support-g1')));
+  await assertFails(getDoc(doc(asSeller(), 'mailLog/support-g1')));
+  await assertFails(getDoc(doc(asOtherSeller(), 'mailLog/order-o1')));
+  // A manager's list is their store's entries, and must say so.
+  await assertSucceeds(getDocs(query(collection(asSeller(), 'mailLog'), where('storeId', '==', 'store1'))));
+  await assertFails(getDocs(collection(asSeller(), 'mailLog')));
 });
 
 // ---------------------------------------------------------------------------

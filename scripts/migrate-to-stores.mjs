@@ -89,6 +89,13 @@ const orders = (await db.collectionGroup('orders').get()).docs.filter((d) => !ha
 // storeId they would vanish from every manager's moderation queue and log.
 const reviews = (await db.collection('reviews').get()).docs.filter((d) => !hasStore(d.data()));
 const activity = (await db.collection('activityLogs').get()).docs.filter((d) => !hasStore(d.data()));
+// Support requests and mail entries go to the store too — every one so far
+// was handled by the one store there was. Matched on the field being ABSENT,
+// not on !hasStore: a present-but-null storeId is a general question routed
+// to the Platform Admin on purpose, and must not be swept into a store.
+const neverRouted = (d) => !('storeId' in d.data());
+const support = (await db.collection('supportRequests').get()).docs.filter(neverRouted);
+const mail = (await db.collection('mailLog').get()).docs.filter(neverRouted);
 
 console.log(
   storeSnap.exists
@@ -102,6 +109,7 @@ for (const d of managers) console.log(`  manager  ${d.data().email ?? d.id}`);
 // Counted, not listed: a live store can have hundreds.
 console.log(`${WILL} assign ${orders.length} order(s) with no store.`);
 console.log(`${WILL} assign ${reviews.length} review(s) and ${activity.length} activity entries with no store.`);
+console.log(`${WILL} assign ${support.length} support request(s) and ${mail.length} mail log entries never routed.`);
 
 if (!APPLY) {
   console.log('\nRe-run with --apply to write.\n');
@@ -116,7 +124,8 @@ if (!storeSnap.exists) {
 // it, so order lists need no read per row.
 const storeName = storeSnap.exists ? storeSnap.data().name : STORE_NAME;
 const pending = [
-  ...[...products, ...managers, ...reviews, ...activity].map((d) => [d.ref, { storeId: STORE_ID }]),
+  ...[...products, ...managers, ...reviews, ...activity, ...support, ...mail]
+    .map((d) => [d.ref, { storeId: STORE_ID }]),
   ...orders.map((d) => [d.ref, { storeId: STORE_ID, storeName }]),
 ];
 
@@ -130,6 +139,7 @@ for (let i = 0; i < pending.length; i += 400) {
 console.log(
   `\nDone. ${products.length} product(s), ${managers.length} manager(s), ` +
   `${orders.length} order(s), ${reviews.length} review(s) and ` +
-  `${activity.length} activity entries now belong to ${STORE_ID}.\n`
+  `${activity.length} activity entries, ${support.length} support request(s) and ` +
+  `${mail.length} mail log entries now belong to ${STORE_ID}.\n`
 );
 process.exit(0);
