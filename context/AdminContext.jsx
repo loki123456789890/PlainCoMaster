@@ -29,12 +29,25 @@ function resolvePrivilegedRole(userDocSnap) {
   return PRIVILEGED_ROLES.includes(data.role) ? data.role : null;
 }
 
+// The store a Store Manager runs, or null. Only a seller has one, and only
+// a string counts — the same test managesStore() makes in firestore.rules,
+// so the UI and the rules agree on who is "assigned to nothing".
+function resolveStoreId(userDocSnap, resolvedRole) {
+  if (resolvedRole !== 'seller') return null;
+  const storeId = userDocSnap.data().storeId;
+  return typeof storeId === 'string' && storeId ? storeId : null;
+}
+
 export const AdminProvider = ({ children }) => {
   // role is null while unauthenticated, while still resolving, for an
   // unrecognized/missing role, or for a deactivated account — see
   // resolvePrivilegedRole(). It is never anything other than null,
   // "seller", or "platformAdmin".
   const [role, setRole] = useState(null);
+  // Which store a seller runs; null for everyone else, and for a seller
+  // promoted before stores existed. Product writes need it, and the rules
+  // refuse them without it — see resolveStoreId().
+  const [storeId, setStoreId] = useState(null);
   // role starts null, but that's not the same as "confirmed unprivileged" —
   // on mount it's genuinely UNKNOWN until onAuthStateChanged fires and (if
   // there's a user) the Firestore role check resolves. withRoleGuard must
@@ -172,6 +185,7 @@ export const AdminProvider = ({ children }) => {
 
       if (!user) {
         setRole(null);
+        setStoreId(null);
         setAccountActive(null);
         setAdminLoading(false);
         // Cleared so the NEXT person to sign in on this device can be
@@ -194,7 +208,9 @@ export const AdminProvider = ({ children }) => {
       unsubscribeUserDoc = onSnapshot(
         doc(db, 'users', user.uid),
         (snapshot) => {
-          setRole(resolvePrivilegedRole(snapshot));
+          const resolvedRole = resolvePrivilegedRole(snapshot);
+          setRole(resolvedRole);
+          setStoreId(resolveStoreId(snapshot, resolvedRole));
 
           // A document that does not exist is NOT a deactivated account.
           // It is the gap between creating an auth user and writing the
@@ -247,6 +263,7 @@ export const AdminProvider = ({ children }) => {
           // one this listener fixes. Unknown stays unknown.
           console.error('Error watching account status:', error);
           setRole(null);
+          setStoreId(null);
           setAccountActive(null);
           setAdminLoading(false);
         }
@@ -273,6 +290,7 @@ export const AdminProvider = ({ children }) => {
 
   const logoutAsAdmin = () => {
     setRole(null);
+    setStoreId(null);
     setAdminLoading(false);
   };
 
@@ -282,6 +300,7 @@ export const AdminProvider = ({ children }) => {
   return (
     <AdminContext.Provider value={{
       role,
+      storeId,
       isSeller,
       isPlatformAdmin,
       adminLoading,

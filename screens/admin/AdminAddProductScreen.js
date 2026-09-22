@@ -510,6 +510,14 @@ export default function AdminAddProductScreen({ navigation, route }) {
         'Product added successfully!',
         [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
+    } else if (result.error === 'NO_STORE') {
+      // A manager promoted before stores existed, or one whose store was
+      // never set. Nothing on this screen can fix it, so say who can.
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showAppAlert(
+        'No Store Assigned',
+        "Your account isn't assigned to a store yet, so there's nowhere to list this product. Ask a Platform Admin to assign you one in Manage Users."
+      );
     } else if (!isConnected) {
       // addProduct() (ProductContext) resolves { success: false, error }
       // instead of throwing, and only passes along error.message, not

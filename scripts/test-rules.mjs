@@ -724,6 +724,22 @@ await test('ASSIGN-5  a manager cannot choose their own store', async () => {
   );
 });
 
+await test('ASSIGN-6  opening a store and assigning its manager can be one write', async () => {
+  // How AdminUsersScreen does it, so a store is never left without the
+  // manager it was opened for. The store half is still held to /stores:
+  // a batch whose new store is malformed is refused as a whole.
+  const db = asAdmin();
+  const good = writeBatch(db);
+  good.set(doc(db, 'stores/fresh'), storeDoc());
+  good.update(doc(db, 'users/customer1'), { role: 'seller', storeId: 'fresh' });
+  await assertSucceeds(good.commit());
+
+  const bad = writeBatch(db);
+  bad.set(doc(db, 'stores/blank'), storeDoc({ name: '  ' }));
+  bad.update(doc(db, 'users/customer2'), { role: 'seller', storeId: 'blank' });
+  await assertFails(bad.commit());
+});
+
 // ---------------------------------------------------------------------------
 console.log('\nProduct ownership — each manager runs only their own store');
 // ---------------------------------------------------------------------------

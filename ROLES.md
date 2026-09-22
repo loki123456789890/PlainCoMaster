@@ -51,7 +51,34 @@ Two things enforce that:
 
 1. The new staff member **signs up in the app like any customer**.
 2. A **Platform Admin** opens Manage Users and finds their account.
-3. **Edit User → Role → Store Manager** (or Platform Admin) → Save.
+3. **Edit User → Role → Store Manager** (or Platform Admin).
+4. For a Store Manager, **Store → pick one, or "Open a new store"** → Save.
+
+### Stores (multi-store)
+
+A Store Manager runs **one store**, named by `storeId` on their user
+document. Every product carries the `storeId` of the store that listed it,
+and `firestore.rules` lets a manager create, edit, restock or delete only
+their own store's products (`managesStore()`).
+
+- **Stores are opened by a Platform Admin**, in the same Edit User save
+  that assigns the store's first manager — one batch, so there is never a
+  store without the manager it was opened for. There is no vendor
+  self-signup, for the same reason there is no staff signup.
+- **A Store Manager must have a store.** Promoting someone to Store Manager
+  without naming a store is refused, and demoting them clears it in the
+  same write.
+- **Stores can be renamed, never deleted.** Products and orders point at
+  them by id.
+- **Accounts and products from before stores existed** have no `storeId`,
+  and the rules freeze them rather than guess an owner. The one-time
+  `scripts/migrate-to-stores.mjs` assigns them to a store; it runs with
+  the Admin SDK because giving an existing product a store is exactly the
+  write the rules forbid clients to make.
+
+Still any-manager for now, until orders are split per store: orders,
+support requests, review moderation, and the activity and mail logs. See
+TODO.md, "Multi-store".
 
 The person-add button in the Manage Users header explains these three
 steps in-app, so the flow isn't folklore.

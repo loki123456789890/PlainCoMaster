@@ -7,7 +7,9 @@
  *
  * One customer who can sign in, one saved delivery address (checkout
  * refuses without it), and two products with known stock — so a decline
- * can be checked by reading the stock back and finding it unmoved.
+ * can be checked by reading the stock back and finding it unmoved. Plus
+ * one store, its Store Manager, and a Platform Admin, for the multi-store
+ * screens.
  *
  * Talks to the emulators over their REST APIs rather than through
  * firebase-admin, because the Auth emulator needs a signup call and
@@ -61,25 +63,47 @@ if (!(await ping())) {
   process.exit(1);
 }
 
-// signUp returns the uid whether the account is new or the password
-// matches an existing one, so a second run does not need a delete first.
-let uid;
-const signUp = await fetch(`${AUTH}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ email: EMAIL, password: PASSWORD, returnSecureToken: true }),
-});
-if (signUp.ok) {
-  uid = (await signUp.json()).localId;
-} else {
+// Returns the uid whether the account is new or the password matches an
+// existing one, so a second run does not need a delete first.
+const ensureAccount = async (email) => {
+  const signUp = await fetch(`${AUTH}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=fake-api-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: PASSWORD, returnSecureToken: true }),
+  });
+  if (signUp.ok) return (await signUp.json()).localId;
   const signIn = await fetch(`${AUTH}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: EMAIL, password: PASSWORD, returnSecureToken: true }),
+    body: JSON.stringify({ email, password: PASSWORD, returnSecureToken: true }),
   });
-  if (!signIn.ok) throw new Error(`could not create or sign in the test customer: ${await signIn.text()}`);
-  uid = (await signIn.json()).localId;
-}
+  if (!signIn.ok) throw new Error(`could not create or sign in ${email}: ${await signIn.text()}`);
+  return (await signIn.json()).localId;
+};
+
+const uid = await ensureAccount(EMAIL);
+
+// One store, its manager, and a Platform Admin — enough to try the store
+// picker in Manage Users and the per-store product rules by hand. Written
+// with the rules bypassed (Bearer owner), which is the only way a role can
+// be set at all; see ROLES.md on bootstrapping.
+const STORE_ID = 'sandbox-store';
+const MANAGER_EMAIL = 'sam@example.com';
+const ADMIN_EMAIL = 'ada@example.com';
+
+await writeDoc(`stores/${STORE_ID}`, { name: 'Sandbox Ukay', createdAt: new Date() });
+
+const managerUid = await ensureAccount(MANAGER_EMAIL);
+await writeDoc(`users/${managerUid}`, {
+  uid: managerUid, name: 'Sam Manager', email: MANAGER_EMAIL,
+  role: 'seller', isActive: true, storeId: STORE_ID,
+});
+
+const adminUid = await ensureAccount(ADMIN_EMAIL);
+await writeDoc(`users/${adminUid}`, {
+  uid: adminUid, name: 'Ada Admin', email: ADMIN_EMAIL,
+  role: 'platformAdmin', isActive: true,
+});
 
 await writeDoc(`users/${uid}`, {
   uid,
@@ -117,10 +141,15 @@ for (const p of PRODUCTS) {
     // document missing the ordered field — so a product seeded without
     // this one exists, reads fine by id, and never appears in the Shop.
     createdAt: new Date(),
+    // Without it the product has no manager and is frozen for everyone —
+    // see managesStore() in firestore.rules.
+    storeId: STORE_ID,
   });
 }
 
 console.log(`\nSeeded the emulators.\n`);
 console.log(`  customer   ${EMAIL} / ${PASSWORD}  (uid ${uid})`);
+console.log(`  manager    ${MANAGER_EMAIL} / ${PASSWORD}  (runs "Sandbox Ukay")`);
+console.log(`  admin      ${ADMIN_EMAIL} / ${PASSWORD}  (Platform Admin)`);
 for (const p of PRODUCTS) console.log(`  product    ${p.name} — P${p.price}, stock ${p.stock}`);
 console.log(`\nStock is the thing to watch: a declined sandbox payment must leave it untouched.\n`);

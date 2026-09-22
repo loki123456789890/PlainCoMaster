@@ -32,7 +32,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import {
-  getFirestore, collection, getDocs, addDoc, updateDoc, doc, serverTimestamp,
+  getFirestore, collection, getDocs, getDoc, addDoc, updateDoc, doc, serverTimestamp,
 } from 'firebase/firestore';
 
 const APPLY = process.argv.includes('--apply');
@@ -167,12 +167,30 @@ const CATALOG = [
 console.log(`\n${APPLY ? 'APPLYING' : 'DRY RUN — nothing will be written'}\n`);
 
 const cred = await signInWithEmailAndPassword(auth, EMAIL, PASSWORD);
-console.log(`Signed in as ${cred.user.email}\n`);
+console.log(`Signed in as ${cred.user.email}`);
+
+// Seeds the signed-in manager's OWN store, and only that store: the rules
+// refuse a product under any other storeId, and restocking another
+// store's items is not this manager's call. A manager with no store is
+// refused here rather than at the first write.
+const me = await getDoc(doc(db, 'users', cred.user.uid));
+const STORE_ID = me.exists() ? me.data().storeId : undefined;
+if (typeof STORE_ID !== 'string' || !STORE_ID) {
+  console.error(
+    '\nThis account is not assigned to a store. Have a Platform Admin assign\n' +
+    'one in Manage Users (or run scripts/migrate-to-stores.mjs), then re-run.\n'
+  );
+  process.exit(1);
+}
+const store = await getDoc(doc(db, 'stores', STORE_ID));
+console.log(`Store: ${store.exists() ? store.data().name : STORE_ID}\n`);
 
 const snap = await getDocs(collection(db, 'products'));
-const existing = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+const existing = snap.docs
+  .map((d) => ({ id: d.id, ...d.data() }))
+  .filter((p) => p.storeId === STORE_ID);
 
-console.log(`Catalogue right now: ${existing.length} product(s)`);
+console.log(`This store's catalogue right now: ${existing.length} product(s)`);
 for (const p of existing) {
   const label = p.type === UKAY ? 'Ukay-Ukay    ' : 'Ready-to-Wear';
   console.log(`  ${label}  stock ${String(p.stock).padStart(4)}  ${p.name}`);
@@ -198,7 +216,9 @@ for (const p of toAdd) {
   // createdAt == request.time, so a client-side Date is rejected. It is
   // also what ProductContext orders the catalogue by — a product without
   // it is invisible in the app.
-  await addDoc(collection(db, 'products'), { ...p, stock: MIN_STOCK, createdAt: serverTimestamp() });
+  await addDoc(collection(db, 'products'), {
+    ...p, stock: MIN_STOCK, storeId: STORE_ID, createdAt: serverTimestamp(),
+  });
   console.log(`  added   ${p.name}`);
 }
 
@@ -208,7 +228,7 @@ for (const p of lowStock) {
 }
 
 const after = await getDocs(collection(db, 'products'));
-const all = after.docs.map((d) => d.data());
+const all = after.docs.map((d) => d.data()).filter((p) => p.storeId === STORE_ID);
 const ukay = all.filter((p) => p.type === UKAY).length;
-console.log(`\nDone. ${all.length} products live — ${ukay} Ukay-Ukay, ${all.length - ukay} Ready-to-Wear.\n`);
+console.log(`\nDone. ${all.length} products live in this store —${ukay} Ukay-Ukay, ${all.length - ukay} Ready-to-Wear.\n`);
 process.exit(0);

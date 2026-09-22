@@ -40,6 +40,13 @@ service cloud.firestore {
     // isSeller()), but it would silently hand that store back the moment
     // someone re-promoted the account, without anyone choosing to.
     //
+    // existsAfter rather than exists: AdminUsersScreen opens a new store
+    // and assigns its manager in one batch, and plain exists() reads the
+    // database as it was BEFORE that batch, so the new store would not be
+    // there yet. The store write in the batch is still judged by its own
+    // /stores rule, so this admits nothing a Platform Admin couldn't do in
+    // two separate writes.
+    //
     // Checked only when role or storeId is actually changing, so that
     // deactivating a manager promoted before stores existed still works.
     // Revoking access must never be blocked by an unrelated field.
@@ -48,7 +55,7 @@ service cloud.firestore {
         (
           request.resource.data.get('role', '') == 'seller' &&
           request.resource.data.get('storeId', null) is string &&
-          exists(/databases/$(database)/documents/stores/$(request.resource.data.storeId))
+          existsAfter(/databases/$(database)/documents/stores/$(request.resource.data.storeId))
         ) ||
         (
           request.resource.data.get('role', '') != 'seller' &&

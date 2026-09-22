@@ -29,6 +29,9 @@ import {
   onSnapshot,
   doc,
   updateDoc,
+  writeBatch,
+  deleteField,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
@@ -41,7 +44,7 @@ import SkeletonBlock from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import DialogButtonRow from '../../components/ui/DialogButtonRow';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
-import { ROLES, getRoleLabel, getPortalLabel, ROLE_PLATFORM_ADMIN } from '../../constants/roles';
+import { ROLES, getRoleLabel, getPortalLabel, ROLE_PLATFORM_ADMIN, ROLE_SELLER } from '../../constants/roles';
 import { logAccountActivity, ACTIONS } from '../../utils/activityLog';
 
 // The three roles Firestore recognizes (see firestore.rules) and their
@@ -51,6 +54,12 @@ import { logAccountActivity, ACTIONS } from '../../utils/activityLog';
 // anything. Note the stored value 'seller' displays as "Store Manager":
 // that's the job title the SRS and the customer-facing copy both use.
 const ROLE_OPTIONS = ROLES;
+
+// Stands in for a storeId in the Edit User form when the admin is opening
+// a new store rather than picking an existing one. Not a valid Firestore
+// id (ids can't contain '/'), so it can never collide with a real store.
+const NEW_STORE = 'new/store';
+const STORE_NAME_MAX = 60;
 
 // Shaped like a real user row so the loading state previews the content
 // that's about to arrive, instead of a spinner floating mid-screen.
@@ -83,7 +92,13 @@ export default function AdminUsersScreen({ navigation }) {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFormData, setEditFormData] = useState({
     role: 'customer',
+    storeId: null,
+    newStoreName: '',
   });
+  // Every store, for the Store Manager assignment picker. A Platform Admin
+  // opens stores and assigns managers to them; see firestore.rules
+  // /stores and storeAssignmentIsValid().
+  const [stores, setStores] = useState([]);
   // Tracks which single user's activate/deactivate write is in flight, so
   // one row updating doesn't disable every other row's action button too.
   const [togglingUserId, setTogglingUserId] = useState(null);
@@ -142,6 +157,7 @@ export default function AdminUsersScreen({ navigation }) {
             name: data.name || 'Unnamed User',
             email: data.email || '—',
             role: data.role || 'customer',
+            storeId: typeof data.storeId === 'string' ? data.storeId : null,
             isActive: data.isActive !== false,
             createdAt: data.createdAt || null,
           };
@@ -160,6 +176,27 @@ export default function AdminUsersScreen({ navigation }) {
 
     return () => unsubscribe();
   }, [retryToken]);
+
+  // Separate from the users listener so a stores failure can't blank the
+  // user list. On error the picker just shows no existing stores, and a
+  // new one can still be opened from the same form.
+  useEffect(() => {
+    const unsubscribe = onSnapshot(
+      collection(db, 'stores'),
+      (snapshot) => {
+        const list = snapshot.docs.map((docSnap) => ({
+          id: docSnap.id,
+          name: docSnap.data().name || 'Unnamed store',
+        }));
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        setStores(list);
+      },
+      (error) => console.error('Error fetching stores:', error)
+    );
+    return () => unsubscribe();
+  }, [retryToken]);
+
+  const storeName = (storeId) => stores.find((st) => st.id === storeId)?.name || null;
 
   const handleRetry = () => setRetryToken((t) => t + 1);
 
@@ -234,6 +271,8 @@ export default function AdminUsersScreen({ navigation }) {
     setSelectedUser(user);
     setEditFormData({
       role: user.role,
+      storeId: user.storeId,
+      newStoreName: '',
     });
     setShowEditModal(true);
   };
@@ -251,14 +290,35 @@ export default function AdminUsersScreen({ navigation }) {
     setUpdating(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      // Field-scoped update — only "role" is sent, matching the
-      // hasOnly(['role', 'isActive']) allowlist in firestore.rules for the
-      // platformAdmin branch. Name is edited by the account owner from
-      // their own Profile screen, not here.
+      // Field-scoped update — only "role" and "storeId" are sent,
+      // matching the hasOnly(['role', 'isActive', 'storeId']) allowlist in
+      // firestore.rules for the platformAdmin branch. Name is edited by the
+      // account owner from their own Profile screen, not here.
+      //
+      // A Store Manager must name a store in the same write, and anyone
+      // else must carry none (storeAssignmentIsValid). Opening a new store
+      // rides in the same batch, so a store is never created without the
+      // manager it was opened for, nor a manager assigned to a store that
+      // failed to be created.
       const previousRole = selectedUser.role;
-      await updateDoc(doc(db, 'users', selectedUser.id), {
+      const becomingSeller = editFormData.role === ROLE_SELLER;
+      const batch = writeBatch(db);
+      let assignedStoreId = null;
+      let assignedStoreName = null;
+      if (becomingSeller && editFormData.storeId === NEW_STORE) {
+        const storeRef = doc(collection(db, 'stores'));
+        assignedStoreName = editFormData.newStoreName.trim();
+        batch.set(storeRef, { name: assignedStoreName, createdAt: serverTimestamp() });
+        assignedStoreId = storeRef.id;
+      } else if (becomingSeller) {
+        assignedStoreId = editFormData.storeId;
+        assignedStoreName = storeName(assignedStoreId);
+      }
+      batch.update(doc(db, 'users', selectedUser.id), {
         role: editFormData.role,
+        storeId: assignedStoreId ?? deleteField(),
       });
+      await batch.commit();
       // Granting or revoking staff access is the single most consequential
       // action this screen performs, so it's the one the log most needs to
       // carry — including what the role was before.
@@ -266,9 +326,14 @@ export default function AdminUsersScreen({ navigation }) {
         action: ACTIONS.USER_ROLE,
         targetId: selectedUser.id,
         targetLabel: selectedUser.name,
+        // A manager moved between stores keeps their role, so that case
+        // names the move rather than logging "Store Manager → Store Manager".
         summary:
-          `${selectedUser.name} — role ${getRoleLabel(previousRole)} → ` +
-          `${getRoleLabel(editFormData.role)}`,
+          previousRole === editFormData.role && assignedStoreName
+            ? `${selectedUser.name} — now runs ${assignedStoreName}`
+            : `${selectedUser.name} — role ${getRoleLabel(previousRole)} → ` +
+              `${getRoleLabel(editFormData.role)}` +
+              (assignedStoreName ? ` at ${assignedStoreName}` : ''),
       });
       setShowEditModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -413,6 +478,12 @@ export default function AdminUsersScreen({ navigation }) {
   // comment above the picker for why this defensive check exists even
   // though the modal's entry points are already gated.
   const editingSelf = selectedUser ? isSelf(selectedUser.id) : false;
+  // A Store Manager needs a store before Save means anything — the rules
+  // refuse the promotion without one, so the button waits for it instead.
+  const needsStore =
+    editFormData.role === ROLE_SELLER &&
+    (!editFormData.storeId ||
+      (editFormData.storeId === NEW_STORE && !editFormData.newStoreName.trim()));
   // Decides both the header control's behavior and what it looks like —
   // see handleBackPress above.
   const canGoBack = navigation.canGoBack();
@@ -666,6 +737,14 @@ export default function AdminUsersScreen({ navigation }) {
                           {user.email}
                         </Text>
                       </View>
+                      {user.role === ROLE_SELLER && (
+                        <View style={styles.userEmailRow}>
+                          <Ionicons name="storefront-outline" size={12} color={Colors.light.icon} />
+                          <Text style={styles.userEmail} numberOfLines={1} ellipsizeMode="tail">
+                            {storeName(user.storeId) || 'No store assigned'}
+                          </Text>
+                        </View>
+                      )}
                       {selfRow && (
                         <Text style={styles.selfRowHint}>
                           This is you — role and status can&apos;t be changed here
@@ -797,6 +876,15 @@ export default function AdminUsersScreen({ navigation }) {
                     </Text>
                   </View>
                 </View>
+
+                {selectedUser.role === ROLE_SELLER && (
+                  <View style={styles.modalInfoRow}>
+                    <Text style={styles.modalInfoLabel}>Store:</Text>
+                    <Text style={styles.modalInfoValue}>
+                      {storeName(selectedUser.storeId) || 'No store assigned'}
+                    </Text>
+                  </View>
+                )}
 
                 <View style={styles.modalInfoRow}>
                   <Text style={styles.modalInfoLabel}>Status:</Text>
@@ -982,6 +1070,65 @@ export default function AdminUsersScreen({ navigation }) {
                 </View>
               </View>
 
+              {/* Only a Store Manager runs a store, so the picker appears
+                  only for that role. Same stacked-option pattern as the
+                  role picker above, with "Open a new store" as the last
+                  option rather than a separate screen: opening a store is
+                  only ever done in order to put someone in charge of it. */}
+              {editFormData.role === ROLE_SELLER && !editingSelf && (
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Store</Text>
+                  <View style={styles.roleSelector}>
+                    {[...stores, { id: NEW_STORE, name: 'Open a new store' }].map((store) => {
+                      const active = editFormData.storeId === store.id;
+                      const isNew = store.id === NEW_STORE;
+                      return (
+                        <AnimatedPressable
+                          key={store.id}
+                          style={[styles.roleOption, active && styles.roleOptionActive]}
+                          onPress={() => {
+                            Haptics.selectionAsync();
+                            setEditFormData({ ...editFormData, storeId: store.id });
+                          }}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: active }}
+                          accessibilityLabel={isNew ? 'Open a new store' : `${store.name} store`}
+                        >
+                          <View style={styles.roleOptionCheck}>
+                            <Ionicons
+                              name={isNew ? 'add-circle-outline' : active ? 'radio-button-on' : 'radio-button-off'}
+                              size={18}
+                              color={active ? Colors.light.tint : Colors.light.icon}
+                            />
+                          </View>
+                          <View style={styles.roleOptionCopy}>
+                            <Text style={[styles.roleOptionText, active && styles.roleOptionTextActive]}>
+                              {store.name}
+                            </Text>
+                          </View>
+                        </AnimatedPressable>
+                      );
+                    })}
+                  </View>
+                  {editFormData.storeId === NEW_STORE && (
+                    <TextInput
+                      style={[styles.input, styles.newStoreInput]}
+                      value={editFormData.newStoreName}
+                      onChangeText={(text) => setEditFormData({ ...editFormData, newStoreName: text })}
+                      placeholder="Store name, e.g. Ukay ni Lola"
+                      placeholderTextColor={Colors.light.icon}
+                      maxLength={STORE_NAME_MAX}
+                      autoFocus
+                      accessibilityLabel="New store name"
+                    />
+                  )}
+                  <Text style={styles.inputHint}>
+                    A Store Manager can only change their own store&apos;s products.
+                    Stores can be renamed later but not deleted.
+                  </Text>
+                </View>
+              )}
+
               <View style={styles.editModalButtons}>
                 <DialogButtonRow
                   buttons={[
@@ -996,7 +1143,7 @@ export default function AdminUsersScreen({ navigation }) {
                       variant: 'primary',
                       onPress: handleUpdateUser,
                       loading: updating,
-                      disabled: updating || !isConnected || editingSelf,
+                      disabled: updating || !isConnected || editingSelf || needsStore,
                     },
                   ]}
                 />
@@ -1401,6 +1548,9 @@ const styles = StyleSheet.create({
   disabledInputText: {
     fontSize: 14,
     color: Colors.light.icon,
+  },
+  newStoreInput: {
+    marginTop: Spacing.sm,
   },
   inputHint: {
     fontSize: 11,

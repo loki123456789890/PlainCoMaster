@@ -509,13 +509,21 @@ before respondents used it.
 The order below matters: each step leaves the app working, and the risky
 one comes after the boundary it depends on is solid.
 
-- [ ] `stores/{storeId}`; `products.storeId`; `users/{uid}.storeId` for
+- [x] `stores/{storeId}`; `products.storeId`; `users/{uid}.storeId` for
       sellers. A Platform Admin assigns a manager to a store, which is
       the model ROLES.md already uses — access granted, never
-      self-registered.
-- [ ] Rules ownership: `isSeller()` becomes "manages THIS product's
-      store". Security-critical, and where much of the 83-test rules
-      suite gets revisited.
+      self-registered. *(branch `feature/multi-store`: Edit User has a
+      store picker that can open a new store in the same batch;
+      `scripts/migrate-to-stores.mjs` assigns pre-store products and
+      managers, rehearsed on the emulator.)*
+- [x] Rules ownership for **products**: `managesStore()` replaces
+      `isSeller()` on product create/update/delete, storeId is immutable,
+      and the cancellation stock restore is per-store as a result. Rules
+      suite 83 → 99. Orders, support, reviews and logs are still
+      any-manager; they follow from the order split below.
+- [ ] Before this branch ships: run the migration against production
+      (after the UAT), THEN deploy rules — in that order, or the live
+      catalogue is frozen between the two.
 - [ ] Order splitting in `placeOrder`: one checkout writes one order per
       store, in the same transaction. The riskiest step — two managers
       sharing one status field means neither owns it — so it lands after

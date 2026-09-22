@@ -13,6 +13,7 @@ import {
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebaseConfig';
 import { logStoreActivity, ACTIONS } from '../utils/activityLog';
+import { useAdmin } from './AdminContext';
 
 const ProductContext = createContext();
 
@@ -67,6 +68,11 @@ function diffChangedKeys(previous, updatedData) {
 }
 
 export const ProductProvider = ({ children }) => {
+  // The signed-in Store Manager's store. Every new product is stamped with
+  // it, and firestore.rules refuses a create whose storeId is not the
+  // caller's own, so it is taken from AdminContext (the manager's own user
+  // document) rather than from anything a screen passes in.
+  const { storeId } = useAdmin();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -140,6 +146,11 @@ export const ProductProvider = ({ children }) => {
   const retryFetchProducts = () => setRetryToken((t) => t + 1);
 
   const addProduct = async (productData) => {
+    // Refused here with a sentence a manager can act on, rather than
+    // sent to the rules to come back as "insufficient permissions".
+    if (!storeId) {
+      return { success: false, error: 'NO_STORE' };
+    }
     try {
       const docData = {
         name: productData.name,
@@ -151,6 +162,7 @@ export const ProductProvider = ({ children }) => {
         colors: productData.colors || [],
         sizes: productData.sizes || [],
         createdAt: serverTimestamp(),
+        storeId,
       };
       // Optional per-size measurement guide — omitted entirely (rather than
       // written as undefined, which addDoc rejects) when the admin didn't
