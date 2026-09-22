@@ -7,6 +7,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AdminProvider } from './context/AdminContext';
 import { ProductProvider } from './context/ProductContext';
+import { StoreProvider } from './context/StoreContext';
 import { FavoritesProvider } from './context/FavoritesContext';
 import { CartProvider } from './context/CartContext';
 import withRoleGuard from './components/withRoleGuard';
@@ -87,85 +88,87 @@ export default function App() {
     <SafeAreaProvider>
       <AdminProvider>
         <ProductProvider>
-          <FavoritesProvider>
-            <CartProvider>
-              {/* ref lets AdminContext bounce a deactivated account back
-                  to Landing — it sits above this container and has no
-                  navigation prop of its own. See navigationRef.js. */}
-              <NavigationContainer ref={navigationRef}>
-                <Stack.Navigator
-                  initialRouteName="Landing"
-                  screenOptions={{
-                    headerShown: false,
-                    animation: 'slide_from_right',
-                  }}
-                >
-                  {/* Landing Screen */}
-                  <Stack.Screen name="Landing" component={LandingScreen} />
+          <StoreProvider>
+            <FavoritesProvider>
+              <CartProvider>
+                {/* ref lets AdminContext bounce a deactivated account back
+                    to Landing — it sits above this container and has no
+                    navigation prop of its own. See navigationRef.js. */}
+                <NavigationContainer ref={navigationRef}>
+                  <Stack.Navigator
+                    initialRouteName="Landing"
+                    screenOptions={{
+                      headerShown: false,
+                      animation: 'slide_from_right',
+                    }}
+                  >
+                    {/* Landing Screen */}
+                    <Stack.Screen name="Landing" component={LandingScreen} />
 
-                  {/* iPhone 16 Pro Max - 1 */}
-                  <Stack.Screen name="Home" component={HomeScreen} />
+                    {/* iPhone 16 Pro Max - 1 */}
+                    <Stack.Screen name="Home" component={HomeScreen} />
 
-                  {/* iPhone 16 Pro Max - 7 */}
-                  <Stack.Screen name="Login" component={LoginScreen} />
+                    {/* iPhone 16 Pro Max - 7 */}
+                    <Stack.Screen name="Login" component={LoginScreen} />
 
-                  {/* iPhone 16 Pro Max - 6 */}
-                  <Stack.Screen name="Signup" component={SignupScreen} />
+                    {/* iPhone 16 Pro Max - 6 */}
+                    <Stack.Screen name="Signup" component={SignupScreen} />
 
-                  {/* New Forgot Password Screen */}
-                  <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+                    {/* New Forgot Password Screen */}
+                    <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
 
-                  {/* iPhone 16 Pro Max - 14 */}
-                  <Stack.Screen name="Shop" component={ShopScreen} />
+                    {/* iPhone 16 Pro Max - 14 */}
+                    <Stack.Screen name="Shop" component={ShopScreen} />
 
-                  {/* iPhone 16 Pro Max - 16 & 18 */}
-                  <Stack.Screen name="Product" component={ProductScreen} />
+                    {/* iPhone 16 Pro Max - 16 & 18 */}
+                    <Stack.Screen name="Product" component={ProductScreen} />
 
-                  {/* iPhone 16 Pro Max - 24 & 25 */}
-                  <Stack.Screen name="Cart" component={CartScreen} />
+                    {/* iPhone 16 Pro Max - 24 & 25 */}
+                    <Stack.Screen name="Cart" component={CartScreen} />
 
-                  {/* iPhone 16 Pro Max - 17 */}
-                  <Stack.Screen name="Checkout" component={CheckoutScreen} />
+                    {/* iPhone 16 Pro Max - 17 */}
+                    <Stack.Screen name="Checkout" component={CheckoutScreen} />
 
-                  {/* The simulated payment step. Reached only from Checkout,
-                      and only for the online methods — COD never opens it. */}
-                  <Stack.Screen name="SandboxPayment" component={SandboxPaymentScreen} />
+                    {/* The simulated payment step. Reached only from Checkout,
+                        and only for the online methods — COD never opens it. */}
+                    <Stack.Screen name="SandboxPayment" component={SandboxPaymentScreen} />
 
-                  {/* iPhone 16 Pro Max - 13 */}
-                  <Stack.Screen name="Profile" component={ProfileScreen} />
+                    {/* iPhone 16 Pro Max - 13 */}
+                    <Stack.Screen name="Profile" component={ProfileScreen} />
 
-                  {/* iPhone 16 Pro Max - 9 */}
-                  <Stack.Screen name="Favorites" component={FavoritesScreen} />
+                    {/* iPhone 16 Pro Max - 9 */}
+                    <Stack.Screen name="Favorites" component={FavoritesScreen} />
 
-                  {/* New Screens for Shop Menu */}
-                  <Stack.Screen name="Location" component={LocationScreen} />
-                  <Stack.Screen name="Help" component={HelpScreen} />
-                  <Stack.Screen name="Orders" component={OrdersScreen} />
-                  <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} />
-                  {/* Reached by resetting the stack from Checkout, never
-                      pushed — see the reset in Checkoutscreen for why the
-                      back gesture must not return into a checkout whose
-                      order has already been placed. */}
-                  <Stack.Screen name="OrderConfirmation" component={OrderConfirmationScreen} />
-                  <Stack.Screen name="WriteReview" component={WriteReviewScreen} />
+                    {/* New Screens for Shop Menu */}
+                    <Stack.Screen name="Location" component={LocationScreen} />
+                    <Stack.Screen name="Help" component={HelpScreen} />
+                    <Stack.Screen name="Orders" component={OrdersScreen} />
+                    <Stack.Screen name="OrderDetails" component={OrderDetailsScreen} />
+                    {/* Reached by resetting the stack from Checkout, never
+                        pushed — see the reset in Checkoutscreen for why the
+                        back gesture must not return into a checkout whose
+                        order has already been placed. */}
+                    <Stack.Screen name="OrderConfirmation" component={OrderConfirmationScreen} />
+                    <Stack.Screen name="WriteReview" component={WriteReviewScreen} />
 
-                  {/* Admin Screens */}
-                  <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
-                  <Stack.Screen name="AdminDashboard" component={GuardedStoreManagerDashboard} />
-                  <Stack.Screen name="AdminProducts" component={GuardedAdminProductsScreen} />
-                  <Stack.Screen name="AdminAddProduct" component={GuardedAdminAddProductScreen} />
-                  <Stack.Screen name="AdminEditProduct" component={GuardedAdminEditProductScreen} />
-                  <Stack.Screen name="AdminOrders" component={GuardedAdminOrdersScreen} />
-                  <Stack.Screen name="AdminUsers" component={GuardedAdminUsersScreen} />
-                  <Stack.Screen name="AdminSupport" component={GuardedAdminSupportScreen} />
-                  <Stack.Screen name="AdminReviews" component={GuardedAdminReviewsScreen} />
-                  <Stack.Screen name="AdminActivity" component={GuardedAdminActivityScreen} />
-                  <Stack.Screen name="AdminMailLog" component={GuardedAdminMailLogScreen} />
-                </Stack.Navigator>
-              </NavigationContainer>
-              <AppAlertHost />
-            </CartProvider>
-          </FavoritesProvider>
+                    {/* Admin Screens */}
+                    <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
+                    <Stack.Screen name="AdminDashboard" component={GuardedStoreManagerDashboard} />
+                    <Stack.Screen name="AdminProducts" component={GuardedAdminProductsScreen} />
+                    <Stack.Screen name="AdminAddProduct" component={GuardedAdminAddProductScreen} />
+                    <Stack.Screen name="AdminEditProduct" component={GuardedAdminEditProductScreen} />
+                    <Stack.Screen name="AdminOrders" component={GuardedAdminOrdersScreen} />
+                    <Stack.Screen name="AdminUsers" component={GuardedAdminUsersScreen} />
+                    <Stack.Screen name="AdminSupport" component={GuardedAdminSupportScreen} />
+                    <Stack.Screen name="AdminReviews" component={GuardedAdminReviewsScreen} />
+                    <Stack.Screen name="AdminActivity" component={GuardedAdminActivityScreen} />
+                    <Stack.Screen name="AdminMailLog" component={GuardedAdminMailLogScreen} />
+                  </Stack.Navigator>
+                </NavigationContainer>
+                <AppAlertHost />
+              </CartProvider>
+            </FavoritesProvider>
+          </StoreProvider>
         </ProductProvider>
       </AdminProvider>
     </SafeAreaProvider>

@@ -76,6 +76,10 @@ their own store's products (`managesStore()`).
   the Admin SDK because giving an existing product a store is exactly the
   write the rules forbid clients to make.
 
+Shoppers see the stores too: the Shop has a "Shop by store" row, each
+store has its own page (the Shop narrowed to that store), and every
+product page names the store that sells it.
+
 A cart holding products from several stores checks out as **one order
 per store** (`placeOrder`), and only that store's manager may move an
 order's status or cancel it.

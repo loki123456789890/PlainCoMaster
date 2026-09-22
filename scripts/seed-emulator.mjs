@@ -134,8 +134,8 @@ await writeDoc(`users/${uid}`, {
 });
 
 const PRODUCTS = [
-  { id: 'sandbox-jacket', name: 'Denim Jacket', price: 850, stock: 10, type: 'ukay' },
-  { id: 'sandbox-coat', name: 'Wool Overcoat', price: 1200, stock: 4, type: 'ready', storeId: OTHER_STORE_ID },
+  { id: 'sandbox-jacket', name: 'Denim Jacket', price: 850, stock: 10, type: 'ukay-ukay' },
+  { id: 'sandbox-coat', name: 'Wool Overcoat', price: 1200, stock: 4, type: 'ready-to-wear', storeId: OTHER_STORE_ID },
 ];
 
 for (const p of PRODUCTS) {

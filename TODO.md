@@ -557,7 +557,15 @@ one comes after the boundary it depends on is solid.
       the store is its store; the mail log and retryMail follow the same
       routing. Rules 109 → 114, email 19 → 20. Driven in the web build
       with the functions emulator OFF, so no real email was sent.
-- [ ] Store pages in Shop: browse by store, store profile.
+- [x] Store pages in Shop: browse by store, store profile. Shop gains a
+      "Shop by store" row (stores with at least one item) and a store
+      line on each card; a store's page is the Shop narrowed to it, with
+      a profile of what it sells (read off its own listings) and when it
+      opened. Product pages say "Sold by <store>" and link there. Store
+      names come from a new StoreContext. The emulator seed's product
+      types were 'ukay'/'ready', which no screen matches — now the real
+      'ukay-ukay'/'ready-to-wear'. No rules change: /stores was already
+      readable by any signed-in account. Driven in the web build.
 - [ ] THEN seller ratings become meaningful — the thing the panellist
       actually asked for in §9, refused at the time because one seller
       is one number with nothing to compare it against.

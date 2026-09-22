@@ -24,6 +24,7 @@ import { onSnapshot, getDocs } from 'firebase/firestore';
 import { useFavorites } from '../context/FavoritesContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
+import { useStores } from '../context/StoreContext';
 import { auth } from '../firebaseConfig';
 import { COLOR_PALETTE, DEFAULT_COLORS, DEFAULT_SIZES } from '../constants/productOptions';
 import { Colors, Radius } from '../constants/theme';
@@ -121,6 +122,8 @@ export default function ProductScreen({ navigation, route }) {
     !liveProduct;
 
   const product = liveProduct || routeProduct;
+  const { getStore } = useStores();
+  const store = getStore(product?.storeId);
 
   // Legacy fallback: products saved before per-product colors/sizes
   // existed have no such array on their doc (or an admin left it empty),
@@ -555,6 +558,28 @@ export default function ProductScreen({ navigation, route }) {
             />
           </View>
 
+          {/* Who sells it. A multi-store cart checks out as one order per
+              store, so the shopper should know the store before buying, and
+              can open its page to see what else it has. Left out when the
+              store can't be named (a product from before stores, or the
+              store list failed to load) rather than showing a blank. */}
+          {store && (
+            <AnimatedPressable
+              style={styles.soldByRow}
+              onPress={() => navigation.push('Shop', { storeId: store.id })}
+              rippleColor={Colors.light.border}
+              accessibilityRole="button"
+              accessibilityLabel={`Sold by ${store.name}. Open store`}
+            >
+              <Ionicons name="storefront-outline" size={18} color={Colors.light.tint} />
+              <Text style={styles.soldByText} numberOfLines={1}>
+                Sold by <Text style={styles.soldByName}>{store.name}</Text>
+              </Text>
+              <Text style={styles.soldByLink}>View store</Text>
+              <Ionicons name="chevron-forward" size={14} color={Colors.light.tint} />
+            </AnimatedPressable>
+          )}
+
           {/* Stock Status */}
           {isOutOfStock ? (
             <View style={styles.stockBadgeRow}>
@@ -850,6 +875,20 @@ const styles = StyleSheet.create({
   productName: { fontSize: 24, fontWeight: '700', color: Colors.light.text, marginBottom: 8 },
   productPrice: { fontSize: 22, fontWeight: '700', color: Colors.light.highlight, marginBottom: 24 },
   typeBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginBottom: 12 },
+  soldByRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  soldByText: { flex: 1, fontSize: 14, color: Colors.light.icon },
+  soldByName: { fontWeight: '600', color: Colors.light.text },
+  soldByLink: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
   stockBadgeRow: { alignSelf: 'flex-start', marginBottom: 16 },
   sectionTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text, marginBottom: 16 },
   descriptionText: { fontSize: 15, color: Colors.light.icon, lineHeight: 22, marginBottom: 24 },

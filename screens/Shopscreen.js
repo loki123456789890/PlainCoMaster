@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Platform,
   TextInput,
   RefreshControl,
+  ScrollView,
 } from 'react-native';
 import { showAppAlert } from '../utils/appAlert';
 import Animated, {
@@ -24,6 +25,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { auth } from '../firebaseConfig';
 import { useProducts } from '../context/ProductContext';
+import { useStores } from '../context/StoreContext';
 import { useCart } from '../context/CartContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
@@ -107,7 +109,10 @@ function ProductGridSkeleton() {
 // stable identity for each card across re-renders — otherwise every
 // keystroke in search or filter tap would remount the whole grid, losing
 // each card's imageFailed state and re-triggering entrance animations.
-function ProductCard({ item, index, favorited, onPress, onToggleFavorite }) {
+//
+// `storeName` is passed only in the all-stores view. On a store's own page
+// every card would repeat the name in the header, so it is left off there.
+function ProductCard({ item, index, favorited, storeName, onPress, onToggleFavorite }) {
   const reduceMotion = useReducedMotion();
   const [imageFailed, setImageFailed] = useState(false);
   const isUkay = item.type === 'ukay-ukay';
@@ -156,6 +161,9 @@ function ProductCard({ item, index, favorited, onPress, onToggleFavorite }) {
             />
           </View>
           <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
+          {storeName ? (
+            <Text style={styles.productStore} numberOfLines={1}>{storeName}</Text>
+          ) : null}
           <Text style={styles.productPrice}>₱{item.price}</Text>
         </Card>
       </AnimatedPressable>
@@ -167,6 +175,14 @@ export default function ShopScreen({ navigation, route }) {
   const { products, loading, error, retryFetchProducts } = useProducts();
   const { cartCount } = useCart();
   const { isFavorite, toggleFavorite } = useFavorites();
+  const { stores, getStore } = useStores();
+  // One screen, two views. Without a storeId this is the whole shop; with
+  // one it is that store's page, pushed on top from the "Shop by store"
+  // row or a product's "Sold by" line. Same grid, search and filters
+  // either way, so a store page is the Shop narrowed rather than a second
+  // catalogue to keep in step.
+  const storeId = route.params?.storeId || null;
+  const store = getStore(storeId);
   const [activeFilter, setActiveFilter] = useState(route.params?.filterType || 'all');
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -232,8 +248,32 @@ export default function ShopScreen({ navigation, route }) {
   // selected. Filters over the already-fetched in-memory `products` list
   // from ProductContext, same as AdminUsersScreen filters its own
   // already-fetched `users` array — no new Firestore query.
+  const scopedProducts = useMemo(
+    () => (storeId ? products.filter((p) => p.storeId === storeId) : products),
+    [products, storeId]
+  );
+
+  // Items per store, for the "Shop by store" row. A store with nothing
+  // listed is left out of the row: a card that leads to an empty page is
+  // a dead end, and the store will appear once it lists something.
+  const storeCounts = useMemo(() => {
+    const counts = {};
+    products.forEach((p) => {
+      if (p.storeId) counts[p.storeId] = (counts[p.storeId] || 0) + 1;
+    });
+    return counts;
+  }, [products]);
+  const browsableStores = stores.filter((s) => storeCounts[s.id] > 0);
+
+  // What the store actually sells, read off its listings rather than
+  // declared anywhere, so it cannot claim a category it has no items in.
+  const storeSells = [
+    scopedProducts.some((p) => p.type === 'ukay-ukay') && 'Ukay-Ukay',
+    scopedProducts.some((p) => p.type === 'ready-to-wear') && 'Ready-to-Wear',
+  ].filter(Boolean);
+
   const query = searchQuery.trim().toLowerCase();
-  const filteredProducts = products
+  const filteredProducts = scopedProducts
     .filter((p) => activeFilter === 'all' || p.type === activeFilter)
     .filter((p) => {
       if (!query) return true;
@@ -242,6 +282,8 @@ export default function ShopScreen({ navigation, route }) {
         p.type?.toLowerCase().includes(query)
       );
     });
+
+  const headerTitle = storeId ? store?.name || 'Store' : 'Shop';
 
   const renderCartIcon = () => (
     <View style={styles.cartIconWrapper}>
@@ -259,6 +301,7 @@ export default function ShopScreen({ navigation, route }) {
       item={item}
       index={index}
       favorited={isFavorite(item.id)}
+      storeName={storeId ? null : getStore(item.storeId)?.name}
       onPress={() => navigation.navigate('Product', { product: item })}
       onToggleFavorite={() => handleToggleFavorite(item)}
     />
@@ -269,44 +312,89 @@ export default function ShopScreen({ navigation, route }) {
       {/* Store identity — real catalog info (name, item count, scope), not
           fabricated ratings/reviews. Trust here comes from consistency and
           honesty, matching DESIGN.md's "Trust reads through consistency,
-          not badges" principle, not from Shopee-style seller theater. */}
+          not badges" principle, not from Shopee-style seller theater. On a
+          store's page it is that store's profile: what it sells, counted
+          from its own listings, and how long it has been on PlainCo. */}
       <View style={styles.storeStrip}>
         <View style={styles.storeIconWrap}>
           <Ionicons name="storefront-outline" size={18} color={Colors.light.tint} />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.storeName}>PlainCo</Text>
+          <Text style={styles.storeName}>{storeId ? store?.name || 'Store' : 'PlainCo'}</Text>
           <Text style={styles.storeMeta}>
-            {products.length} {products.length === 1 ? 'item' : 'items'} · Ukay-Ukay &amp; Ready-to-Wear
+            {scopedProducts.length} {scopedProducts.length === 1 ? 'item' : 'items'}
+            {storeId
+              ? storeSells.length > 0 ? ` · ${storeSells.join(' & ')}` : ''
+              : ` from ${browsableStores.length} ${browsableStores.length === 1 ? 'store' : 'stores'} · Ukay-Ukay & Ready-to-Wear`}
           </Text>
+          {storeId && store?.createdAt ? (
+            <Text style={styles.storeMeta}>
+              On PlainCo since {store.createdAt.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })}
+            </Text>
+          ) : null}
         </View>
       </View>
 
-      <View style={styles.menuRow}>
-        {menuItems.map((item, index) => (
-          <AnimatedPressable
-            key={index}
-            style={styles.menuButton}
-            onPress={() => navigation.navigate(item.label)}
-            rippleColor={Colors.light.border}
-            accessibilityRole="button"
-            accessibilityLabel={item.label}
+      {!storeId && browsableStores.length > 0 && (
+        <>
+          <Text style={styles.storesTitle}>Shop by store</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.storesRow}
           >
-            <Ionicons name={item.icon} size={16} color={item.color} />
-            <Text style={styles.menuButtonLabel}>{item.label}</Text>
-          </AnimatedPressable>
-        ))}
-      </View>
+            {browsableStores.map((s) => (
+              <AnimatedPressable
+                key={s.id}
+                style={styles.storeCard}
+                onPress={() => navigation.push('Shop', { storeId: s.id })}
+                rippleColor={Colors.light.border}
+                accessibilityRole="button"
+                accessibilityLabel={`${s.name}, ${storeCounts[s.id]} ${storeCounts[s.id] === 1 ? 'item' : 'items'}`}
+              >
+                <Ionicons name="storefront-outline" size={16} color={Colors.light.tint} />
+                <View style={styles.storeCardText}>
+                  <Text style={styles.storeCardName} numberOfLines={1}>{s.name}</Text>
+                  <Text style={styles.storeCardMeta}>
+                    {storeCounts[s.id]} {storeCounts[s.id] === 1 ? 'item' : 'items'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={14} color={Colors.light.icon} />
+              </AnimatedPressable>
+            ))}
+          </ScrollView>
+        </>
+      )}
 
-      <View style={styles.searchContainer}>
+      {/* Location and Help are about the shopper's account, not a store,
+          so a store's page leaves them to the Shop it was opened from. */}
+      {!storeId && (
+        <View style={styles.menuRow}>
+          {menuItems.map((item, index) => (
+            <AnimatedPressable
+              key={index}
+              style={styles.menuButton}
+              onPress={() => navigation.navigate(item.label)}
+              rippleColor={Colors.light.border}
+              accessibilityRole="button"
+              accessibilityLabel={item.label}
+            >
+              <Ionicons name={item.icon} size={16} color={item.color} />
+              <Text style={styles.menuButtonLabel}>{item.label}</Text>
+            </AnimatedPressable>
+          ))}
+        </View>
+      )}
+
+      <View style={[styles.searchContainer, storeId && styles.searchContainerStore]}>
         <Ionicons name="search-outline" size={20} color={Colors.light.icon} style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search products..."
+          placeholder={storeId ? 'Search this store...' : 'Search products...'}
           placeholderTextColor={Colors.light.icon}
           value={searchQuery}
           onChangeText={setSearchQuery}
-          accessibilityLabel="Search products"
+          accessibilityLabel={storeId ? 'Search this store' : 'Search products'}
         />
         {searchQuery.length > 0 && (
           <TouchableOpacity
@@ -320,26 +408,30 @@ export default function ShopScreen({ navigation, route }) {
         )}
       </View>
 
-      <View style={styles.filterRow}>
-        {filterTabs.map((tab) => {
-          const isActive = activeFilter === tab.key;
-          return (
-            <AnimatedPressable
-              key={tab.key}
-              style={[styles.filterChip, isActive && styles.filterChipActive]}
-              onPress={() => handleSelectFilter(tab.key)}
-              rippleColor={isActive ? 'rgba(255,255,255,0.3)' : Colors.light.border}
-              accessibilityRole="button"
-              accessibilityLabel={`Filter by ${tab.label}`}
-              accessibilityState={{ selected: isActive }}
-            >
-              <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
-                {tab.label}
-              </Text>
-            </AnimatedPressable>
-          );
-        })}
-      </View>
+      {/* A store that sells only one kind has nothing to filter between:
+          the other tab could only ever come up empty. */}
+      {(!storeId || storeSells.length > 1) && (
+        <View style={styles.filterRow}>
+          {filterTabs.map((tab) => {
+            const isActive = activeFilter === tab.key;
+            return (
+              <AnimatedPressable
+                key={tab.key}
+                style={[styles.filterChip, isActive && styles.filterChipActive]}
+                onPress={() => handleSelectFilter(tab.key)}
+                rippleColor={isActive ? 'rgba(255,255,255,0.3)' : Colors.light.border}
+                accessibilityRole="button"
+                accessibilityLabel={`Filter by ${tab.label}`}
+                accessibilityState={{ selected: isActive }}
+              >
+                <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
+                  {tab.label}
+                </Text>
+              </AnimatedPressable>
+            );
+          })}
+        </View>
+      )}
     </>
   );
 
@@ -356,7 +448,7 @@ export default function ShopScreen({ navigation, route }) {
           >
             <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Shop</Text>
+          <Text style={styles.headerTitle} numberOfLines={1}>{headerTitle}</Text>
           <TouchableOpacity
             onPress={() => navigation.navigate('Cart')}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -383,7 +475,7 @@ export default function ShopScreen({ navigation, route }) {
         >
           <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Shop</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{headerTitle}</Text>
         <TouchableOpacity
           onPress={() => navigation.navigate('Cart')}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -431,7 +523,7 @@ export default function ShopScreen({ navigation, route }) {
                   query
                     ? 'No products found'
                     : activeFilter === 'all'
-                    ? 'No products available'
+                    ? storeId ? 'This store has no items yet' : 'No products available'
                     : 'No products in this category yet'
                 }
                 subtitle={query ? 'Try a different search term' : undefined}
@@ -502,6 +594,32 @@ const styles = StyleSheet.create({
   storeName: { fontSize: 15, fontWeight: '700', color: Colors.light.text },
   storeMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
 
+  storesTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.light.icon,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  storesRow: { paddingHorizontal: 20, gap: 10 },
+  storeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    maxWidth: 220,
+  },
+  storeCardText: { flexShrink: 1 },
+  storeCardName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
+  storeCardMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
+
   menuRow: {
     flexDirection: 'row',
     paddingHorizontal: 20,
@@ -533,6 +651,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
+  // Without the Location/Help row above it, the search bar needs its own
+  // breathing room under the store profile.
+  searchContainerStore: { marginTop: 16 },
   searchIcon: {
     marginRight: 8,
   },
@@ -587,6 +708,7 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   productName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 4, lineHeight: 18, height: 36 },
+  productStore: { fontSize: 12, color: Colors.light.icon, marginBottom: 4 },
   productPrice: { fontSize: 16, fontWeight: '700', color: Colors.light.highlight },
 
   // Loading skeleton — shaped like the real 2-column grid.
