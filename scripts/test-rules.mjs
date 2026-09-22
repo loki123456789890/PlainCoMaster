@@ -37,6 +37,7 @@ import {
   writeBatch,
   runTransaction,
   serverTimestamp,
+  deleteField,
   setLogLevel,
 } from 'firebase/firestore';
 
@@ -91,8 +92,21 @@ async function seed() {
     await setDoc(doc(db, 'users/customer2'), {
       uid: 'customer2', name: 'Carl Customer', email: 'carl@example.com',
     });
+    // Two stores, one manager each, so every ownership rule has a real
+    // "other store" to be refused against rather than a missing one.
+    await setDoc(doc(db, 'stores/store1'), { name: 'Tindahan ni Sam', createdAt: new Date() });
+    await setDoc(doc(db, 'stores/store2'), { name: 'Ria RTW', createdAt: new Date() });
     await setDoc(doc(db, 'users/seller1'), {
       uid: 'seller1', name: 'Sam Manager', email: 'sam@example.com',
+      role: 'seller', isActive: true, storeId: 'store1',
+    });
+    await setDoc(doc(db, 'users/seller2'), {
+      uid: 'seller2', name: 'Ria Manager', email: 'ria@example.com',
+      role: 'seller', isActive: true, storeId: 'store2',
+    });
+    // Promoted before stores existed: still a seller, assigned to nothing.
+    await setDoc(doc(db, 'users/unassignedSeller'), {
+      uid: 'unassignedSeller', name: 'Una Assigned', email: 'una@example.com',
       role: 'seller', isActive: true,
     });
     await setDoc(doc(db, 'users/admin1'), {
@@ -101,16 +115,24 @@ async function seed() {
     });
     await setDoc(doc(db, 'users/deactivatedSeller'), {
       uid: 'deactivatedSeller', name: 'Gone', email: 'gone@example.com',
-      role: 'seller', isActive: false,
+      role: 'seller', isActive: false, storeId: 'store1',
     });
     await setDoc(doc(db, 'products/p1'), {
-      name: 'Denim Jacket', price: 850, stock: 10,
+      name: 'Denim Jacket', price: 850, stock: 10, storeId: 'store1',
+    });
+    // store2's product — what seller1 must NOT be able to touch.
+    await setDoc(doc(db, 'products/p4'), {
+      name: 'Linen Blouse', price: 450, stock: 6, storeId: 'store2',
+    });
+    // Written before stores existed, and not yet migrated.
+    await setDoc(doc(db, 'products/orphan'), {
+      name: 'Old Stock Tee', price: 150, stock: 3,
     });
     // p3, not p2 — SPLIT-3/SPLIT-4 write to products/p2 and would be
     // testing `allow update` instead of `allow create` if the seed put a
     // document there first.
     await setDoc(doc(db, 'products/p3'), {
-      name: 'Wool Scarf', price: 200, stock: 4,
+      name: 'Wool Scarf', price: 200, stock: 4, storeId: 'store1',
     });
     // Two lines, two products, quantity > 1 — so a restore that gives back
     // the wrong amount, or only the first line, is visible in the numbers
@@ -209,6 +231,8 @@ function assertEqual(actual, expected, what) {
 const asCustomer = () => testEnv.authenticatedContext('customer1').firestore();
 const asOtherCustomer = () => testEnv.authenticatedContext('customer2').firestore();
 const asSeller = () => testEnv.authenticatedContext('seller1').firestore();
+const asOtherSeller = () => testEnv.authenticatedContext('seller2').firestore();
+const asUnassignedSeller = () => testEnv.authenticatedContext('unassignedSeller').firestore();
 const asAdmin = () => testEnv.authenticatedContext('admin1').firestore();
 const asDeactivatedSeller = () => testEnv.authenticatedContext('deactivatedSeller').firestore();
 const asDeactivatedCustomer = () => testEnv.authenticatedContext('deactivatedCustomer').firestore();
@@ -228,6 +252,8 @@ const productDoc = (overrides = {}) => ({
   colors: ['brown'],
   sizes: ['M'],
   createdAt: serverTimestamp(),
+  // seller1's store. Tests acting as another seller override it.
+  storeId: 'store1',
   ...overrides,
 });
 
@@ -318,7 +344,11 @@ await test('UPDATE-3  a customer cannot promote anyone else', async () => {
 });
 
 await test('UPDATE-4  a platform admin CAN promote a customer to store manager', async () => {
-  await assertSucceeds(updateDoc(doc(asAdmin(), 'users/customer1'), { role: 'seller' }));
+  // Promotion now names the store in the same write — see ASSIGN-2 for
+  // why a bare role: 'seller' is refused.
+  await assertSucceeds(
+    updateDoc(doc(asAdmin(), 'users/customer1'), { role: 'seller', storeId: 'store1' })
+  );
 });
 
 await test('UPDATE-5  a platform admin can deactivate another account', async () => {
@@ -600,6 +630,158 @@ await test('CANCEL-10  a restore must leave stock well-typed', async () => {
 });
 
 // ---------------------------------------------------------------------------
+console.log('\nStores');
+// ---------------------------------------------------------------------------
+
+const storeDoc = (overrides = {}) => ({
+  name: 'Ukay ni Lola',
+  createdAt: serverTimestamp(),
+  ...overrides,
+});
+
+await test('STORE-1  a platform admin can open a store; no one else can', async () => {
+  // Deciding who sells on the platform is account administration, so it
+  // sits with the Platform Admin — the same role that grants Store Manager.
+  // A Store Manager opening a second store for themselves would be vendor
+  // self-signup by another route.
+  await assertSucceeds(setDoc(doc(asAdmin(), 'stores/new1'), storeDoc()));
+  await assertFails(setDoc(doc(asSeller(), 'stores/new2'), storeDoc()));
+  await assertFails(setDoc(doc(asCustomer(), 'stores/new3'), storeDoc()));
+});
+
+await test('STORE-2  malformed or backdated stores are rejected', async () => {
+  const db = asAdmin();
+  await assertFails(setDoc(doc(db, 'stores/bad1'), storeDoc({ name: '   ' })));
+  await assertFails(setDoc(doc(db, 'stores/bad2'), storeDoc({ name: 'x'.repeat(61) })));
+  await assertFails(setDoc(doc(db, 'stores/bad3'), storeDoc({ ownerId: 'seller1' })));
+  await assertFails(setDoc(doc(db, 'stores/bad4'), storeDoc({ createdAt: new Date('2020-01-01') })));
+});
+
+await test('STORE-3  a platform admin may rename a store, and only rename it', async () => {
+  await assertSucceeds(updateDoc(doc(asAdmin(), 'stores/store1'), { name: 'Sam\'s Ukay' }));
+  await assertFails(updateDoc(doc(asAdmin(), 'stores/store1'), { createdAt: new Date() }));
+  await assertFails(updateDoc(doc(asSeller(), 'stores/store1'), { name: 'Mine Now' }));
+});
+
+await test('STORE-4  stores are readable when signed in, and never deletable', async () => {
+  await assertSucceeds(getDocs(collection(asCustomer(), 'stores')));
+  await assertFails(getDocs(collection(asGuest(), 'stores')));
+  // Products and orders point at a store by id; deleting it would leave
+  // them pointing at nothing.
+  await assertFails(deleteDoc(doc(asAdmin(), 'stores/store1')));
+  await assertFails(deleteDoc(doc(asSeller(), 'stores/store1')));
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nAssigning a Store Manager to a store');
+// ---------------------------------------------------------------------------
+
+await test('ASSIGN-1  a platform admin can move a manager to another store', async () => {
+  await assertSucceeds(updateDoc(doc(asAdmin(), 'users/seller1'), { storeId: 'store2' }));
+});
+
+await test('ASSIGN-2  a manager must be assigned to a store that exists', async () => {
+  // A bare role: 'seller' would mint a manager of nothing — harmless
+  // under managesStore(), but a staff account that cannot do its job and
+  // cannot tell why. Refused at the point of promotion instead.
+  await assertFails(updateDoc(doc(asAdmin(), 'users/customer1'), { role: 'seller' }));
+  await assertFails(
+    updateDoc(doc(asAdmin(), 'users/customer1'), { role: 'seller', storeId: 'noSuchStore' })
+  );
+  await assertFails(
+    updateDoc(doc(asAdmin(), 'users/customer1'), { role: 'seller', storeId: 42 })
+  );
+});
+
+await test('ASSIGN-3  anyone who is not a manager carries no store', async () => {
+  // Demoting must clear the store in the same write, or re-promoting the
+  // account later would quietly hand the old store back.
+  await assertFails(updateDoc(doc(asAdmin(), 'users/seller1'), { role: 'customer' }));
+  await assertSucceeds(
+    updateDoc(doc(asAdmin(), 'users/seller1'), { role: 'customer', storeId: deleteField() })
+  );
+  await assertFails(updateDoc(doc(asAdmin(), 'users/customer2'), { storeId: 'store1' }));
+});
+
+await test('ASSIGN-4  deactivating a manager from before stores existed still works', async () => {
+  // unassignedSeller has no storeId, which would fail the assignment
+  // check — but that check only applies when role or storeId changes.
+  // Revoking access must never be blocked by an unrelated field.
+  await assertSucceeds(
+    updateDoc(doc(asAdmin(), 'users/unassignedSeller'), { isActive: false })
+  );
+});
+
+await test('ASSIGN-5  a manager cannot choose their own store', async () => {
+  await assertFails(updateDoc(doc(asSeller(), 'users/seller1'), { storeId: 'store2' }));
+  await assertFails(
+    updateDoc(doc(asUnassignedSeller(), 'users/unassignedSeller'), { storeId: 'store1' })
+  );
+  // Nor slip it into signup, which would skip promotion entirely.
+  await assertFails(
+    setDoc(doc(testEnv.authenticatedContext('newuser').firestore(), 'users/newuser'),
+      signupDoc('newuser', { storeId: 'store1' }))
+  );
+});
+
+// ---------------------------------------------------------------------------
+console.log('\nProduct ownership — each manager runs only their own store');
+// ---------------------------------------------------------------------------
+
+await test('OWN-1  a manager can list products only under their own store', async () => {
+  await assertSucceeds(setDoc(doc(asSeller(), 'products/mine'), productDoc()));
+  await assertFails(
+    setDoc(doc(asSeller(), 'products/theirs'), productDoc({ storeId: 'store2' }))
+  );
+  // A product with no store would have no manager, ever.
+  const { storeId: _omitted, ...noStore } = productDoc();
+  await assertFails(setDoc(doc(asSeller(), 'products/nowhere'), noStore));
+});
+
+await test('OWN-2  a manager cannot edit or delete another store\'s product', async () => {
+  const db = asSeller();
+  await assertFails(updateDoc(doc(db, 'products/p4'), { price: 1 }));
+  await assertFails(updateDoc(doc(db, 'products/p4'), { stock: 0 }));
+  await assertFails(deleteDoc(doc(db, 'products/p4')));
+  // ...and the owner still can, so the refusal above is about ownership.
+  await assertSucceeds(updateDoc(doc(asOtherSeller(), 'products/p4'), { price: 500 }));
+});
+
+await test('OWN-3  a product cannot be moved between stores', async () => {
+  // Either direction: pushing your own product into another catalogue,
+  // or pulling another store's product into yours.
+  await assertFails(updateDoc(doc(asSeller(), 'products/p1'), { storeId: 'store2' }));
+  await assertFails(updateDoc(doc(asSeller(), 'products/p4'), { storeId: 'store1' }));
+  await assertFails(updateDoc(doc(asOtherSeller(), 'products/p4'), { storeId: 'store1' }));
+});
+
+await test('OWN-4  a manager with no store assigned can change no products', async () => {
+  const db = asUnassignedSeller();
+  await assertFails(setDoc(doc(db, 'products/x'), productDoc()));
+  await assertFails(updateDoc(doc(db, 'products/p1'), { price: 1 }));
+  await assertFails(deleteDoc(doc(db, 'products/p1')));
+});
+
+await test('OWN-5  an unmigrated product is frozen for every manager', async () => {
+  // The null == null trap: an unassigned manager and a product with no
+  // store must not match each other. Frozen until the migration script
+  // gives it a store.
+  await assertFails(updateDoc(doc(asUnassignedSeller(), 'products/orphan'), { price: 1 }));
+  await assertFails(deleteDoc(doc(asUnassignedSeller(), 'products/orphan')));
+  await assertFails(updateDoc(doc(asSeller(), 'products/orphan'), { price: 1 }));
+  await assertFails(updateDoc(doc(asSeller(), 'products/orphan'), { storeId: 'store1' }));
+});
+
+await test('OWN-6  a cancellation cannot restore stock to another store\'s product', async () => {
+  // Cancelling restores stock in the same batch as the status change, so
+  // "any seller may cancel" used to mean "any seller may increment any
+  // product". Now one foreign line sinks the whole batch, status included.
+  await assertFails(cancelBatch(asSeller(), { restores: { p1: 12, p4: 99 } }));
+  assertEqual(await readStock('p4'), 6, 'p4 stock after a refused cross-store restore');
+  assertEqual(await readStock('p1'), 10, 'p1 stock after the batch was refused');
+});
+
+// ---------------------------------------------------------------------------
 console.log('\nField validation (SRS "strict data type enforcement")');
 // ---------------------------------------------------------------------------
 
@@ -652,6 +834,10 @@ await test('VALID-6  a LEGACY product with unknown fields is still editable', as
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(doc(ctx.firestore(), 'products/legacy'), {
       name: 'Old Jacket', price: '900', stock: '2', legacyCategory: 'outerwear',
+      // Migrated (scripts/migrate-to-stores.mjs) — this test is about
+      // unknown fields, and an unmigrated product is frozen regardless;
+      // OWN-5 covers that separately.
+      storeId: 'store1',
     });
   });
   // Saving it the way AdminEditProductScreen does — full field set, with

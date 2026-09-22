@@ -15,6 +15,46 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'platformAdmin' &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('isActive', true) != false;
     }
+    // Multi-store: a Store Manager runs ONE store, named by storeId on
+    // their own user document. isSeller() still answers "is this account
+    // staff at all"; this answers "is it staff for THAT store".
+    //
+    // The `is string` check is load-bearing, not tidiness. A seller
+    // promoted before stores existed has no storeId, and a product created
+    // before stores existed has none either — both read as null through
+    // .get(). Without the type check, null == null would hand every
+    // unassigned manager every unassigned product. An account with no
+    // store manages nothing until a Platform Admin assigns one.
+    //
+    // Same document isSeller() already reads, so this costs no extra
+    // access against the ten-per-request ceiling.
+    function managesStore(storeId) {
+      return isSeller() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('storeId', null) is string &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('storeId', null) == storeId;
+    }
+    // Keeps role and storeId consistent whenever a Platform Admin touches
+    // either: a Store Manager must point at a store that exists, and
+    // anyone else must carry no storeId at all. A stale storeId left on a
+    // demoted account would be harmless today (managesStore also needs
+    // isSeller()), but it would silently hand that store back the moment
+    // someone re-promoted the account, without anyone choosing to.
+    //
+    // Checked only when role or storeId is actually changing, so that
+    // deactivating a manager promoted before stores existed still works.
+    // Revoking access must never be blocked by an unrelated field.
+    function storeAssignmentIsValid() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'storeId']) ||
+        (
+          request.resource.data.get('role', '') == 'seller' &&
+          request.resource.data.get('storeId', null) is string &&
+          exists(/databases/$(database)/documents/stores/$(request.resource.data.storeId))
+        ) ||
+        (
+          request.resource.data.get('role', '') != 'seller' &&
+          !('storeId' in request.resource.data)
+        );
+    }
     function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
@@ -106,8 +146,9 @@ service cloud.firestore {
       // "Missing or insufficient permissions" — indistinguishable from a
       // real deny.
       //
-      // platformAdmin branch: a platformAdmin may update role and/or
-      // isActive on any user document EXCEPT their own — this branch
+      // platformAdmin branch: a platformAdmin may update role, isActive
+      // and storeId (see storeAssignmentIsValid) on any user document
+      // EXCEPT their own — this branch
       // cannot target the requester's own document at all. Without that
       // exclusion, a platformAdmin could demote or deactivate themselves
       // here and permanently lock the account role out of existence (no
@@ -119,7 +160,8 @@ service cloud.firestore {
         (
           isPlatformAdmin() &&
           !isOwner(userId) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'isActive'])
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'isActive', 'storeId']) &&
+          storeAssignmentIsValid()
         )
         ||
         (
@@ -297,24 +339,38 @@ service cloud.firestore {
     // non-empty name and a server-set createdAt. measurements and
     // measurementType are optional — they're omitted entirely rather than
     // written as null when the seller left the size guide blank.
+    //
+    // storeId is required: a product with no store has no manager, so no
+    // one could ever edit, restock or remove it (see managesStore).
     function isNewProductShape() {
       return request.resource.data.keys().hasOnly(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',
-           'colors', 'sizes', 'createdAt', 'measurements', 'measurementType']
+           'colors', 'sizes', 'createdAt', 'measurements', 'measurementType',
+           'storeId']
         ) &&
         request.resource.data.keys().hasAll(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',
-           'colors', 'sizes', 'createdAt']
+           'colors', 'sizes', 'createdAt', 'storeId']
         ) &&
         request.resource.data.name.matches('.*\\S.*') &&
         request.resource.data.createdAt == request.time;
     }
     match /products/{productId} {
       allow read: if request.auth != null;
-      allow create: if isSeller() &&
+      // OWNERSHIP, for all three writes: a Store Manager may only create,
+      // edit or delete products of the store they are assigned to. Create
+      // checks the incoming storeId, so a manager cannot list an item under
+      // someone else's store; update and delete check the STORED one, so a
+      // manager cannot reach into another store's catalogue.
+      //
+      // A product written before stores existed carries no storeId and is
+      // therefore frozen for everyone until scripts/migrate-to-stores.mjs
+      // assigns it. That is the fail-closed direction: guessing an owner
+      // for it here would be guessing which store gets someone's stock.
+      allow create: if managesStore(request.resource.data.storeId) &&
         isNewProductShape() &&
         productFieldsAreWellTyped(request.resource.data);
-      allow delete: if isSeller();
+      allow delete: if managesStore(resource.data.get('storeId', null));
       // ONLY a seller may update a product. There is no customer branch:
       // checkout's stock decrement moved into the placeOrder Cloud
       // Function (functions/index.js), which runs as Admin and bypasses
@@ -383,14 +439,51 @@ service cloud.firestore {
       // only unbuilt, and deliberately so: a manager adjusting stock is a
       // legitimate action, not an attack to be blocked. Same boundary the
       // activityLogs comment draws.
-      allow update: if isSeller() && productFieldsAreWellTyped(request.resource.data);
+      //
+      // storeId must survive the update unchanged. Checking the stored
+      // value stops a manager reaching into another store's product; this
+      // second line stops them pushing their own product into another
+      // store's catalogue, which that check alone would allow.
+      allow update: if managesStore(resource.data.get('storeId', null)) &&
+        request.resource.data.get('storeId', null) == resource.data.get('storeId', null) &&
+        productFieldsAreWellTyped(request.resource.data);
+    }
+    // The stores a Store Manager can be assigned to.
+    //
+    // Created by a Platform Admin, because deciding who sells on the
+    // platform is account administration — the same reason a Platform
+    // Admin, not the applicant, grants the Store Manager role. There is no
+    // vendor self-signup, deliberately: see ROLES.md.
+    //
+    // Readable by any signed-in user, like /products: a shopper will be
+    // browsing by store, and a store's name is not private.
+    //
+    // No delete rule, for anyone. Products and orders point at a store by
+    // id, and deleting the store would leave them pointing at nothing —
+    // the same reasoning as accounts being deactivated, not deleted.
+    match /stores/{storeId} {
+      allow read: if request.auth != null;
+      allow create: if isPlatformAdmin() &&
+        request.resource.data.keys().hasOnly(['name', 'createdAt']) &&
+        request.resource.data.keys().hasAll(['name', 'createdAt']) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.matches('.*\\S.*') &&
+        request.resource.data.name.size() <= 60 &&
+        request.resource.data.createdAt == request.time;
+      allow update: if isPlatformAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.matches('.*\\S.*') &&
+        request.resource.data.name.size() <= 60;
     }
     // Product reviews, restricted to verified purchases.
     //
     // WHY THIS COLLECTION EXISTS AT ALL, since "reviews" in a marketplace
-    // usually means something else: PlainCo is a SINGLE store, not a
-    // multi-vendor marketplace — the 'seller' role is this store's own
-    // manager, and products carry no sellerId. So there is no seller to
+    // usually means something else: when this was written PlainCo was a
+    // SINGLE store — the 'seller' role was that store's own manager, and
+    // products carried no store at all. (Products now carry a storeId, and
+    // seller ratings are planned once orders are split per store; see
+    // TODO.md "Multi-store".) With one store there is no seller to
     // rate (one seller, one number, nothing to compare it against) and no
     // customer to rate (the store accepts every order, so a buyer score
     // would feed no decision, and it would publish reputation data about
