@@ -61,7 +61,7 @@ const faqCategories = [
       {
         id: 'o3',
         question: 'What payment methods do you accept?',
-        answer: 'At checkout you can select GCash, Maya, Card, or Cash on Delivery (COD). Online payment processing for GCash, Maya, and Card is still being integrated, so for now COD is the most reliable option — you pay in person when your order arrives.',
+        answer: 'At checkout you can select GCash, Maya, Card, or Cash on Delivery (COD). GCash, Maya, and Card currently run in sandbox mode — the payment step is a simulation for testing, no real money moves, and no live gateway is connected. Cash on Delivery is the only method that settles real money today: you pay in person when your order arrives.',
       },
       {
         id: 'o4',
@@ -145,7 +145,7 @@ const faqCategories = [
       {
         id: 'a3',
         question: 'Is my payment information secure?',
-        answer: 'We never ask for or store card numbers, CVV, or e-wallet credentials in the app. Online payment processing is still being integrated, so Cash on Delivery is currently the safest and most reliable way to pay.',
+        answer: 'We never ask for or store card numbers, CVV, or e-wallet credentials in the app — there is no screen anywhere that collects them. GCash, Maya, and Card run in sandbox mode: the payment step is simulated for testing and nothing is ever charged. Cash on Delivery remains the way to pay real money, in person, when your order arrives.',
       },
       {
         id: 'a4',

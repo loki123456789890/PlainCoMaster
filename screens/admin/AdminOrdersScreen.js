@@ -42,7 +42,7 @@ import SkeletonBlock from '../../components/ui/Skeleton';
 import ProductImage from '../../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
-import { getPaymentLabel, getPaymentIcon } from '../../constants/payment';
+import { getPaymentLabel, getPaymentIcon, getPaymentStatusLabel } from '../../constants/payment';
 
 const STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
 
@@ -229,6 +229,9 @@ export default function AdminOrdersScreen({ navigation }) {
             shipping: data.shipping || 0,
             status: data.status || 'pending',
             paymentMethod: data.paymentMethod || null,
+            paymentStatus: data.paymentStatus || null,
+            paymentRef: data.paymentRef || null,
+            paymentSandbox: data.paymentSandbox === true,
             items,
           };
         });
@@ -788,6 +791,22 @@ export default function AdminOrdersScreen({ navigation }) {
                       <Text style={styles.paymentMethodBadgeText}>{getPaymentLabel(selectedOrder.paymentMethod)}</Text>
                     </View>
                   </View>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Payment Status:</Text>
+                    <Text style={styles.infoValue}>{getPaymentStatusLabel(selectedOrder)}</Text>
+                  </View>
+                  {/* The Store Manager is the person most likely to act on
+                      this screen as if money had arrived, so the order's
+                      simulated origin is stated here rather than inferred
+                      from a "Paid" badge that looks like every other one. */}
+                  {selectedOrder.paymentSandbox ? (
+                    <View style={styles.infoRow}>
+                      <Text style={styles.infoLabel}>Reference:</Text>
+                      <Text style={styles.sandboxRefText}>
+                        {selectedOrder.paymentRef || '—'} · sandbox, no real money moved
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
 
                 <View style={styles.modalSection}>
@@ -1066,6 +1085,7 @@ const styles = StyleSheet.create({
   },
   infoLabel: { fontSize: 14, color: Colors.light.icon },
   infoValue: { fontSize: 14, color: Colors.light.text },
+  sandboxRefText: { flex: 1, fontSize: 12, color: Colors.light.highlight, textAlign: 'right' },
   paymentMethodBadge: {
     flexDirection: 'row',
     alignItems: 'center',

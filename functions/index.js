@@ -65,6 +65,39 @@ const REGION = 'asia-southeast1';
 // specified" forever with no way to tell what was meant.
 const PAYMENT_METHODS = ['gcash', 'maya', 'card', 'cod'];
 
+// THE SANDBOX GATEWAY, server side.
+//
+// Everything about the simulation is here rather than in the app, for one
+// reason: the app may ASK for an outcome but must not be able to impose
+// one. A sandbox where the client says "paid" and the server writes it
+// down is not a payment step, it is a spelling of `paymentStatus: 'paid'`
+// with extra screens — and it would be indistinguishable from the bug
+// this whole file exists to prevent.
+//
+// So the request carries a scenario id and nothing else. This function
+// decides what that scenario means, and the decision happens INSIDE the
+// order transaction, after the total is computed from the catalogue. A
+// refusal therefore aborts the transaction: no order document, no stock
+// decrement, nothing to clean up. That is the whole reason the gateway
+// runs here and not in a second callable after the order exists — an
+// authorise-then-capture split would leave a written order and spent
+// stock to unwind every time a demo declines a payment.
+//
+// NO NETWORK CALL IS MADE. There is no gateway account behind this and no
+// card number is accepted anywhere in the app; see constants/payment.js.
+const SANDBOX_DECLINES = {
+  declined: 'Your payment was declined. Try another payment method.',
+  insufficient_funds: 'There was not enough balance to cover this order.',
+  timeout: 'The payment gateway did not respond. Your order was not placed and you were not charged.',
+};
+const SANDBOX_OUTCOMES = ['approved', ...Object.keys(SANDBOX_DECLINES)];
+
+// Mirrors isPayOnDelivery() in constants/payment.js. Duplicated rather
+// than imported because functions/ is a separate package with its own
+// node_modules and does not share the app's module graph — the two are
+// one line each and a drift here is caught by test-checkout.mjs.
+const isPayOnDelivery = (method) => method === 'cod';
+
 // Free shipping, and now in ONE place. The client had this hardcoded in
 // both Cartscreen and Checkoutscreen, which meant changing the shipping
 // policy was a code deploy touching two files that had to agree. The
@@ -306,6 +339,19 @@ async function handlePlaceOrder(request) {
     throw new HttpsError('invalid-argument', 'Choose a payment method.');
   }
 
+  // COD never goes through the sandbox, so a scenario sent alongside it is
+  // a confused client rather than a harmless extra — refused rather than
+  // ignored, so the mistake surfaces in testing instead of leaving an
+  // order that looks authorised and was not.
+  const sandboxOutcome = request.data?.sandboxOutcome;
+  if (isPayOnDelivery(paymentMethod)) {
+    if (sandboxOutcome !== undefined && sandboxOutcome !== null) {
+      throw new HttpsError('invalid-argument', 'Cash on Delivery is not paid online.');
+    }
+  } else if (!SANDBOX_OUTCOMES.includes(sandboxOutcome)) {
+    throw new HttpsError('invalid-argument', 'Complete the payment step before placing your order.');
+  }
+
   // Placed here on purpose: AFTER the shape checks above, BEFORE the
   // transaction below.
   //
@@ -430,6 +476,34 @@ async function handlePlaceOrder(request) {
     const subtotal = round2(items.reduce((sum, item) => sum + item.price * item.quantity, 0));
     const total = round2(subtotal + SHIPPING_FEE);
 
+    // THE AUTHORISATION, and note where it sits: after the total is known
+    // from the catalogue, before the first write. A gateway cannot charge
+    // an amount nobody has computed yet, and a refusal must not leave a
+    // half-placed order behind — this is the only point that satisfies
+    // both.
+    //
+    // Throwing here aborts the transaction, so the stock decrements below
+    // and the order document never happen. The customer is told what the
+    // gateway said and their cart is untouched, which is what makes
+    // retrying with a different method work.
+    if (!isPayOnDelivery(paymentMethod) && sandboxOutcome !== 'approved') {
+      throw new HttpsError('failed-precondition', SANDBOX_DECLINES[sandboxOutcome], {
+        reason: 'payment-declined',
+        outcome: sandboxOutcome,
+        amount: total,
+      });
+    }
+
+    // Derived from the order id rather than generated randomly, because a
+    // Firestore transaction may run its callback more than once under
+    // contention and a fresh random value each time would mean the
+    // reference printed on the confirmation is not the one finally
+    // written. The id is fixed before the transaction opens, so this is
+    // stable across retries.
+    const paymentRef = isPayOnDelivery(paymentMethod)
+      ? null
+      : `SBX-${orderRef.id.slice(0, 10).toUpperCase()}`;
+
     // Writes start here.
     for (let index = 0; index < productIds.length; index += 1) {
       const productId = productIds[index];
@@ -451,6 +525,17 @@ async function handlePlaceOrder(request) {
       shipping: SHIPPING_FEE,
       total,
       paymentMethod,
+      // 'unpaid' for COD is the resting state, not a failure — the rider
+      // collects on arrival. A declined online payment never reaches this
+      // point at all, so 'failed' is deliberately not written here; see
+      // constants/payment.js for why the word exists anyway.
+      paymentStatus: isPayOnDelivery(paymentMethod) ? 'unpaid' : 'paid',
+      paymentRef,
+      // Stamped on every order an online method produced, so nothing that
+      // reads this collection later — a report, an export, a person
+      // scrolling the admin dashboard — can mistake a simulated
+      // authorisation for a real one.
+      paymentSandbox: !isPayOnDelivery(paymentMethod),
       shippingAddress: {
         fullName: shippingAddress.fullName || '',
         phone: shippingAddress.phone || '',
@@ -485,6 +570,9 @@ async function handlePlaceOrder(request) {
       shipping: SHIPPING_FEE,
       total,
       paymentMethod,
+      paymentStatus: orderData.paymentStatus,
+      paymentRef,
+      paymentSandbox: orderData.paymentSandbox,
       shippingAddress: orderData.shippingAddress,
     };
   });

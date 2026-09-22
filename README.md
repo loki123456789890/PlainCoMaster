@@ -108,7 +108,7 @@ Four functions, all in **`asia-southeast1`**:
 
 | Function | Trigger | What it does |
 | --- | --- | --- |
-| `placeOrder` | callable | The whole of checkout. Reads prices from the product documents, computes the total, decrements stock, writes the order, clears the cart — all in one transaction. |
+| `placeOrder` | callable | The whole of checkout. Reads prices from the product documents, computes the total, decrements stock, runs the sandbox payment authorisation, writes the order, clears the cart — all in one transaction. A declined payment aborts the transaction, so no order and no stock decrement survive it. |
 | `sendOrderConfirmation` | order created | Emails the customer their receipt. |
 | `notifySupportRequest` | support request created | Emails the store so Help's "within 24 hours" promise has something behind it. |
 | `retryMail` | callable | Sends one logged message again, for the Store Manager's "Send again" button. Takes a `mailLog` entry id and **never a recipient** — the address and body are re-derived from the order or support request, so it cannot be aimed anywhere. Active Store Manager only; refuses anything already sent; three attempts per entry. |
@@ -166,11 +166,43 @@ collection-group index on `orders` that the admin order screens require.
 Deploy it before using the Store Manager dashboard on a fresh project,
 or those screens will fail to load.
 
+## Running the app against local emulators
+
+`placeOrder` is a Cloud Function, so the app exercises whatever is
+**deployed**, not what is in your working tree. Checking a change to it by
+running the app therefore meant deploying to production first — and
+checkout is the one path where "try it and see" writes real orders and
+decrements real stock.
+
+```bash
+npm run emulators        # terminal 1 — auth, firestore, functions
+npm run seed:emulator    # terminal 2 — a customer, an address, two products
+npm run start:emulator -- --android
+```
+
+`start:emulator` sets `EXPO_PUBLIC_USE_FIREBASE_EMULATOR=1`, which is the
+only thing that makes [firebaseConfig.js](firebaseConfig.js) point at
+localhost; plain `npm start` still talks to the real project. The app logs
+a loud warning on boot when the emulators are in use, so a session can
+never quietly believe it is on production.
+
+The seeded customer is `cathy@example.com` / `sandbox123`, with two
+products at known stock — the number to watch when testing that a declined
+sandbox payment writes nothing.
+
+**On a physical device** set `EXPO_PUBLIC_EMULATOR_HOST` to your machine's
+LAN IP; `localhost` on a phone is the phone.
+
+**In a browser** (`-- --web`) the app runs well enough to click through and
+screenshot, which is how the sandbox flow was verified. It needs
+`npm i @expo/metro-runtime` first. Web is a debugging convenience only —
+PlainCo ships iOS and Android, and no design work targets it.
+
 ## Test suites
 
 ```bash
 npm run test:rules       # 83 — firestore.rules, every role
-npm run test:checkout    # 12 — placeOrder end to end
+npm run test:checkout    # 17 — placeOrder end to end, sandbox payment included
 npm run test:email       # 19 — the mail triggers and the retry callable
 npm run test:rate-limit  #  9 — the order throttle's arithmetic
 npm run test:order-number #  8 — the one string that crosses every boundary
@@ -247,6 +279,11 @@ of them.
 2. Add two items to the cart, then check out with Cash on Delivery.
 3. Confirm the confirmation screen shows an order number, and that the
    total reads "To pay on delivery" rather than "Total".
+3b. Check out again with GCash, Maya, or Card. The sandbox payment screen
+    opens; choose **Approve payment** and the order goes through marked
+    "Paid" with an `SBX-…` reference. Choose **Decline payment** and the
+    order is refused — reopen the product and confirm its stock did *not*
+    move, which is the behaviour the sandbox exists to get right.
 4. Reopen the product you bought — stock should have dropped by the
    quantity ordered.
 5. Check the cart is empty.

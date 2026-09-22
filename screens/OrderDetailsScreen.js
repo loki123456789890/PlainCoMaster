@@ -29,7 +29,7 @@ import AnimatedPressable from '../components/ui/AnimatedPressable';
 import StarRating from '../components/ui/StarRating';
 import ProductImage from '../components/ui/ProductImage';
 import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
-import { getPaymentLabel, getPaymentIcon } from '../constants/payment';
+import { getPaymentLabel, getPaymentIcon, getPaymentStatus } from '../constants/payment';
 import { formatOrderNumber } from '../utils/orderNumber';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
@@ -275,11 +275,25 @@ export default function OrderDetailsScreen({ navigation, route }) {
   const shippingAddress = order.shippingAddress;
   const paymentMethod = order.paymentMethod;
   const paymentLabel = getPaymentLabel(paymentMethod);
+  // "Paid via GCash" used to be printed for every online order, back when
+  // selecting a method did nothing at all — it was the one sentence in
+  // this screen that was not true. It is now read from the order's own
+  // paymentStatus rather than assumed from the method, so an order that
+  // was never charged cannot claim it was.
   const paymentTrustText = !paymentMethod
     ? ''
     : paymentMethod === 'cod'
       ? 'Pay when your order arrives — no online payment needed'
-      : `Paid via ${paymentLabel}`;
+      : getPaymentStatus(order) === 'paid'
+        ? `Paid via ${paymentLabel}`
+        : `Not charged — ${paymentLabel} payment was not completed`;
+
+  // Shown only where it is true, and stated plainly rather than softened.
+  // An order carrying a simulated authorisation must say so on the screen
+  // a customer or a Store Manager would point at as proof of payment.
+  const sandboxNote = order.paymentSandbox
+    ? `Sandbox payment${order.paymentRef ? ` · ${order.paymentRef}` : ''} — simulated, no real money moved`
+    : '';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -465,6 +479,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
             <View style={styles.paymentTextWrap}>
               <Text style={styles.paymentLabel}>{paymentLabel}</Text>
               {paymentTrustText ? <Text style={styles.paymentTrustText}>{paymentTrustText}</Text> : null}
+              {sandboxNote ? <Text style={styles.sandboxNote}>{sandboxNote}</Text> : null}
             </View>
           </Card>
         </Animated.View>
@@ -627,6 +642,9 @@ const styles = StyleSheet.create({
   paymentTextWrap: { flex: 1, marginLeft: 12 },
   paymentLabel: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 2 },
   paymentTrustText: { fontSize: 12, color: Colors.light.icon },
+  // Gold, the money colour, and the only place it earns its reservation
+  // outside a price — this line is about the money not having moved.
+  sandboxNote: { fontSize: 11, color: Colors.light.highlight, marginTop: 2 },
 
   // Order Summary
   summaryCard: { marginBottom: 24 },

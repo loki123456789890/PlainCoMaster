@@ -25,7 +25,7 @@ import { db, auth, functions } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { PAYMENT_METHODS, isPayOnDelivery } from '../constants/payment';
+import { PAYMENT_METHODS, isPayOnDelivery, requiresOnlinePayment } from '../constants/payment';
 import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -55,7 +55,24 @@ function ValidationRing({ opacity }) {
 }
 
 export default function CheckoutScreen({ navigation, route }) {
-  const orderItems = route.params?.orderItems || [];
+  // Captured ONCE, at mount, rather than read from route.params on every
+  // render.
+  //
+  // Checkout is opened with its lines and they never change while it is
+  // open — "Edit" goes back to the cart rather than editing in place — so
+  // a ref is the honest description of the data either way. What makes it
+  // necessary rather than tidy is the sandbox payment round trip:
+  // SandboxPayment navigates BACK here with its result, and the returning
+  // params did not carry orderItems with them. Reading params on that
+  // render produced an empty basket and submitted an order with no lines,
+  // which the server correctly refused as "An order needs at least one
+  // item" — surfacing to the customer as a generic "Could not place your
+  // order" after a payment they had just approved.
+  //
+  // Holding the lines here makes the round trip irrelevant: what is
+  // submitted is what was reviewed, whatever navigation does to params in
+  // between.
+  const orderItems = useRef(route.params?.orderItems || []).current;
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [shippingAddress, setShippingAddress] = useState(null);
   const [loadingAddress, setLoadingAddress] = useState(true);
@@ -207,6 +224,66 @@ export default function CheckoutScreen({ navigation, route }) {
       return;
     }
 
+    // Everything above is a reason not to charge anyone. Only past it does
+    // an online method divert through the sandbox — there is no point
+    // simulating a payment for an order that would be refused for a
+    // missing address anyway, and doing so would show the customer a
+    // "payment approved" screen followed by a failure.
+    //
+    // The order is NOT placed here for online methods. SandboxPayment
+    // returns its result as a route param, and the effect below picks it
+    // up and calls submitOrder. COD skips all of it.
+    if (requiresOnlinePayment(selectedPayment)) {
+      // `total` here is the client's own arithmetic, shown for display
+      // only — the same number already on the footer. The server prices
+      // the order from the catalogue and authorises THAT, so a stale price
+      // makes this screen show a figure that is out of date rather than
+      // one that gets charged. Nothing downstream reads it back.
+      navigation.navigate('SandboxPayment', {
+        amount: total,
+        paymentMethod: selectedPayment,
+        // Handed over so the sandbox can hand them BACK. Returning to
+        // this screen does not reliably restore the params it was opened
+        // with — it can remount with only what the returning navigate
+        // carries — and a checkout that resumes with an empty basket
+        // submits an order with no lines. Round-tripping the lines makes
+        // the outcome independent of which of those navigation does.
+        orderItems,
+      });
+      return;
+    }
+
+    submitOrder(null, selectedPayment);
+  };
+
+  // Resumes checkout once SandboxPayment hands back an outcome.
+  //
+  // `at` is a timestamp the sandbox stamps on every result, and it is what
+  // makes a SECOND attempt work: without it, choosing 'declined' twice in
+  // a row would produce an identical param object, the effect would not
+  // re-run, and the button would appear dead. Consuming the param (setting
+  // it back to undefined) before submitting closes the other half — a
+  // remount must not replay a payment that already happened.
+  //
+  // Both the method and the outcome come from the RESULT rather than from
+  // this screen's state, because returning from the sandbox can remount
+  // checkout and reset that state to its initial values.
+  useEffect(() => {
+    const result = route.params?.sandboxResult;
+    if (!result) return;
+    navigation.setParams({ sandboxResult: undefined });
+    // Restores the picker's appearance to match what was actually chosen,
+    // so a refused payment leaves the customer looking at the method they
+    // picked rather than an empty selection they must make again.
+    setSelectedPayment(result.paymentMethod);
+    submitOrder(result.outcome, result.paymentMethod);
+    // submitOrder is redefined every render and is not a dependency worth
+    // memoising for; the param guard above is what keeps this from firing
+    // twice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.params?.sandboxResult]);
+
+  const submitOrder = async (sandboxOutcome, paymentMethod) => {
     // What the server needs, and deliberately nothing more: which product,
     // how many, and the chosen size/colour. Prices, the subtotal, the total
     // and the delivery address are all looked up server-side now — a field
@@ -239,7 +316,15 @@ export default function CheckoutScreen({ navigation, route }) {
       // All of that still happens atomically — just on the server, where
       // the prices it multiplies are the ones in the catalog.
       const placeOrder = httpsCallable(functions, 'placeOrder');
-      const { data: placedOrder } = await placeOrder({ items, paymentMethod: selectedPayment });
+      // sandboxOutcome is omitted entirely for COD rather than sent as
+      // null — the function refuses a COD order that carries one, because
+      // a client confused about which methods are paid online is a bug
+      // worth failing loudly rather than absorbing.
+      const { data: placedOrder } = await placeOrder({
+        items,
+        paymentMethod,
+        ...(sandboxOutcome ? { sandboxOutcome } : {}),
+      });
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
@@ -277,6 +362,27 @@ export default function CheckoutScreen({ navigation, route }) {
           [
             { text: 'Add Address', onPress: () => navigation.navigate('Location') },
             { text: 'Cancel', style: 'cancel' },
+          ]
+        );
+        return;
+      }
+
+      // The sandbox gateway refused. Nothing was written — no order, no
+      // stock decrement — and the cart is intact, so the only useful
+      // offers are "try that again" and "pick another method". Both are
+      // given, because a declined card and an unresponsive gateway call
+      // for different next steps and the customer knows which they had.
+      if (reason === 'payment-declined') {
+        showAppAlert(
+          'Payment Not Completed',
+          `${error.message}\n\nYour order was not placed and nothing was charged.`,
+          [
+            { text: 'Try Again', onPress: () => handlePlaceOrder() },
+            // "Change Method" truncated to "Change Meth..." in the dialog's
+            // two-button row. The shorter word carries the same meaning
+            // beside "Try Again" and next to a payment picker that is
+            // still on screen with the refused method highlighted.
+            { text: 'Change', style: 'cancel' },
           ]
         );
         return;
@@ -356,9 +462,13 @@ export default function CheckoutScreen({ navigation, route }) {
     }
   };
 
+  // The online branch used to say "Secure checkout — your details stay
+  // private", which was true only because nothing was collected at all.
+  // Now that a payment step genuinely runs, saying nothing about its being
+  // simulated would be the first place this app overstated itself.
   const trustText = isPayOnDelivery(selectedPayment)
     ? 'Pay when your order arrives — no online payment needed'
-    : 'Secure checkout — your details stay private';
+    : 'Sandbox payment — simulated, and no card details are collected';
 
   return (
     <SafeAreaView style={styles.container}>

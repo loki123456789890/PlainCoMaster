@@ -349,3 +349,73 @@ deployment:
       NOT covered by any suite — it is client query behaviour, and the
       emulator suites reach rules and functions only. Same blind spot as
       the session paths.
+
+## Sandbox payment gateway ✅
+
+- [x] **Payment options now do something.** Selecting GCash, Maya, or Card
+      opens `SandboxPaymentScreen` and runs a simulated authorisation the
+      SERVER decides, inside the existing `placeOrder` transaction. The
+      order carries `paymentStatus`, `paymentRef` and `paymentSandbox`
+      instead of only a method string.
+
+      WHY THE GATEWAY RUNS INSIDE THE TRANSACTION rather than in a second
+      callable after the order exists: a decline must not leave a written
+      order and a spent stock decrement to unwind. Throwing from inside
+      the transaction aborts the whole thing — no order, no stock moved,
+      cart intact — which is what makes "try a different method" work.
+      CHECKOUT-15 is that guarantee.
+
+      WHY THE CLIENT PICKS THE OUTCOME, and why it is not the hole it
+      resembles: real sandboxes work this way (Stripe and PayMongo both
+      decline on a designated test card). The scenario is an INPUT to a
+      test gateway, not a claim about money. The boundary that matters is
+      untouched — `firestore.rules` has no order-create rule for anyone,
+      so a client still cannot mark itself paid. CHECKOUT-16 covers the
+      caller that skips the payment screen entirely.
+
+      NO CARD FIELDS EXIST ANYWHERE. This is deliberate and is why the
+      screen asks for a scenario rather than drawing a card form: the
+      deleted `PaymentScreen.js` was flagged in SRS_AUDIT.md for carrying
+      invented saved cards that contradicted the app's own "No Card Info
+      Stored" claim. HelpScreen's FAQ and Checkout's trust copy were
+      rewritten to say "sandbox", because a payment step that genuinely
+      runs is the first place this app could overstate itself.
+
+- [ ] **Swap in a real gateway when there is a reason to.** PayMongo test
+      mode is free and covers GCash/Maya/Card. The order fields, the
+      status vocabulary and the "server decides" boundary are already
+      shaped for it; what is NOT built is the redirect return flow — a
+      deep link back into the app, and the customer who closes the
+      browser mid-payment. `paymentStatus: 'failed'` exists unused for
+      exactly that day, when a webhook arrives after the order is
+      written.
+
+### Two bugs the sandbox flow only showed when the app was actually run ✅
+
+Both were invisible to `test:checkout`, which calls the handler directly
+and never navigates. They appeared on the first real click-through, and
+they are the reason running the app is not the same as running the tests.
+
+- [x] **Checkout resumed with an empty basket.** Returning from
+      `SandboxPaymentScreen` REMOUNTS CheckoutScreen rather than restoring
+      it, so `route.params.orderItems` was gone and the order went to the
+      server with no lines. It was refused — correctly — as "An order needs
+      at least one item", which reached the customer as a generic "Could
+      not place your order" immediately after they had approved a payment.
+
+      Fixed by round-tripping the lines: checkout hands `orderItems` to the
+      sandbox and the sandbox hands them back. A `useRef` was tried first
+      and does NOT work, because a remount rebuilds the ref too.
+
+- [x] **The chosen payment method was lost the same way.** `selectedPayment`
+      is state, and the remount reset it to null — the next symptom after
+      the lines were fixed was "Choose a payment method" over a choice the
+      customer had plainly made. The method now travels back in the result
+      and is passed to `submitOrder` as an argument rather than read from
+      state; it is also restored into the picker so a refused payment
+      leaves the method visibly selected.
+
+      WHY NOT FIX THE REMOUNT ITSELF: it is navigator behaviour, it differs
+      by platform, and a checkout that depends on a screen staying mounted
+      is fragile whatever the navigator does today. Carrying what the
+      submission needs makes the question moot.

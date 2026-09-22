@@ -34,7 +34,7 @@ import Animated, {
 
 import { Colors, Spacing, Radius } from '../constants/theme';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
-import { getPaymentLabel, getPaymentIcon, isPayOnDelivery } from '../constants/payment';
+import { getPaymentLabel, getPaymentIcon, isPayOnDelivery, getPaymentStatusLabel } from '../constants/payment';
 import { formatOrderNumber } from '../utils/orderNumber';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -225,7 +225,16 @@ export default function OrderConfirmationScreen({ navigation, route }) {
         <Text style={styles.sectionHeading}>Payment</Text>
         <Card variant="flat" style={styles.paymentCard}>
           <Ionicons name={getPaymentIcon(order.paymentMethod)} size={18} color={Colors.light.tint} />
-          <Text style={styles.paymentLabel}>{getPaymentLabel(order.paymentMethod)}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.paymentLabel}>
+              {getPaymentLabel(order.paymentMethod)} · {getPaymentStatusLabel(order)}
+            </Text>
+            {order.paymentSandbox ? (
+              <Text style={styles.sandboxNote}>
+                Sandbox payment{order.paymentRef ? ` · ${order.paymentRef}` : ''} — simulated, no real money moved
+              </Text>
+            ) : null}
+          </View>
         </Card>
 
         <View style={styles.actions}>
@@ -329,6 +338,7 @@ const styles = StyleSheet.create({
 
   paymentCard: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.lg },
   paymentLabel: { fontSize: 14, color: Colors.light.text },
+  sandboxNote: { fontSize: 11, color: Colors.light.highlight, marginTop: 2 },
 
   actions: { marginTop: Spacing.sm },
   secondaryActionWrap: { marginTop: Spacing.sm },

@@ -300,6 +300,81 @@ await test('CHECKOUT-12  a REFUSED order still spends quota', async () => {
   assertEqual(limiter.attempts, 1, 'the failed attempt was counted');
 });
 
+console.log('\nCheckout — the sandbox payment gateway');
+
+await test('CHECKOUT-13  an approved sandbox payment marks the order paid', async () => {
+  await seed({ stock: 5, price: 500 });
+
+  const placed = await placeOrder(
+    request([{ productId: 'p1', quantity: 1 }], { paymentMethod: 'gcash', sandboxOutcome: 'approved' })
+  );
+
+  assertEqual(placed.paymentStatus, 'paid', 'returned paymentStatus');
+  assert(placed.paymentSandbox === true, 'the simulated origin is returned to the client');
+  assert(/^SBX-/.test(placed.paymentRef), `reference is marked sandbox, got ${placed.paymentRef}`);
+
+  const stored = (await db.collection('users').doc('customer1')
+    .collection('orders').doc(placed.orderId).get()).data();
+  assertEqual(stored.paymentStatus, 'paid', 'stored paymentStatus');
+  assertEqual(stored.paymentSandbox, true, 'stored sandbox stamp');
+  assertEqual(stored.paymentRef, placed.paymentRef, 'the reference the customer was shown is the one stored');
+});
+
+await test('CHECKOUT-14  COD is unpaid, unstamped, and never enters the sandbox', async () => {
+  await seed({ stock: 5, price: 500 });
+
+  const placed = await placeOrder(request([{ productId: 'p1', quantity: 1 }]));
+
+  assertEqual(placed.paymentStatus, 'unpaid', 'COD rests at unpaid');
+  assertEqual(placed.paymentRef, null, 'no reference — nothing was authorised');
+  assertEqual(placed.paymentSandbox, false, 'COD is not a simulated payment, it is a real arrangement');
+});
+
+await test('CHECKOUT-15  a declined payment writes NOTHING', async () => {
+  // The whole reason the gateway runs inside the transaction. A refusal
+  // here must leave no order and no spent stock behind — if it did, every
+  // declined demo would quietly sell inventory.
+  await seed({ stock: 5, price: 500 });
+
+  for (const outcome of ['declined', 'insufficient_funds', 'timeout']) {
+    const error = await expectRefusal(
+      placeOrder(request([{ productId: 'p1', quantity: 2 }], { paymentMethod: 'card', sandboxOutcome: outcome })),
+      'payment-declined'
+    );
+    assertEqual(error.details.outcome, outcome, 'the refusal names which scenario produced it');
+    assertEqual(error.details.amount, 1000, 'and the amount that was not charged');
+  }
+
+  assertEqual(await orderCount(), 0, 'no order survived a decline');
+  assertEqual(await stockOf('p1'), 5, 'and no stock was consumed by one');
+});
+
+await test('CHECKOUT-16  an online method cannot skip the payment step', async () => {
+  // The client-side guard is a navigation flow, not a defence. A caller
+  // that goes straight to the callable with no scenario — which is what a
+  // modified client would do to get a free "paid" order — is refused.
+  await seed({ stock: 5, price: 500 });
+
+  await expectRefusal(
+    placeOrder(request([{ productId: 'p1', quantity: 1 }], { paymentMethod: 'maya' }))
+  );
+  await expectRefusal(
+    placeOrder(request([{ productId: 'p1', quantity: 1 }], { paymentMethod: 'maya', sandboxOutcome: 'nope' }))
+  );
+
+  assertEqual(await orderCount(), 0, 'neither attempt produced an order');
+});
+
+await test('CHECKOUT-17  COD carrying a sandbox outcome is refused, not ignored', async () => {
+  await seed({ stock: 5, price: 500 });
+
+  await expectRefusal(
+    placeOrder(request([{ productId: 'p1', quantity: 1 }], { paymentMethod: 'cod', sandboxOutcome: 'approved' }))
+  );
+
+  assertEqual(await orderCount(), 0, 'a confused client gets no order at all');
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   for (const { name } of failures) console.error(`FAILED: ${name}`);

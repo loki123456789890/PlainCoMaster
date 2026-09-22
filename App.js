@@ -23,6 +23,7 @@ import ShopScreen from './screens/Shopscreen';
 import ProductScreen from './screens/Productscreen';
 import CartScreen from './screens/Cartscreen';
 import CheckoutScreen from './screens/Checkoutscreen';
+import SandboxPaymentScreen from './screens/SandboxPaymentScreen';
 import ProfileScreen from './screens/Profilescreen';
 import FavoritesScreen from './screens/Favoritescreen';
 import LocationScreen from './screens/LocationScreen';
@@ -121,6 +122,10 @@ export default function App() {
 
                   {/* iPhone 16 Pro Max - 17 */}
                   <Stack.Screen name="Checkout" component={CheckoutScreen} />
+
+                  {/* The simulated payment step. Reached only from Checkout,
+                      and only for the online methods — COD never opens it. */}
+                  <Stack.Screen name="SandboxPayment" component={SandboxPaymentScreen} />
 
                   {/* iPhone 16 Pro Max - 13 */}
                   <Stack.Screen name="Profile" component={ProfileScreen} />
