@@ -566,9 +566,20 @@ one comes after the boundary it depends on is solid.
       types were 'ukay'/'ready', which no screen matches — now the real
       'ukay-ukay'/'ready-to-wear'. No rules change: /stores was already
       readable by any signed-in account. Driven in the web build.
-- [ ] THEN seller ratings become meaningful — the thing the panellist
-      actually asked for in §9, refused at the time because one seller
-      is one number with nothing to compare it against.
+- [x] Seller ratings — the thing the panellist actually asked for in §9,
+      refused at the time because one seller is one number with nothing
+      to compare it against. A store's rating is its own verified-purchase
+      reviews summarised (useStoreRatings, last 100, hidden ones left
+      out): stars and count on the "Shop by store" row, stars, count and
+      "% said the item matched its description" on the store's page, and
+      a line under "Sold by" on each product. The no-reviews fallback on
+      a product page now quotes its seller's record, not all of PlainCo's.
+      No new collection or rules: reviews already carried a checked
+      storeId (step 4). Hiding a review moves the number live. Also fixed
+      the last card of an odd count stretching across both columns.
+      Driven in the web build; rules 114/114.
+- [ ] Rewrite SRS §9 in SRS_UPDATE_NOTES.md for multi-store: seller
+      ratings now exist, so the "refused" answer there is out of date.
 
 OUT OF SCOPE unless someone asks: payouts, commissions, vendor
 self-signup, per-store shipping rates. Those make it a marketplace to

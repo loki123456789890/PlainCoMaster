@@ -504,13 +504,15 @@ service cloud.firestore {
     // WHY THIS COLLECTION EXISTS AT ALL, since "reviews" in a marketplace
     // usually means something else: when this was written PlainCo was a
     // SINGLE store — the 'seller' role was that store's own manager, and
-    // products carried no store at all. (Products now carry a storeId, and
-    // seller ratings are planned once orders are split per store; see
-    // TODO.md "Multi-store".) With one store there is no seller to
-    // rate (one seller, one number, nothing to compare it against) and no
-    // customer to rate (the store accepts every order, so a buyer score
-    // would feed no decision, and it would publish reputation data about
-    // consumers). The trust problem PlainCo actually has is the one stated
+    // products carried no store at all. With one store there was no seller
+    // to rate (one seller, one number, nothing to compare it against).
+    // Now that orders are split per store, each review carries the storeId
+    // of the order it came from (checked below), and a store's seller
+    // rating is simply its reviews summarised on the client — no separate
+    // write, so nothing here to validate beyond the review itself. There
+    // is still no customer to rate (a store accepts every order, so a
+    // buyer score would feed no decision, and it would publish reputation
+    // data about consumers). The trust problem PlainCo actually has is the one stated
     // in PRODUCT.md: shoppers must believe the condition of secondhand
     // clothing they are buying sight-unseen. That is a claim about an
     // ITEM, and this is where it is recorded.

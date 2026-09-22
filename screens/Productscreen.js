@@ -19,12 +19,12 @@ import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
-import { onSnapshot, getDocs } from 'firebase/firestore';
+import { onSnapshot } from 'firebase/firestore';
 
 import { useFavorites } from '../context/FavoritesContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
-import { useStores } from '../context/StoreContext';
+import { useStores, useStoreRatings, storeReviewCountLabel } from '../context/StoreContext';
 import { auth } from '../firebaseConfig';
 import { COLOR_PALETTE, DEFAULT_COLORS, DEFAULT_SIZES } from '../constants/productOptions';
 import { Colors, Radius } from '../constants/theme';
@@ -39,7 +39,6 @@ import SizeGuideModal from '../components/ui/SizeGuideModal';
 import StarRating from '../components/ui/StarRating';
 import {
   productReviewsQuery,
-  recentStoreReviewsQuery,
   mapReviewDoc,
   visibleReviews,
   sortByNewest,
@@ -124,6 +123,9 @@ export default function ProductScreen({ navigation, route }) {
   const product = liveProduct || routeProduct;
   const { getStore } = useStores();
   const store = getStore(product?.storeId);
+  // The seller's rating, from the store's own verified-purchase reviews.
+  // Undefined while loading, and for a product whose store can't be named.
+  const sellerRating = useStoreRatings(store ? [store.id] : [])[store?.id];
 
   // Legacy fallback: products saved before per-product colors/sizes
   // existed have no such array on their doc (or an admin left it empty),
@@ -149,10 +151,6 @@ export default function ProductScreen({ navigation, route }) {
   const [reviewsLoading, setReviewsLoading] = useState(true);
   const [reviewsFailed, setReviewsFailed] = useState(false);
   const [showAllReviews, setShowAllReviews] = useState(false);
-  // Null means "not looked up"; a summary object with count 0 means "looked
-  // up, and the store genuinely has no reviews". The fallback copy differs
-  // between those two, so they can't collapse into one state.
-  const [storeSummary, setStoreSummary] = useState(null);
 
   const reduceMotion = useReducedMotion();
   const favoriteScale = useSharedValue(1);
@@ -288,44 +286,6 @@ export default function ProductScreen({ navigation, route }) {
 
     return () => unsubscribe();
   }, [product?.id]);
-
-  // The ukay-ukay fallback, and the reason this feature works at all on a
-  // catalogue of one-of-a-kind items: a piece with stock 1 sells once and
-  // can never gather more than a single review, so an empty reviews section
-  // would be the permanent state of much of the store. "Did it match the
-  // description?" is the same question about every listing, so it
-  // aggregates across all of them and says something useful about THIS item
-  // even when nobody has reviewed it.
-  //
-  // Fetched once, and only when this product has nothing of its own to
-  // show — there is no reason to spend the read otherwise.
-  useEffect(() => {
-    if (reviewsLoading || reviews.length > 0 || storeSummary !== null || !auth.currentUser) {
-      return undefined;
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const snapshot = await getDocs(recentStoreReviewsQuery());
-        if (cancelled) return;
-        setStoreSummary(summarizeReviews(snapshot.docs.map((d) => mapReviewDoc(d))));
-      } catch (error) {
-        console.error('Error loading store review summary:', error);
-        // Recorded as "looked up, nothing to show" so the effect doesn't
-        // retry on every render — the section falls back to its plainest
-        // copy, which is true regardless.
-        if (!cancelled) {
-          setStoreSummary({ count: 0, average: null, matchedCount: 0, matchedPercent: null });
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [reviewsLoading, reviews.length, storeSummary]);
 
   const handleToggleFavorite = async () => {
     if (!product) return;
@@ -572,9 +532,24 @@ export default function ProductScreen({ navigation, route }) {
               accessibilityLabel={`Sold by ${store.name}. Open store`}
             >
               <Ionicons name="storefront-outline" size={18} color={Colors.light.tint} />
-              <Text style={styles.soldByText} numberOfLines={1}>
-                Sold by <Text style={styles.soldByName}>{store.name}</Text>
-              </Text>
+              <View style={styles.soldByTextWrap}>
+                <Text style={styles.soldByText} numberOfLines={1}>
+                  Sold by <Text style={styles.soldByName}>{store.name}</Text>
+                </Text>
+                {sellerRating ? (
+                  <View style={styles.soldByRatingRow}>
+                    {sellerRating.count > 0 && (
+                      <>
+                        <Ionicons name="star" size={12} color={Colors.light.highlight} />
+                        <Text style={styles.soldByRatingValue}>{formatAverage(sellerRating.average)}</Text>
+                      </>
+                    )}
+                    <Text style={styles.soldByRatingCount}>
+                      {sellerRating.count > 0 ? `(${storeReviewCountLabel(sellerRating)})` : 'No store reviews yet'}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
               <Text style={styles.soldByLink}>View store</Text>
               <Ionicons name="chevron-forward" size={14} color={Colors.light.tint} />
             </AnimatedPressable>
@@ -777,9 +752,18 @@ export default function ProductScreen({ navigation, route }) {
           ) : (
             <Card variant="flat" style={styles.noReviewsCard}>
               <Text style={styles.noReviewsTitle}>No reviews for this item yet</Text>
-              {storeSummary && storeSummary.count > 0 ? (
+              {/* The ukay-ukay fallback, and the reason this feature works
+                  at all on a catalogue of one-of-a-kind items: a piece with
+                  stock 1 sells once and can never gather more than a single
+                  review, so an empty reviews section would be the permanent
+                  state of much of the catalogue. "Did it match the
+                  description?" is the same question about every listing,
+                  so the SELLER's answer says something about this item
+                  even when nobody has reviewed it. Its own store only: one
+                  store's record says nothing about another's goods. */}
+              {sellerRating && sellerRating.count > 0 ? (
                 <Text style={styles.noReviewsBody}>
-                  {`Secondhand pieces are often one of a kind, so most have no reviews of their own. Across PlainCo's last ${storeSummary.count} reviews, ${matchedDescriptionSentence(storeSummary).toLowerCase()}`}
+                  {`Secondhand pieces are often one of a kind, so most have no reviews of their own. Across ${store.name}'s ${storeReviewCountLabel(sellerRating)}, ${matchedDescriptionSentence(sellerRating).toLowerCase()}`}
                 </Text>
               ) : (
                 <Text style={styles.noReviewsBody}>
@@ -886,7 +870,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.border,
   },
-  soldByText: { flex: 1, fontSize: 14, color: Colors.light.icon },
+  soldByTextWrap: { flex: 1, paddingVertical: 8 },
+  soldByText: { fontSize: 14, color: Colors.light.icon },
+  soldByRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  soldByRatingValue: { fontSize: 12, fontWeight: '600', color: Colors.light.text },
+  soldByRatingCount: { fontSize: 12, color: Colors.light.icon },
   soldByName: { fontWeight: '600', color: Colors.light.text },
   soldByLink: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
   stockBadgeRow: { alignSelf: 'flex-start', marginBottom: 16 },

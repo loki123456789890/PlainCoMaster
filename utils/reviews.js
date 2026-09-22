@@ -6,11 +6,12 @@
 // exactly the three things that go quietly wrong when each screen rolls its
 // own copy.
 //
-// SCOPE NOTE, since "reviews" usually means something broader: PlainCo is a
-// single store, so there is no seller rating and no customer rating here
-// (see the /reviews block in firestore.rules for why neither would mean
-// anything). A review is always about ONE PRODUCT, written by someone whose
-// own order containing it reached 'delivered'.
+// SCOPE NOTE, since "reviews" usually means something broader: a review is
+// always about ONE PRODUCT, written by someone whose own order containing
+// it reached 'delivered'. It also names the store that sold it, and a
+// store's seller rating is those reviews summarised (useStoreRatings in
+// context/StoreContext.js) — there is no separate "rate the seller" form.
+// There is no customer rating (see the /reviews block in firestore.rules).
 import { collection, query, where, orderBy, limit } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
@@ -24,7 +25,7 @@ export const REVIEW_TEXT_MAX = 1000;
 export const MIN_RATING = 1;
 export const MAX_RATING = 5;
 
-// How many reviews the store-wide trust summary is computed from. Bounded
+// How many reviews a store's seller rating is computed from. Bounded
 // on purpose: this is a phone on mobile data, and the number it produces
 // ("9 in 10 said the item matched") is a recent-behaviour signal, not a
 // lifetime statistic. A store's first hundred reviews and its last hundred
@@ -87,21 +88,10 @@ export function productReviewsQuery(productId) {
   return query(collection(db, REVIEWS_COLLECTION), where('productId', '==', productId));
 }
 
-// The store-wide sample behind the trust summary. A bare orderBy on one
-// field uses the automatic single-field index, so this needs no setup
-// either.
-export function recentStoreReviewsQuery(max = STORE_SUMMARY_LIMIT) {
-  return query(
-    collection(db, REVIEWS_COLLECTION),
-    orderBy('createdAt', 'desc'),
-    limit(max)
-  );
-}
-
 // One store's reviews, newest first — the Store Manager's moderation
-// queue. Each review names the store that sold the item (checked against
+// queue, and the sample behind the store's seller rating. Each review names the store that sold the item (checked against
 // the order by firestore.rules), and only that store may hide it. Unlike
-// the two queries above this one needs a composite index, (storeId,
+// the query above this one needs a composite index, (storeId,
 // createdAt desc), declared in firestore.indexes.json.
 export function storeReviewsQuery(storeId, max = STORE_SUMMARY_LIMIT) {
   return query(

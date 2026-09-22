@@ -25,12 +25,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { auth } from '../firebaseConfig';
 import { useProducts } from '../context/ProductContext';
-import { useStores } from '../context/StoreContext';
+import { useStores, useStoreRatings, storeReviewCountLabel } from '../context/StoreContext';
+import { formatAverage, matchedDescriptionSentence } from '../utils/reviews';
 import { useCart } from '../context/CartContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
+import StarRating from '../components/ui/StarRating';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
@@ -265,6 +267,12 @@ export default function ShopScreen({ navigation, route }) {
   }, [products]);
   const browsableStores = stores.filter((s) => storeCounts[s.id] > 0);
 
+  // Seller ratings, side by side in the store row and in full on a store's
+  // page. Comparing stores is what makes a seller rating mean anything —
+  // with one store it was one number with nothing beside it.
+  const ratings = useStoreRatings(storeId ? [storeId] : browsableStores.map((s) => s.id));
+  const storeRating = storeId ? ratings[storeId] : undefined;
+
   // What the store actually sells, read off its listings rather than
   // declared anywhere, so it cannot claim a category it has no items in.
   const storeSells = [
@@ -335,6 +343,30 @@ export default function ShopScreen({ navigation, route }) {
         </View>
       </View>
 
+      {/* The seller rating, from this store's own verified-purchase
+          reviews. Nothing renders until it has loaded, so a slow read
+          never flashes "No reviews yet" at a store that has some. The
+          matched-description line is the one that speaks to secondhand
+          condition, which is what PRODUCT.md says shoppers must trust. */}
+      {storeId && storeRating ? (
+        <View style={styles.storeRating}>
+          {storeRating.count > 0 ? (
+            <>
+              <View style={styles.storeRatingRow}>
+                <StarRating rating={storeRating.average} size={15} label={store?.name || 'this store'} />
+                <Text style={styles.storeRatingValue}>{formatAverage(storeRating.average)}</Text>
+                <Text style={styles.storeRatingCount}>({storeReviewCountLabel(storeRating)})</Text>
+              </View>
+              <Text style={styles.storeRatingMatched}>{matchedDescriptionSentence(storeRating)}</Text>
+            </>
+          ) : (
+            <Text style={styles.storeRatingCount}>
+              No reviews yet. Buyers can review an item once their order is delivered.
+            </Text>
+          )}
+        </View>
+      ) : null}
+
       {!storeId && browsableStores.length > 0 && (
         <>
           <Text style={styles.storesTitle}>Shop by store</Text>
@@ -350,14 +382,27 @@ export default function ShopScreen({ navigation, route }) {
                 onPress={() => navigation.push('Shop', { storeId: s.id })}
                 rippleColor={Colors.light.border}
                 accessibilityRole="button"
-                accessibilityLabel={`${s.name}, ${storeCounts[s.id]} ${storeCounts[s.id] === 1 ? 'item' : 'items'}`}
+                accessibilityLabel={`${s.name}, ${storeCounts[s.id]} ${storeCounts[s.id] === 1 ? 'item' : 'items'}${
+                  ratings[s.id]?.count > 0 ? `, rated ${formatAverage(ratings[s.id].average)} out of 5` : ''
+                }`}
               >
                 <Ionicons name="storefront-outline" size={16} color={Colors.light.tint} />
                 <View style={styles.storeCardText}>
                   <Text style={styles.storeCardName} numberOfLines={1}>{s.name}</Text>
-                  <Text style={styles.storeCardMeta}>
-                    {storeCounts[s.id]} {storeCounts[s.id] === 1 ? 'item' : 'items'}
-                  </Text>
+                  <View style={styles.storeCardMetaRow}>
+                    <Text style={styles.storeCardMeta}>
+                      {storeCounts[s.id]} {storeCounts[s.id] === 1 ? 'item' : 'items'}
+                    </Text>
+                    {ratings[s.id]?.count > 0 && (
+                      <>
+                        <Text style={styles.storeCardMeta}>·</Text>
+                        <Ionicons name="star" size={11} color={Colors.light.highlight} />
+                        <Text style={styles.storeCardRating}>
+                          {formatAverage(ratings[s.id].average)} ({ratings[s.id].count})
+                        </Text>
+                      </>
+                    )}
+                  </View>
                 </View>
                 <Ionicons name="chevron-forward" size={14} color={Colors.light.icon} />
               </AnimatedPressable>
@@ -618,7 +663,15 @@ const styles = StyleSheet.create({
   },
   storeCardText: { flexShrink: 1 },
   storeCardName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-  storeCardMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
+  storeCardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
+  storeCardMeta: { fontSize: 12, color: Colors.light.icon },
+  storeCardRating: { fontSize: 12, fontWeight: '600', color: Colors.light.text },
+
+  storeRating: { paddingHorizontal: 20, paddingTop: 10, gap: 4 },
+  storeRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  storeRatingValue: { fontSize: 14, fontWeight: '700', color: Colors.light.text },
+  storeRatingCount: { fontSize: 13, color: Colors.light.icon, lineHeight: 19 },
+  storeRatingMatched: { fontSize: 13, color: Colors.light.text, lineHeight: 19 },
 
   menuRow: {
     flexDirection: 'row',
@@ -688,9 +741,14 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   productsGrid: { paddingHorizontal: 10, paddingBottom: 20 },
+  // Half the row, with the gutter as padding rather than margin, so a card
+  // with no neighbour (the last of an odd count, common on a small store's
+  // page) is exactly as wide as a card beside another, instead of
+  // stretching across both columns.
   productCardWrap: {
     flex: 1,
-    margin: 8,
+    maxWidth: '50%',
+    padding: 8,
   },
   productCard: {
     padding: 12,

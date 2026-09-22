@@ -80,6 +80,13 @@ Shoppers see the stores too: the Shop has a "Shop by store" row, each
 store has its own page (the Shop narrowed to that store), and every
 product page names the store that sells it.
 
+Each store has a **seller rating**: its own reviews summarised (average
+stars, count, and the share of buyers who said the item matched its
+description). There is no separate "rate the seller" form — a review can
+only be written for a delivered order, and it is filed with the store
+that sold it, so the rating is built only from real purchases from that
+store. A Store Manager hiding a review takes it out of the rating too.
+
 A cart holding products from several stores checks out as **one order
 per store** (`placeOrder`), and only that store's manager may move an
 order's status or cancel it.
