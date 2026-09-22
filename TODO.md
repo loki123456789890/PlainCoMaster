@@ -419,3 +419,47 @@ they are the reason running the app is not the same as running the tests.
       by platform, and a checkout that depends on a screen staying mounted
       is fragile whatever the navigator does today. Carrying what the
       submission needs makes the question moot.
+
+## Multi-store — a real requirement, deliberately deferred
+
+A panellist raised it. It is not optional, and it is not what
+`SRS_UPDATE_NOTES.md` §9 currently says: that section states in writing
+that "PlainCo is not a multi-vendor marketplace — there is one store".
+That paragraph has to be rewritten as part of this work, not quietly
+contradicted by the code.
+
+DEFERRED PAST THE UAT ON PURPOSE. The approved questionnaire describes a
+single store throughout — "stock updates made by *the* store", "*the*
+product catalog" — and Section 5 item 5 uses the title's own plural in
+the sense of *stores as a category of business that would adopt this*
+("acceptable for use BY Ukay-Ukay and Ready-to-Wear clothing stores").
+Shipping multi-store before the session would have meant surveying an app
+the instrument does not describe, and would have put checkout — the most
+rated flow in the questionnaire — through an untested refactor hours
+before respondents used it.
+
+The order below matters: each step leaves the app working, and the risky
+one comes after the boundary it depends on is solid.
+
+- [ ] `stores/{storeId}`; `products.storeId`; `users/{uid}.storeId` for
+      sellers. A Platform Admin assigns a manager to a store, which is
+      the model ROLES.md already uses — access granted, never
+      self-registered.
+- [ ] Rules ownership: `isSeller()` becomes "manages THIS product's
+      store". Security-critical, and where much of the 83-test rules
+      suite gets revisited.
+- [ ] Order splitting in `placeOrder`: one checkout writes one order per
+      store, in the same transaction. The riskiest step — two managers
+      sharing one status field means neither owns it — so it lands after
+      the rules are right, with its own tests.
+- [ ] Scope the admin screens (Products, Orders, Reviews, Activity) to
+      the signed-in manager's store. Note AdminOrdersScreen currently
+      reads `collectionGroup(db, 'orders')` with no scoping at all.
+- [ ] Store pages in Shop: browse by store, store profile.
+- [ ] THEN seller ratings become meaningful — the thing the panellist
+      actually asked for in §9, refused at the time because one seller
+      is one number with nothing to compare it against.
+
+OUT OF SCOPE unless someone asks: payouts, commissions, vendor
+self-signup, per-store shipping rates. Those make it a marketplace to
+operate rather than a marketplace to demonstrate.
