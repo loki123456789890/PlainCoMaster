@@ -1,132 +1,35 @@
 // screens/HomeScreen.js
+//
+// Home, from the approved home/shop preview: a greeting, a search bar that
+// opens Shop, the two category tiles with live counts, and two sideways
+// rails — the newest listings and ukay-ukay finds. The tab bar sits under
+// it all. Everything shown comes from the live catalogue; nothing here is
+// the preview's sample data.
 import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  ImageBackground,
-  ScrollView,
-  Platform,
-} from 'react-native';
-import { showAppAlert } from '../utils/appAlert';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withSequence,
-  useReducedMotion,
-  FadeIn,
-  FadeInDown,
-} from 'react-native-reanimated';
+import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
+import Svg, { Path, Circle } from 'react-native-svg';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { showAppAlert } from '../utils/appAlert';
 import { useProducts } from '../context/ProductContext';
 import { useFavorites } from '../context/FavoritesContext';
-import { useCart } from '../context/CartContext';
 import { auth, db } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
-import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
+import { Colors } from '../constants/theme';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
-import ProductImage from '../components/ui/ProductImage';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import ProductCard from '../components/shop/ProductCard';
+import TabBar, { goToTab } from '../components/shop/TabBar';
+import Reveal from '../components/shop/Reveal';
 
-// Favorite heart: generic press-dip plus a distinct settle-pulse on toggle,
-// since favoriting is a state change and earns motion beyond generic press
-// feedback. Three explicit ease-out keyframes, not spring physics — no
-// uncontrolled overshoot/wobble.
-function FavoriteButton({ favorited, onToggle, accessibilityLabel }) {
-  const reduceMotion = useReducedMotion();
-  const scale = useSharedValue(1);
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const handlePress = () => {
-    if (!reduceMotion) {
-      scale.value = withSequence(
-        withTiming(0.85, { duration: 80, easing: EASE_OUT_QUINT }),
-        withTiming(1.15, { duration: 120, easing: EASE_OUT_QUART }),
-        withTiming(1, { duration: 120, easing: EASE_OUT_QUART })
-      );
-    }
-    onToggle();
-  };
-
-  return (
-    <Pressable
-      onPress={handlePress}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      accessibilityState={{ selected: favorited }}
-      android_ripple={{ color: 'rgba(255,255,255,0.4)', radius: 22 }}
-    >
-      <Animated.View style={[styles.favoriteBtn, animatedStyle]}>
-        <Ionicons
-          name={favorited ? 'heart' : 'heart-outline'}
-          size={18}
-          color={favorited ? Colors.light.danger : '#fff'}
-        />
-      </Animated.View>
-    </Pressable>
-  );
-}
-
-// Loading placeholder shaped exactly like the real Featured Picks row, so
-// there's zero layout shift when the live data swaps in.
-function FeaturedPicksSkeleton() {
-  return (
-    <View style={styles.skeletonRow}>
-      {[0, 1, 2].map((i) => (
-        <View key={i} style={styles.productCard}>
-          <SkeletonBlock style={styles.productImageWrapper} />
-          <SkeletonBlock style={styles.skeletonLine} />
-          <SkeletonBlock style={[styles.skeletonLine, styles.skeletonLineShort]} />
-        </View>
-      ))}
-    </View>
-  );
-}
-
-// The hero photo cross-fades in on load (over the canvas-colored background
-// that's already there while it decodes); the CTA gets the same shared
-// press feedback as every other button on the screen.
-function HeroImage({ navigation, reduceMotion }) {
-  const opacity = useSharedValue(reduceMotion ? 1 : 0);
-  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  const handleLoad = () => {
-    opacity.value = reduceMotion ? 1 : withTiming(1, { duration: 300, easing: EASE_OUT_QUART });
-  };
-
-  return (
-    <Animated.View style={animatedStyle}>
-      <ImageBackground
-        source={{
-          uri: 'https://images.unsplash.com/photo-1551028719-00167b16eac5?q=80&w=735&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D',
-        }}
-        style={styles.hero}
-        resizeMode="cover"
-        onLoad={handleLoad}
-      >
-        <View style={styles.heroOverlay}>
-          <Text style={styles.title}>Looking for New{'\n'}Clothes in Minutes?</Text>
-          <AnimatedPressable
-            style={styles.button}
-            onPress={() => navigation.navigate('Shop')}
-            rippleColor="rgba(255,255,255,0.25)"
-          >
-            <Text style={styles.buttonText}>Start Shopping</Text>
-          </AnimatedPressable>
-        </View>
-      </ImageBackground>
-    </Animated.View>
-  );
-}
+const RAIL_CARD_WIDTH = 148;
+const RAIL_GAP = 12;
+const NEW_ARRIVALS = 6;
+const UKAY_FINDS = 10;
 
 const getTimeGreeting = () => {
   const hour = new Date().getHours();
@@ -135,72 +38,168 @@ const getTimeGreeting = () => {
   return 'Good evening';
 };
 
+// "Juan Dela Cruz" → "JC": first and last word.
+const initialsOf = (name) => {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  const last = words.length > 1 ? words[words.length - 1][0] : '';
+  return (words[0][0] + last).toUpperCase();
+};
+
+// The same drawn marks as Landing's cards: a price tag for ukay-ukay, a
+// hanger for ready-to-wear.
+function CategoryGlyph({ kind }) {
+  const stroke = {
+    fill: 'none',
+    stroke: Colors.light.background,
+    strokeWidth: 2.2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+  };
+  return (
+    <Svg width={34} height={34} viewBox="0 0 40 40">
+      {kind === 'ukay' ? (
+        <>
+          <Path d="M20 5 L30 14 V33 Q30 35 28 35 H12 Q10 35 10 33 V14 Z" {...stroke} />
+          <Circle cx={20} cy={14} r={2.6} {...stroke} />
+        </>
+      ) : (
+        <>
+          <Path d="M20 15 V13 C20 11 23.5 10.5 23.5 8 C23.5 6 22 5 20 5 C18 5 16.6 6.2 16.5 7.6" {...stroke} />
+          <Path d="M20 15 L5 28 H35 Z" {...stroke} />
+        </>
+      )}
+    </Svg>
+  );
+}
+
+function CategoryTile({ kind, title, caption, onPress, delay }) {
+  return (
+    <Reveal delay={delay} style={styles.flex}>
+      <AnimatedPressable
+        style={[styles.tile, { backgroundColor: kind === 'ukay' ? Colors.light.secondary : Colors.light.tint }]}
+        onPress={onPress}
+        rippleColor="rgba(255,255,255,0.2)"
+        accessibilityRole="button"
+        accessibilityLabel={`${title}, ${caption}`}
+      >
+        <View style={styles.tileRing} />
+        <CategoryGlyph kind={kind} />
+        <View>
+          <Text style={styles.tileTitle}>{title}</Text>
+          <Text style={styles.tileCaption}>{caption} →</Text>
+        </View>
+      </AnimatedPressable>
+    </Reveal>
+  );
+}
+
+function SectionHead({ title, caption, onSeeAll, delay }) {
+  return (
+    <Reveal delay={delay} style={styles.sectionHead}>
+      <View style={styles.flex}>
+        <Text style={styles.sectionTitle} accessibilityRole="header">
+          {title}
+        </Text>
+        <Text style={styles.sectionCaption}>{caption}</Text>
+      </View>
+      <Pressable onPress={onSeeAll} hitSlop={10} accessibilityRole="link" accessibilityLabel={`See all ${title}`}>
+        <Text style={styles.seeAll}>See all</Text>
+      </Pressable>
+    </Reveal>
+  );
+}
+
+// Loading placeholder shaped like a rail, so nothing shifts when it fills.
+function RailSkeleton() {
+  return (
+    <View style={styles.railSkeleton}>
+      {[0, 1, 2].map((i) => (
+        <View key={i} style={{ width: RAIL_CARD_WIDTH }}>
+          <SkeletonBlock style={styles.skeletonPhoto} />
+          <SkeletonBlock style={styles.skeletonLine} />
+          <SkeletonBlock style={[styles.skeletonLine, styles.skeletonLineShort]} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function Rail({ products, startDelay, isFavorite, onOpen, onToggleFavorite }) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.rail}
+      snapToInterval={RAIL_CARD_WIDTH + RAIL_GAP}
+      decelerationRate="fast"
+    >
+      {products.map((product, i) => (
+        <Reveal key={product.id} from="right" delay={startDelay + i * 70}>
+          <ProductCard
+            style={{ width: RAIL_CARD_WIDTH }}
+            product={product}
+            favorited={isFavorite(product.id)}
+            onPress={() => onOpen(product)}
+            onToggleFavorite={() => onToggleFavorite(product)}
+          />
+        </Reveal>
+      ))}
+    </ScrollView>
+  );
+}
+
 export default function HomeScreen({ navigation }) {
   const { products, loading, error, retryFetchProducts } = useProducts();
   const { isFavorite, toggleFavorite } = useFavorites();
-  const { cartCount } = useCart();
-  const [firstName, setFirstName] = React.useState('');
-  const reduceMotion = useReducedMotion();
+  const [profile, setProfile] = React.useState({ name: '', photoUrl: null });
 
   // Refetch on every focus, not just on mount — this is how we pick up a
-  // freshly edited display name when the user comes back from Profilescreen.
+  // freshly edited name or photo when the user comes back from Profile.
   useFocusEffect(
     React.useCallback(() => {
       let isActive = true;
-
-      const fetchUserName = async () => {
+      const fetchProfile = async () => {
         try {
           const currentUser = auth.currentUser;
           if (!currentUser) return;
-
-          const userDocRef = doc(db, 'users', currentUser.uid);
-          const userSnap = await getDoc(userDocRef);
-
+          const userSnap = await getDoc(doc(db, 'users', currentUser.uid));
           if (userSnap.exists() && isActive) {
-            const userData = userSnap.data();
-            // Adjust these keys if your Signupscreen.js saves the name under a different field
-            const fullName = userData.name || userData.fullName || userData.firstName || '';
-            const first = fullName.trim().split(' ')[0];
-            setFirstName(first || '');
+            const data = userSnap.data();
+            setProfile({
+              name: (data.name || data.fullName || data.firstName || '').trim(),
+              photoUrl: data.photoUrl || null,
+            });
           }
-        } catch (error) {
-          console.error('Error fetching user name:', error);
+        } catch (err) {
+          console.error('Error fetching user profile:', err);
         }
       };
-
-      fetchUserName();
+      fetchProfile();
       return () => {
         isActive = false;
       };
     }, [])
   );
 
-  // The six most recently added products.
-  //
-  // No sort here on purpose: ProductContext's query is already
-  // orderBy('createdAt', 'desc'), so `products` arrives in exactly this
-  // order. The sort that used to sit here did nothing anyway —
-  // `createdAt` is a Firestore Timestamp, and `new Date(timestamp)` is
-  // Invalid Date, so every comparison returned NaN and the comparator
-  // never reordered anything. It only looked correct because the query
-  // had already done the work.
-  //
-  // Its "falls back to first 6 if no createdAt" comment described a case
-  // that cannot reach this screen either: Firestore omits documents
-  // missing the orderBy field from the result set entirely, so a product
-  // without createdAt is never in `products` to begin with.
-  const featuredProducts = products.slice(0, 6);
+  const firstName = profile.name.split(' ')[0];
 
-  const ukayCount = products.filter((p) => p.type === 'ukay-ukay').length;
+  // Newest first: ProductContext's query is already orderBy('createdAt',
+  // 'desc'), so `products` arrives in that order.
+  const newArrivals = products.slice(0, NEW_ARRIVALS);
+  const ukay = products.filter((p) => p.type === 'ukay-ukay');
+  const rtwCount = products.filter((p) => p.type === 'ready-to-wear').length;
+  const ukayFinds = ukay.slice(0, UKAY_FINDS);
 
-  const goToCategory = (type) => {
-    navigation.navigate('Shop', { filterType: type });
-  };
+  const ukayCaption = loading || !ukay.length
+    ? 'Pre-loved finds'
+    : `${ukay.length} pre-loved ${ukay.length === 1 ? 'find' : 'finds'}`;
+  const rtwCaption = loading || !rtwCount ? 'New styles' : `${rtwCount} new ${rtwCount === 1 ? 'style' : 'styles'}`;
 
-  // Guests can browse Featured Picks, but favoriting needs an account —
-  // same guard pattern as ProductScreen's heart icon, since the Context
-  // no longer alerts internally (that messaging lives at the screen level
-  // to avoid the double-alert bug we hit on Product).
+  const openShop = (params) => goToTab(navigation, 'Shop', params);
+  const openProduct = (product) => navigation.navigate('Product', { product });
+
+  // Guests can browse, but favoriting needs an account.
   const handleToggleFavorite = (product) => {
     if (!auth.currentUser) {
       showAppAlert('Login Required', 'Please sign in to save favorites.', [
@@ -212,426 +211,206 @@ export default function HomeScreen({ navigation }) {
     toggleFavorite(product);
   };
 
-  return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Greeting */}
-        {firstName ? (
-          <Animated.View
-            entering={reduceMotion ? undefined : FadeIn.duration(200)}
-            style={styles.greetingWrap}
-          >
-            <Text style={styles.greetingText}>
-              {getTimeGreeting()}, {firstName} 👋
-            </Text>
-          </Animated.View>
+  const renderRails = () => {
+    if (loading) {
+      return (
+        <>
+          <RailSkeleton />
+          <RailSkeleton />
+        </>
+      );
+    }
+    if (error) {
+      return (
+        <View style={styles.message}>
+          <EmptyState
+            icon="cloud-offline-outline"
+            title="Couldn't load new arrivals"
+            subtitle="Check your connection and try again."
+          />
+          <Button variant="secondary" label="Retry" onPress={retryFetchProducts} />
+        </View>
+      );
+    }
+    if (!products.length) {
+      return (
+        <View style={styles.message}>
+          <EmptyState
+            icon="pricetags-outline"
+            title="Nothing here just yet"
+            subtitle="We're still unpacking — new finds land here first."
+          />
+        </View>
+      );
+    }
+    return (
+      <>
+        <Rail
+          products={newArrivals}
+          startDelay={360}
+          isFavorite={isFavorite}
+          onOpen={openProduct}
+          onToggleFavorite={handleToggleFavorite}
+        />
+        {ukayFinds.length > 0 ? (
+          <>
+            <View style={styles.pad}>
+              <SectionHead
+                title="Ukay finds"
+                caption="One of a kind. Once it's gone, it's gone."
+                onSeeAll={() => openShop({ filterType: 'ukay-ukay' })}
+                delay={420}
+              />
+            </View>
+            <Rail
+              products={ukayFinds}
+              startDelay={480}
+              isFavorite={isFavorite}
+              onOpen={openProduct}
+              onToggleFavorite={handleToggleFavorite}
+            />
+          </>
         ) : null}
+      </>
+    );
+  };
 
-        {/* Hero — the screen's one signature entrance moment: the photo
-            cross-fades in once decoded rather than popping onto a 340pt
-            block. No further page-load choreography beyond this. */}
-        <HeroImage navigation={navigation} reduceMotion={reduceMotion} />
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+        <View style={styles.pad}>
+          <Reveal delay={40} style={styles.hello}>
+            <View style={styles.flex}>
+              <Text style={styles.greeting}>{getTimeGreeting()},</Text>
+              <Text style={styles.name} numberOfLines={1}>
+                {firstName ? `${firstName} 👋` : 'Welcome 👋'}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => goToTab(navigation, 'Profile')}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Profile"
+            >
+              {profile.photoUrl ? (
+                <Image source={{ uri: profile.photoUrl }} style={styles.avatar} contentFit="cover" transition={150} />
+              ) : (
+                <View style={[styles.avatar, styles.avatarInitials]}>
+                  {initialsOf(profile.name) ? (
+                    <Text style={styles.avatarText}>{initialsOf(profile.name)}</Text>
+                  ) : (
+                    <Ionicons name="person" size={20} color={Colors.light.background} />
+                  )}
+                </View>
+              )}
+            </Pressable>
+          </Reveal>
 
-        {/* Sustainability Strip */}
-        {ukayCount > 0 && (
-          <View style={styles.ecoStrip}>
-            <Text style={styles.ecoEmoji}>♻️</Text>
-            <Text style={styles.ecoText}>
-              <Text style={styles.ecoNumber}>{ukayCount} </Text>
-              pre-loved {ukayCount === 1 ? 'piece' : 'pieces'} getting a second life right now
-            </Text>
+          {/* Not a real field: it opens Shop with the search already focused. */}
+          <Reveal delay={110}>
+            <AnimatedPressable
+              style={styles.fakeSearch}
+              onPress={() => openShop({ focusSearch: true })}
+              rippleColor={Colors.light.border}
+              accessibilityRole="search"
+              accessibilityLabel="Search clothes"
+            >
+              <Ionicons name="search" size={19} color={Colors.light.icon} />
+              <Text style={styles.fakeSearchText}>Search clothes, e.g. &quot;denim&quot;</Text>
+            </AnimatedPressable>
+          </Reveal>
+
+          <View style={styles.tiles}>
+            <CategoryTile
+              kind="ukay"
+              title="Ukay-Ukay"
+              caption={ukayCaption}
+              onPress={() => openShop({ filterType: 'ukay-ukay' })}
+              delay={180}
+            />
+            <CategoryTile
+              kind="rtw"
+              title="Ready-to-Wear"
+              caption={rtwCaption}
+              onPress={() => openShop({ filterType: 'ready-to-wear' })}
+              delay={240}
+            />
           </View>
-        )}
 
-        {/* Category Cards — navigation triggers, not toggles, so press
-            feedback is the only motion here (no persistent "selected"
-            state exists to animate). */}
-        <View style={styles.categoryRow}>
-          <AnimatedPressable
-            style={[styles.categoryCard, { backgroundColor: Colors.light.secondary }]}
-            onPress={() => goToCategory('ukay-ukay')}
-            rippleColor="rgba(255,255,255,0.25)"
-          >
-            <MaterialCommunityIcons name="recycle" size={28} color="#fff" />
-            <Text style={styles.categoryText}>Ukay-Ukay</Text>
-            <Text style={styles.categorySubtext}>Thrifted finds</Text>
-          </AnimatedPressable>
-
-          <AnimatedPressable
-            style={[styles.categoryCard, { backgroundColor: Colors.light.tint }]}
-            onPress={() => goToCategory('ready-to-wear')}
-            rippleColor="rgba(255,255,255,0.25)"
-          >
-            <Ionicons name="shirt-outline" size={28} color="#fff" />
-            <Text style={styles.categoryText}>Ready-to-Wear</Text>
-            <Text style={styles.categorySubtext}>Brand new</Text>
-          </AnimatedPressable>
+          <SectionHead
+            title="New arrivals"
+            caption="Just added by our stores"
+            onSeeAll={() => openShop({ filterType: 'all' })}
+            delay={300}
+          />
         </View>
 
-        {/* Featured Picks */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Featured Picks</Text>
-          <AnimatedPressable onPress={() => navigation.navigate('Shop')} rippleColor={Colors.light.tint + '20'}>
-            <Text style={styles.seeAll}>See all</Text>
-          </AnimatedPressable>
-        </View>
-
-        {loading ? (
-          <FeaturedPicksSkeleton />
-        ) : error ? (
-          <Animated.View
-            entering={reduceMotion ? undefined : FadeIn.duration(220)}
-            style={styles.errorState}
-          >
-            <EmptyState
-              icon="cloud-offline-outline"
-              title="Couldn't load picks"
-              subtitle="Check your connection and try again."
-            />
-            <Button variant="secondary" label="Retry" onPress={retryFetchProducts} />
-          </Animated.View>
-        ) : featuredProducts.length === 0 ? (
-          <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220)}>
-            <EmptyState
-              icon="pricetags-outline"
-              title="Nothing here just yet"
-              subtitle="We're still unpacking — new finds land here first."
-            />
-          </Animated.View>
-        ) : (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.featuredRow}
-          >
-            {featuredProducts.map((product, index) => (
-              <Animated.View
-                key={product.id}
-                entering={reduceMotion ? undefined : FadeInDown.delay(index * 40).duration(220)}
-              >
-                <AnimatedPressable
-                  style={styles.productCard}
-                  onPress={() => navigation.navigate('Product', { product })}
-                  rippleColor={Colors.light.border}
-                >
-                  <View style={styles.productImageWrapper}>
-                    <ProductImage
-                      uri={product.imageUrl}
-                      style={styles.productImage}
-                      accessibilityLabel={`Photo of ${product.name}`}
-                    />
-                    <FavoriteButton
-                      favorited={isFavorite(product.id)}
-                      onToggle={() => handleToggleFavorite(product)}
-                      accessibilityLabel={
-                        isFavorite(product.id)
-                          ? `Remove ${product.name} from favorites`
-                          : `Add ${product.name} to favorites`
-                      }
-                    />
-                  </View>
-                  <Text style={styles.productName} numberOfLines={1}>
-                    {product.name}
-                  </Text>
-                  <Text style={styles.productPrice}>₱{product.price}</Text>
-                </AnimatedPressable>
-              </Animated.View>
-            ))}
-          </ScrollView>
-        )}
+        {renderRails()}
       </ScrollView>
 
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNav}>
-        <AnimatedPressable
-          style={styles.navItem}
-          rippleColor={Colors.light.border}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: true }}
-          accessibilityLabel="Home, current tab"
-        >
-          <Ionicons name="home" size={24} color={Colors.light.tint} />
-          <Text style={styles.navTextActive}>Home</Text>
-        </AnimatedPressable>
-
-        <AnimatedPressable
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Shop')}
-          rippleColor={Colors.light.border}
-          accessibilityRole="tab"
-          accessibilityLabel="Shop"
-        >
-          <Ionicons name="search-outline" size={24} color={Colors.light.icon} />
-          <Text style={styles.navText}>Shop</Text>
-        </AnimatedPressable>
-
-        <AnimatedPressable
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Cart')}
-          rippleColor={Colors.light.border}
-          accessibilityRole="tab"
-          accessibilityLabel={cartCount > 0 ? `Cart, ${cartCount} ${cartCount === 1 ? 'item' : 'items'}` : 'Cart'}
-        >
-          <View style={styles.navIconWrapper}>
-            <Ionicons name="cart-outline" size={24} color={Colors.light.icon} />
-            {cartCount > 0 && (
-              <View style={styles.cartBadge}>
-                <Text style={styles.cartBadgeText}>{cartCount > 99 ? '99+' : cartCount}</Text>
-              </View>
-            )}
-          </View>
-          <Text style={styles.navText}>Cart</Text>
-        </AnimatedPressable>
-
-        <AnimatedPressable
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Profile')}
-          rippleColor={Colors.light.border}
-          accessibilityRole="tab"
-          accessibilityLabel="Profile"
-        >
-          <Ionicons name="person-outline" size={24} color={Colors.light.icon} />
-          <Text style={styles.navText}>Profile</Text>
-        </AnimatedPressable>
-      </View>
+      <TabBar navigation={navigation} current="Home" />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
-  greetingWrap: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  greetingText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.light.text,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  hero: {
-    width: '100%',
-    height: 340,
-    justifyContent: 'center',
+  container: { flex: 1, backgroundColor: Colors.light.background },
+  flex: { flex: 1 },
+  scroll: { paddingTop: 16, paddingBottom: 24 },
+  pad: { paddingHorizontal: 20 },
+
+  hello: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  greeting: { fontSize: 12.5, color: Colors.light.icon },
+  name: { fontSize: 22, fontWeight: '600', letterSpacing: -0.4, color: Colors.light.text },
+  avatar: { width: 42, height: 42, borderRadius: 14, marginLeft: 12 },
+  avatarInitials: { backgroundColor: Colors.light.secondary, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 15, fontWeight: '600', color: Colors.light.background },
+
+  fakeSearch: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  heroOverlay: {
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingHorizontal: 32,
-    paddingVertical: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    marginHorizontal: 24,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#fff',
-    textAlign: 'center',
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-    lineHeight: 34,
+    gap: 10,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 14,
     marginBottom: 20,
   },
-  button: {
-    backgroundColor: Colors.light.tint,
-    paddingHorizontal: 36,
-    paddingVertical: 14,
-    borderRadius: Radius.lg,
-  },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  ecoStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.light.secondary + '20',
-    marginHorizontal: 20,
-    marginTop: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: Radius.lg,
-  },
-  ecoEmoji: {
-    fontSize: 20,
-    marginRight: 10,
-  },
-  ecoText: {
-    flex: 1,
-    fontSize: 13,
-    color: Colors.light.secondary,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  ecoNumber: {
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  categoryRow: {
-    flexDirection: 'row',
+  fakeSearchText: { fontSize: 14, color: '#8E857B' },
+
+  tiles: { flexDirection: 'row', gap: 12, marginBottom: 26 },
+  tile: {
+    height: 132,
+    borderRadius: 20,
+    padding: 14,
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    marginTop: 20,
-    gap: 12,
-  },
-  categoryCard: {
-    flex: 1,
-    borderRadius: Radius.lg,
-    padding: 18,
-    minHeight: 100,
-    justifyContent: 'center',
-  },
-  categoryText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 8,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  categorySubtext: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
-    marginTop: 2,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginTop: 28,
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.light.text,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  seeAll: {
-    fontSize: 14,
-    color: Colors.light.tint,
-    fontWeight: '600',
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  featuredRow: {
-    paddingHorizontal: 20,
-    paddingBottom: 30,
-    gap: 14,
-  },
-  errorState: {
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 30,
-    gap: 12,
-  },
-  skeletonRow: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingBottom: 30,
-    gap: 14,
-  },
-  skeletonLine: {
-    marginTop: 8,
-    height: 14,
-    width: '90%',
-    borderRadius: Radius.sm,
-  },
-  skeletonLineShort: {
-    marginTop: 6,
-    height: 12,
-    width: '50%',
-  },
-  productCard: {
-    width: 140,
-  },
-  productImageWrapper: {
-    width: 140,
-    height: 140,
-    borderRadius: Radius.lg,
     overflow: 'hidden',
-    backgroundColor: Colors.light.border,
-    // Hairline frame so a light/white-background product photo doesn't
-    // blend into the canvas behind it — same restrained device premium
-    // product photography uses.
-    borderWidth: 1,
-    borderColor: Colors.light.border,
   },
-  productImage: {
-    width: '100%',
-    height: '100%',
-  },
-  favoriteBtn: {
+  tileRing: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: 14,
-    padding: 6,
+    right: -34,
+    top: -34,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    borderWidth: 1.5,
+    borderColor: 'rgba(250,247,242,0.18)',
   },
-  productName: {
-    marginTop: 8,
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.light.text,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  productPrice: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Colors.light.highlight,
-    marginTop: 2,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  bottomNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingVertical: 12,
-    backgroundColor: Colors.light.background,
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
-  },
-  navItem: {
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  navIconWrapper: {
-    position: 'relative',
-  },
-  cartBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -8,
-    backgroundColor: Colors.light.danger,
-    borderRadius: 8,
-    minWidth: 16,
-    height: 16,
-    paddingHorizontal: 3,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cartBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  navText: {
-    fontSize: 10,
-    color: Colors.light.icon,
-    marginTop: 4,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
-  navTextActive: {
-    fontSize: 10,
-    color: Colors.light.tint,
-    marginTop: 4,
-    fontFamily: Platform.OS === 'ios' ? 'System' : 'Roboto',
-  },
+  tileTitle: { fontSize: 15.5, fontWeight: '600', color: Colors.light.background },
+  tileCaption: { fontSize: 11.5, color: 'rgba(250,247,242,0.85)', marginTop: 1 },
+
+  sectionHead: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
+  sectionTitle: { fontSize: 17, fontWeight: '600', letterSpacing: -0.2, color: Colors.light.text },
+  sectionCaption: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
+  seeAll: { fontSize: 12.5, fontWeight: '600', color: Colors.light.tint, paddingLeft: 12, paddingTop: 4 },
+
+  rail: { paddingHorizontal: 20, paddingBottom: 4, gap: RAIL_GAP, marginBottom: 22 },
+  railSkeleton: { flexDirection: 'row', gap: RAIL_GAP, paddingHorizontal: 20, marginBottom: 26 },
+  skeletonPhoto: { aspectRatio: 4 / 5, borderRadius: 18 },
+  skeletonLine: { height: 12, borderRadius: 6, marginTop: 10, width: '80%' },
+  skeletonLineShort: { marginTop: 6, width: '40%' },
+
+  message: { alignItems: 'center', paddingHorizontal: 20, gap: 12 },
 });

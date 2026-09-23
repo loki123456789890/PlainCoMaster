@@ -154,7 +154,13 @@ export default function App() {
                     />
 
                     {/* iPhone 16 Pro Max - 14 */}
-                    <Stack.Screen name="Shop" component={ShopScreen} />
+                    {/* Opened from the tab bar it fades, like switching tabs;
+                        a store's page (storeId) still slides in. */}
+                    <Stack.Screen
+                      name="Shop"
+                      component={ShopScreen}
+                      options={({ route }) => (route.params?.via === 'tab' ? { animation: 'fade' } : {})}
+                    />
 
                     {/* iPhone 16 Pro Max - 16 & 18 */}
                     <Stack.Screen name="Product" component={ProductScreen} />
