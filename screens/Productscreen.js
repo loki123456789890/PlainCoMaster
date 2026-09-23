@@ -37,6 +37,7 @@ import SkeletonBlock from '../components/ui/Skeleton';
 import ProductImage from '../components/ui/ProductImage';
 import SizeGuideModal from '../components/ui/SizeGuideModal';
 import StarRating from '../components/ui/StarRating';
+import Avatar from '../components/ui/Avatar';
 import {
   productReviewsQuery,
   mapReviewDoc,
@@ -714,6 +715,7 @@ export default function ProductScreen({ navigation, route }) {
                   } ${review.text}`}
                 >
                   <View style={styles.reviewItemHeader}>
+                    <Avatar uri={review.userPhotoUrl} size={28} />
                     <StarRating rating={review.rating} size={13} />
                     <Text style={styles.reviewItemAuthor} numberOfLines={1}>{review.userName}</Text>
                     <Text style={styles.reviewItemDate}>{formatReviewDate(review.createdAt)}</Text>

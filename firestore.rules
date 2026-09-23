@@ -210,6 +210,17 @@ service cloud.firestore {
               request.resource.data.get('isActive', true) == false
             )
             ||
+            // Profile photo: set, replaced, or removed (absent afterwards).
+            (
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photoUrl']) &&
+              (
+                !('photoUrl' in request.resource.data) ||
+                (request.resource.data.photoUrl is string &&
+                 request.resource.data.photoUrl.size() > 0 &&
+                 request.resource.data.photoUrl.size() <= 2000)
+              )
+            )
+            ||
             (
               request.resource.data.diff(resource.data).affectedKeys().hasOnly(['shippingAddress']) &&
               request.resource.data.shippingAddress is map &&
@@ -633,11 +644,33 @@ service cloud.firestore {
         request.resource.data.name.matches('.*\\S.*') &&
         request.resource.data.name.size() <= 60 &&
         request.resource.data.createdAt == request.time;
-      allow update: if isPlatformAdmin() &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
-        request.resource.data.name is string &&
-        request.resource.data.name.matches('.*\\S.*') &&
-        request.resource.data.name.size() <= 60;
+      allow update: if (
+          isPlatformAdmin() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name']) &&
+          request.resource.data.name is string &&
+          request.resource.data.name.matches('.*\\S.*') &&
+          request.resource.data.name.size() <= 60
+        ) ||
+        // STORE PROFILE: the store's own manager may set its logo and a
+        // short description — what shoppers see on the store page. Not
+        // the name: renaming a store changes what every past order and
+        // review says it was, so that stays with the Platform Admin.
+        // Either field may be removed (absent afterwards).
+        (
+          managesStore(storeId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['logoUrl', 'description']) &&
+          (
+            !('logoUrl' in request.resource.data) ||
+            (request.resource.data.logoUrl is string &&
+             request.resource.data.logoUrl.size() > 0 &&
+             request.resource.data.logoUrl.size() <= 2000)
+          ) &&
+          (
+            !('description' in request.resource.data) ||
+            (request.resource.data.description is string &&
+             request.resource.data.description.size() <= 300)
+          )
+        );
     }
     // Product reviews, restricted to verified purchases.
     //
@@ -736,8 +769,12 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly(
           ['orderId', 'productId', 'productName', 'userId', 'userName',
            'rating', 'matchedDescription', 'text', 'hidden', 'createdAt',
-           'storeId']
+           'storeId', 'userPhotoUrl']
         ) &&
+        // The author's profile photo, copied at write time like userName,
+        // because /users is unreadable to other shoppers.
+        request.resource.data.get('userPhotoUrl', '') is string &&
+        request.resource.data.get('userPhotoUrl', '').size() <= 2000 &&
         request.resource.data.keys().hasAll(
           ['orderId', 'productId', 'userId', 'rating', 'matchedDescription',
            'hidden', 'createdAt', 'storeId']

@@ -246,16 +246,20 @@ store". See section 10.
 order, opened from Order Details ("Message \<store\>") or Manage Orders
 ("Message Buyer"). See section 11.
 
+**Store Profile screen** (Store Manager) — the store's logo and
+description, from a new dashboard tile. See section 12.
+
 ---
 
 ## 8. Verification — worth a short section if the SRS has one
 
-The security rules have an automated test suite: **127 tests** run against
+The security rules have an automated test suite: **130 tests** run against
 the Firestore emulator via `npm run test:rules`. Coverage includes
 privilege escalation attempts, role separation in both directions, field
 validation, checkout stock rules, order cancellation, audit log
 integrity, order creation, the verified-purchase chain behind reviews,
-store separation (section 10) and order chat (section 11).
+store separation (section 10), order chat (section 11) and profiles
+(section 12).
 Notable cases:
 
 - A signup cannot set a privileged role.
@@ -831,7 +835,105 @@ Android phone against production.
 
 ---
 
-## 12. Still outstanding — SRS-side only, no code changes needed
+## 12. Profiles — customer photo and email verification, store profile
+
+Before this, a customer could edit only their name, and a store was
+known to shoppers only by its name, item count and rating.
+
+> **Status (23 Sep 2026):** built and tested; reaches production with the
+> next release (rules, storage rules, web app, APK).
+
+### Customer profile — suggested wording
+
+> A customer may add, change or remove a profile photo, taken with the
+> camera or chosen from the photo library. The photo is shown on their
+> profile and beside the reviews they write. The profile shows whether
+> the customer's email address is verified; an unverified customer can
+> request a verification link by email. The customer's phone number is
+> kept with their saved delivery address, which the profile links to.
+
+**Deliberately not collected: gender, birthday, bio.** PlainCo makes no
+use of them — there are no birthday offers, no gender-based
+recommendations, and customers have no public page for a bio. Under the
+Data Privacy Act of 2012 (RA 10173), personal data collected must be
+adequate, relevant and not excessive for its purpose, so fields with no
+purpose are left out. Suggested wording:
+
+> In line with the proportionality principle of the Data Privacy Act of
+> 2012, PlainCo collects only the personal information needed to deliver
+> orders and support the account: name, email address, an optional
+> profile photo, and a delivery address with a contact number.
+
+### Store profile — suggested wording
+
+> Each store has a profile: a logo and a short description of up to 300
+> characters, edited by that store's Store Manager from the Store Profile
+> screen. The logo and description appear on the store's page, the logo
+> in the Shop's "Shop by store" row and at the top of a customer's order
+> chat with the store. A store's name can be changed only by a Platform
+> Admin, because it is recorded on the store's past orders and reviews.
+
+**Platform Admin:** no profile added. Platform Admins are never shown to
+customers, and their account details are managed in Manage Users.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-P1 | A customer can add, change or remove their profile photo (camera or library; JPEG, PNG or WebP up to 5 MB). |
+| FR-P2 | A customer's photo is shown beside reviews they write after setting it. |
+| FR-P3 | The profile shows "Email verified" or "Not verified · Verify now"; Verify now sends a verification email, and the status updates when the customer returns to the profile. |
+| FR-P4 | The profile links to the saved delivery address and phone number. |
+| FR-S1 | A Store Manager can set, change or remove their store's logo and description from Store Profile, with a preview of how shoppers will see it. |
+| FR-S2 | The store's logo and description appear on its store page; the logo also appears in "Shop by store" and in the customer's order chat header. |
+| FR-S3 | A Store Manager cannot change the store's name, or another store's profile. |
+
+### Business rules / security (enforced by security rules)
+
+- A customer can change only their own `photoUrl`, and no other field in
+  the same write.
+- Only a store's own manager can change its `logoUrl` and `description`;
+  only a Platform Admin can change its `name`.
+- Profile photos can be uploaded only by the account they belong to;
+  store logos only by that store's manager.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `users` | `photoUrl` (string, optional) | Set only by the account itself. |
+| `stores` | `logoUrl` (string, optional), `description` (string ≤ 300, optional) | Set only by the store's manager. |
+| `reviews` | `userPhotoUrl` (string, optional) | The author's photo, copied when the review is written, like `userName`. |
+| Storage | `avatars/{uid}/…`, `stores/{storeId}/…` | Profile photos and store logos. |
+
+### Screens — add to the module list (section 7)
+
+- **Store Profile** (Store Manager) — new; reached from a new tile on the
+  Store Manager dashboard.
+- **Profile** (customer) — gains the photo, email verification status and
+  the Delivery Address & Phone link.
+
+### Limitations
+
+- A review keeps the photo its author had when writing it; changing the
+  profile photo later does not update old reviews.
+- The Store Manager does not see the customer's photo in order chat:
+  customer accounts are private to the customer.
+
+### Verification
+
+Rules test suite 127 → **130**: a customer can set and remove only their
+own photo and cannot slip another field into the same write; a Store
+Manager can edit only their own store's logo and description, not its
+name, and not another store's; a deactivated manager cannot; a review
+may carry the author's photo, within the length limit. The flows were
+also run in the app against the local emulators: a customer set a photo
+and requested verification, a Store Manager set a logo and description,
+and a shopper saw them on the store page and in "Shop by store".
+
+---
+
+## 13. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all

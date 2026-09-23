@@ -246,6 +246,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
       customerId: auth.currentUser?.uid,
       orderId: order.id,
       side: 'customer',
+      storeId: order.storeId,
       title: order.storeName || 'The store',
     });
   };

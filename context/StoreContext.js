@@ -45,6 +45,9 @@ export const StoreProvider = ({ children }) => {
               id: docSnap.id,
               name: data.name || 'Unnamed store',
               createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null,
+              // The store profile its manager edits (AdminStoreProfileScreen).
+              logoUrl: data.logoUrl || null,
+              description: data.description || '',
             };
           });
           list.sort((a, b) => a.name.localeCompare(b.name));

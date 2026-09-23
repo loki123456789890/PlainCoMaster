@@ -124,5 +124,23 @@ service firebase.storage {
       allow read: if inChat(customerId, orderId);
       allow create: if inChat(customerId, orderId) && isValidImage();
     }
+
+    // Profile photos. Only the account itself uploads its own; any
+    // signed-in user may view them, since they appear beside reviews.
+    match /avatars/{uid}/{imageId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.auth.uid == uid && isValidImage();
+    }
+
+    // Store logos: public like product photos, uploaded only by that
+    // store's own manager — the same test firestore.rules' managesStore()
+    // applies to the store document the URL goes into.
+    match /stores/{storeId}/{imageId} {
+      allow read: if request.auth != null;
+      allow create: if isSeller() &&
+        'storeId' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.storeId == storeId &&
+        isValidImage();
+    }
   }
 }

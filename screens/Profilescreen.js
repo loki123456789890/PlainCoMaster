@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { showAppAlert } from '../utils/appAlert';
 import Animated, {
@@ -22,7 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 import { auth, db } from '../firebaseConfig';
-import { signOut, updateProfile } from 'firebase/auth';
+import { signOut, updateProfile, sendEmailVerification } from 'firebase/auth';
 import {
   doc,
   getDoc,
@@ -32,7 +33,10 @@ import {
   query,
   where,
   getDocs,
+  deleteField,
 } from 'firebase/firestore';
+import { pickAndUploadImage, uploadErrorMessage } from '../utils/imageUpload';
+import Avatar from '../components/ui/Avatar';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import { useAdmin } from '../context/AdminContext';
 import { getPortalLabel } from '../constants/roles';
@@ -106,7 +110,10 @@ function MenuRow({
 }
 
 export default function ProfileScreen({ navigation }) {
-  const [userData, setUserData] = useState({ name: '', email: '' });
+  const [userData, setUserData] = useState({ name: '', email: '', photoUrl: null });
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(Boolean(auth.currentUser?.emailVerified));
+  const [sendingVerification, setSendingVerification] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
@@ -139,19 +146,122 @@ export default function ProfileScreen({ navigation }) {
       try {
         const userDoc = await getDoc(doc(db, "users", user.uid));
         if (userDoc.exists()) {
-          setUserData({ name: userDoc.data().name, email: userDoc.data().email });
+          setUserData({
+            name: userDoc.data().name,
+            email: userDoc.data().email,
+            photoUrl: userDoc.data().photoUrl || null,
+          });
         } else {
-          setUserData({ name: user.displayName || 'User', email: user.email });
+          setUserData({ name: user.displayName || 'User', email: user.email, photoUrl: null });
         }
       } catch (error) {
         console.error("Error fetching user data:", error);
-        setUserData({ name: user.displayName || 'User', email: user.email });
+        setUserData({ name: user.displayName || 'User', email: user.email, photoUrl: null });
       } finally {
         setLoadingProfile(false);
       }
     };
     fetchUserData();
   }, []);
+
+  // emailVerified on the cached user only changes after reload(), and the
+  // customer verifies in their mail app, outside PlainCo — so it is
+  // re-read each time they come back to this screen.
+  useEffect(() => {
+    const refresh = () => {
+      const user = auth.currentUser;
+      if (!user || user.emailVerified) return;
+      user
+        .reload()
+        .then(() => setEmailVerified(Boolean(auth.currentUser?.emailVerified)))
+        .catch((error) => console.error('Could not refresh verification status:', error?.code));
+    };
+    refresh();
+    return navigation.addListener('focus', refresh);
+  }, [navigation]);
+
+  const handleSendVerification = async () => {
+    if (!auth.currentUser || sendingVerification) return;
+    Haptics.selectionAsync();
+    setSendingVerification(true);
+    try {
+      await sendEmailVerification(auth.currentUser);
+      showAppAlert(
+        'Check your email',
+        `We sent a verification link to ${userData.email}. Open it, then come back here.`
+      );
+    } catch (error) {
+      console.error('Could not send verification email:', error?.code);
+      showAppAlert(
+        'Couldn’t send the email',
+        error?.code === 'auth/too-many-requests'
+          ? 'A link was sent recently. Please wait a few minutes before asking for another.'
+          : 'Please check your connection and try again.'
+      );
+    } finally {
+      setSendingVerification(false);
+    }
+  };
+
+  // Stored on the user document (the profile's source of truth) and on
+  // the Auth profile, which is what WriteReviewScreen copies onto a review
+  // — the same two places the name lives, for the same reason.
+  const savePhoto = async (photoUrl) => {
+    const user = auth.currentUser;
+    await updateDoc(doc(db, 'users', user.uid), { photoUrl: photoUrl || deleteField() });
+    updateProfile(user, { photoURL: photoUrl || null }).catch((error) => {
+      console.error('Photo saved, but Auth photoURL did not sync:', error?.code);
+    });
+    setUserData((prev) => ({ ...prev, photoUrl: photoUrl || null }));
+  };
+
+  const uploadPhoto = async (source) => {
+    setPhotoBusy(true);
+    try {
+      const result = await pickAndUploadImage({ source, folder: `avatars/${auth.currentUser.uid}` });
+      if (result.cancelled) return;
+      if (!result.success) {
+        showAppAlert('Photo not updated', uploadErrorMessage(result.error));
+        return;
+      }
+      await savePhoto(result.url);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (error) {
+      console.error('Could not save profile photo:', error);
+      showAppAlert('Photo not updated', 'Please check your connection and try again.');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const removePhoto = async () => {
+    setPhotoBusy(true);
+    try {
+      await savePhoto(null);
+    } catch (error) {
+      console.error('Could not remove profile photo:', error);
+      showAppAlert('Photo not removed', 'Please check your connection and try again.');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const handleChangePhoto = () => {
+    if (photoBusy || !isConnected) return;
+    Haptics.selectionAsync();
+    const options =
+      Platform.OS === 'web'
+        ? [{ text: 'Choose a Photo', onPress: () => uploadPhoto('library') }]
+        : [
+            { text: 'Take Photo', onPress: () => uploadPhoto('camera') },
+            { text: 'Choose from Library', onPress: () => uploadPhoto('library') },
+          ];
+    if (userData.photoUrl) {
+      options.push({ text: 'Remove Photo', style: 'destructive', onPress: removePhoto });
+    }
+    options.push({ text: 'Cancel', style: 'cancel' });
+    showAppAlert('Profile photo', undefined, options);
+  };
 
   const handleStartEditName = () => {
     Haptics.selectionAsync();
@@ -468,9 +578,23 @@ export default function ProfileScreen({ navigation }) {
             accessible
             accessibilityLabel={`Signed in as ${userData.name}, ${userData.email}`}
           >
-            <View style={styles.avatar}>
-              <Ionicons name="person" size={56} color={Colors.light.tint} />
-            </View>
+            <Pressable
+              onPress={handleChangePhoto}
+              disabled={photoBusy}
+              style={styles.avatarWrap}
+              accessibilityRole="button"
+              accessibilityLabel={userData.photoUrl ? 'Change profile photo' : 'Add a profile photo'}
+            >
+              <Avatar uri={userData.photoUrl} size={100} />
+              {photoBusy ? (
+                <View style={styles.avatarBusy}>
+                  <ActivityIndicator color="#fff" />
+                </View>
+              ) : null}
+              <View style={styles.avatarBadge}>
+                <Ionicons name="camera" size={15} color="#fff" />
+              </View>
+            </Pressable>
 
             {editingName ? (
               <View style={styles.nameEditWrap}>
@@ -523,6 +647,27 @@ export default function ProfileScreen({ navigation }) {
               </View>
             )}
             <Text style={styles.email}>{userData.email}</Text>
+            {emailVerified ? (
+              <View style={styles.verifyRow}>
+                <Ionicons name="checkmark-circle" size={14} color={Colors.light.success} />
+                <Text style={styles.verifiedText}>Email verified</Text>
+              </View>
+            ) : (
+              <Pressable
+                onPress={handleSendVerification}
+                disabled={sendingVerification || !isConnected}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={styles.verifyRow}
+                accessibilityRole="button"
+                accessibilityLabel="Email not verified. Send a verification link."
+              >
+                <Ionicons name="alert-circle-outline" size={14} color={Colors.light.icon} />
+                <Text style={styles.unverifiedText}>Not verified ·</Text>
+                <Text style={styles.verifyLink}>
+                  {sendingVerification ? 'Sending…' : 'Verify now'}
+                </Text>
+              </Pressable>
+            )}
           </Animated.View>
         )}
 
@@ -549,6 +694,20 @@ export default function ProfileScreen({ navigation }) {
             label="Favorites"
             onPress={() => navigation.navigate('Favorites')}
             accessibilityHint="Opens your saved items"
+            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
+            reduceMotion={reduceMotion}
+          />
+
+          {/* The phone lives with the saved delivery address, where
+              checkout reads it — one copy, edited in one place. */}
+          <MenuRow
+            index={2}
+            icon="location-outline"
+            iconColor={Colors.light.icon}
+            circleColor={Colors.light.border}
+            label="Delivery Address & Phone"
+            onPress={() => navigation.navigate('Location')}
+            accessibilityHint="Opens your saved delivery address and phone number"
             trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
             reduceMotion={reduceMotion}
           />
@@ -673,17 +832,34 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.border,
   },
-  avatar: {
-    width: 100,
-    height: 100,
+  avatarWrap: { width: 100, height: 100, marginBottom: Spacing.md },
+  avatarBusy: {
+    ...StyleSheet.absoluteFillObject,
     borderRadius: 50,
-    backgroundColor: Colors.light.tint + '15',
+    backgroundColor: 'rgba(28,27,26,0.45)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: Spacing.md,
+  },
+  // Clay, because tapping the photo is this block's one action.
+  avatarBadge: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.light.tint,
+    borderWidth: 2,
+    borderColor: Colors.light.background,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   name: { fontSize: 19, fontWeight: '700', color: Colors.light.text },
   email: { fontSize: 14, color: Colors.light.icon, marginTop: 4 },
+  verifyRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, minHeight: 24 },
+  verifiedText: { fontSize: 13, fontWeight: '600', color: Colors.light.success },
+  unverifiedText: { fontSize: 13, color: Colors.light.icon },
+  verifyLink: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
 
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   nameEditWrap: { width: '100%', paddingHorizontal: 20 },

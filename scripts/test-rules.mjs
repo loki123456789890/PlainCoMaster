@@ -1711,6 +1711,44 @@ await test('CHAT-8  the chat bookkeeping is not a back door into the order', asy
 });
 
 // ---------------------------------------------------------------------------
+// Profiles: a customer's photo, a store's logo and description.
+// ---------------------------------------------------------------------------
+await test('PROFILE-1  a customer can set and remove their own photo, and nothing else rides along', async () => {
+  const me = doc(asCustomer(), 'users/customer1');
+  await assertSucceeds(updateDoc(me, { photoUrl: 'https://example.com/me.jpg' }));
+  await assertSucceeds(updateDoc(me, { photoUrl: deleteField() }));
+  await assertFails(updateDoc(me, { photoUrl: '' }));
+  await assertFails(updateDoc(me, { photoUrl: 'https://example.com/me.jpg', role: 'seller' }));
+  await assertFails(updateDoc(doc(asCustomer(), 'users/customer2'), { photoUrl: 'https://example.com/x.jpg' }));
+});
+
+await test('PROFILE-2  a store manager can edit their own store\'s logo and description only', async () => {
+  const store1 = (db) => doc(db, 'stores/store1');
+  await assertSucceeds(updateDoc(store1(asSeller()), {
+    logoUrl: 'https://example.com/logo.png', description: 'Preloved denim, hand-picked.',
+  }));
+  await assertSucceeds(updateDoc(store1(asSeller()), { logoUrl: deleteField(), description: deleteField() }));
+  // Not the name, not too long, not another store, not a customer.
+  await assertFails(updateDoc(store1(asSeller()), { name: 'Renamed' }));
+  await assertFails(updateDoc(store1(asSeller()), { description: 'x'.repeat(301) }));
+  await assertFails(updateDoc(store1(asOtherSeller()), { description: 'Hijacked' }));
+  await assertFails(updateDoc(store1(asCustomer()), { description: 'Hi' }));
+  await assertFails(updateDoc(store1(asDeactivatedSeller()), { description: 'Gone' }));
+  // The Platform Admin still owns the name.
+  await assertSucceeds(updateDoc(store1(asAdmin()), { name: 'Tindahan ni Sam 2' }));
+});
+
+await test('PROFILE-3  a review may carry the author\'s photo', async () => {
+  const review = (overrides) => setDoc(doc(asCustomer(), 'reviews/delivered1_p1'), {
+    orderId: 'delivered1', productId: 'p1', productName: 'Denim Jacket',
+    userId: 'customer1', userName: 'Cathy C.', rating: 5, matchedDescription: true,
+    text: '', hidden: false, createdAt: serverTimestamp(), storeId: 'store1', ...overrides,
+  });
+  await assertFails(review({ userPhotoUrl: 'x'.repeat(2001) }));
+  await assertSucceeds(review({ userPhotoUrl: 'https://example.com/me.jpg' }));
+});
+
+// ---------------------------------------------------------------------------
 await testEnv.cleanup();
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);

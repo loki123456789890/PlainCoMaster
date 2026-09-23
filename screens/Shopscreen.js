@@ -33,6 +33,7 @@ import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import StarRating from '../components/ui/StarRating';
+import Avatar from '../components/ui/Avatar';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
@@ -324,9 +325,14 @@ export default function ShopScreen({ navigation, route }) {
           store's page it is that store's profile: what it sells, counted
           from its own listings, and how long it has been on PlainCo. */}
       <View style={styles.storeStrip}>
-        <View style={styles.storeIconWrap}>
-          <Ionicons name="storefront-outline" size={18} color={Colors.light.tint} />
-        </View>
+        {storeId ? (
+          // The store's own logo, set on its Store Profile.
+          <Avatar uri={store?.logoUrl} size={48} icon="storefront-outline" />
+        ) : (
+          <View style={styles.storeIconWrap}>
+            <Ionicons name="storefront-outline" size={18} color={Colors.light.tint} />
+          </View>
+        )}
         <View style={{ flex: 1 }}>
           <Text style={styles.storeName}>{storeId ? store?.name || 'Store' : 'PlainCo'}</Text>
           <Text style={styles.storeMeta}>
@@ -339,6 +345,9 @@ export default function ShopScreen({ navigation, route }) {
             <Text style={styles.storeMeta}>
               On PlainCo since {store.createdAt.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })}
             </Text>
+          ) : null}
+          {storeId && store?.description ? (
+            <Text style={styles.storeDescription}>{store.description}</Text>
           ) : null}
         </View>
       </View>
@@ -386,7 +395,7 @@ export default function ShopScreen({ navigation, route }) {
                   ratings[s.id]?.count > 0 ? `, rated ${formatAverage(ratings[s.id].average)} out of 5` : ''
                 }`}
               >
-                <Ionicons name="storefront-outline" size={16} color={Colors.light.tint} />
+                <Avatar uri={s.logoUrl} size={28} icon="storefront-outline" />
                 <View style={styles.storeCardText}>
                   <Text style={styles.storeCardName} numberOfLines={1}>{s.name}</Text>
                   <View style={styles.storeCardMetaRow}>
@@ -638,6 +647,7 @@ const styles = StyleSheet.create({
   },
   storeName: { fontSize: 15, fontWeight: '700', color: Colors.light.text },
   storeMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
+  storeDescription: { fontSize: 13, color: Colors.light.text, marginTop: 6, lineHeight: 19 },
 
   storesTitle: {
     fontSize: 13,

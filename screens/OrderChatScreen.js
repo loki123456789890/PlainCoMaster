@@ -22,6 +22,8 @@ import { auth } from '../firebaseConfig';
 import { Colors, Spacing, Radius } from '../constants/theme';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
+import Avatar from '../components/ui/Avatar';
+import { useStores } from '../context/StoreContext';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { showAppAlert } from '../utils/appAlert';
 import { formatOrderNumber } from '../utils/orderNumber';
@@ -289,7 +291,11 @@ function ReactionDetails({ message, uid, nameFor, onClose, onRemove }) {
  * bubbles are "mine" and which read marker to stamp.
  */
 export default function OrderChatScreen({ navigation, route }) {
-  const { customerId, orderId, side = 'customer', title } = route.params || {};
+  const { customerId, orderId, side = 'customer', title, storeId } = route.params || {};
+  // The store's logo in the header, on the customer's side. The store
+  // side has no picture of the buyer: user accounts are private to them.
+  const { getStore } = useStores();
+  const chatStore = side === 'customer' ? getStore(storeId) : null;
   const { isConnected } = useNetworkStatus();
   const uid = auth.currentUser?.uid;
 
@@ -570,7 +576,10 @@ export default function OrderChatScreen({ navigation, route }) {
           <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </TouchableOpacity>
         <View style={styles.headerText}>
-          <Text style={styles.headerTitle} numberOfLines={1}>{title || 'Messages'}</Text>
+          <View style={styles.headerTitleRow}>
+            {chatStore ? <Avatar uri={chatStore.logoUrl} size={24} icon="storefront-outline" /> : null}
+            <Text style={styles.headerTitle} numberOfLines={1}>{title || 'Messages'}</Text>
+          </View>
           <Text style={styles.headerSubtitle}>Order {formatOrderNumber(orderId)}</Text>
         </View>
         <View style={styles.backButton} />
@@ -776,6 +785,7 @@ const styles = StyleSheet.create({
   },
   backButton: { width: 40, height: 40, justifyContent: 'center' },
   headerText: { flex: 1, alignItems: 'center' },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
   headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
   headerSubtitle: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
 

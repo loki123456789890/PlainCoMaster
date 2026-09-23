@@ -294,6 +294,15 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       loading: false,
       error: false,
     },
+    {
+      // What shoppers see about the store: its logo and description.
+      title: 'Store Profile',
+      icon: 'storefront-outline',
+      screen: 'AdminStoreProfile',
+      caption: 'Logo & about',
+      loading: false,
+      error: false,
+    },
   ];
 
   const handleLogout = () => {

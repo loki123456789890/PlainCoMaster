@@ -167,6 +167,9 @@ export default function WriteReviewScreen({ navigation, route }) {
           productName: (item?.name || '').slice(0, 120),
           userId: auth.currentUser.uid,
           userName: publicDisplayName(auth.currentUser.displayName).slice(0, 60),
+          // Copied for the same reason as the name; omitted, not blank,
+          // when there is no photo.
+          ...(auth.currentUser.photoURL ? { userPhotoUrl: auth.currentUser.photoURL.slice(0, 2000) } : {}),
           rating,
           matchedDescription,
           text: trimmedText,

@@ -58,6 +58,7 @@ export function mapReviewDoc(docSnap) {
     productName: data.productName || '',
     userId: data.userId || '',
     userName: data.userName || 'PlainCo shopper',
+    userPhotoUrl: data.userPhotoUrl || null,
     rating: Number(data.rating) || 0,
     // Compared to true rather than coerced: this field is the whole point
     // of the feature, and a missing one must not quietly become "did not
