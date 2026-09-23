@@ -702,7 +702,8 @@ arrived.
 | FR-C4 | New messages appear without refreshing, and the list stays on the newest message. |
 | FR-C5 | An order with a message the viewer has not read shows "New message" in My Orders (customer) and in Manage Orders (Store Manager). Opening the conversation clears it. |
 | FR-C6 | Long-pressing a message opens a menu with six reactions (❤️ 😆 😮 😢 😠 👍) and the actions that apply to that message. |
-| FR-C7 | **React:** each participant may set one reaction per message; choosing the same one again removes it. |
+| FR-C7 | **React:** each participant may set one reaction per message, and change or remove it. |
+| FR-C7a | **See and remove reactions:** tapping the reactions under a message lists who reacted with which emoji; the participant's own reaction has a Remove button. The long-press menu also offers "Remove your \<emoji\> reaction", and choosing the highlighted emoji again removes it. |
 | FR-C8 | **Reply:** the new message shows a quote of the message it answers. |
 | FR-C9 | **Copy text:** copies the message's text to the device clipboard. |
 | FR-C10 | **Edit:** the sender may change the text of their own message within 15 minutes of sending it. The message is then labelled "Edited". |

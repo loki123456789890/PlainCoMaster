@@ -102,7 +102,7 @@ function reactionSummary(reactions) {
   return [...counts.entries()];
 }
 
-function MessageBubble({ message, mine, quote, whoLabel, onLongPress, onOpenImage }) {
+function MessageBubble({ message, mine, quote, whoLabel, onLongPress, onOpenImage, onOpenReactions }) {
   if (message.deleted) {
     return (
       <View style={[styles.bubbleRow, mine ? styles.bubbleRowMine : styles.bubbleRowTheirs]}>
@@ -161,13 +161,21 @@ function MessageBubble({ message, mine, quote, whoLabel, onLongPress, onOpenImag
         )}
       </Pressable>
       {reactions.length > 0 ? (
-        <View style={[styles.reactionPill, mine ? styles.reactionPillMine : styles.reactionPillTheirs]}>
+        // Tappable, as in Messenger: shows who reacted, and yours can be
+        // taken back from there.
+        <TouchableOpacity
+          onPress={onOpenReactions}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          style={[styles.reactionPill, mine ? styles.reactionPillMine : styles.reactionPillTheirs]}
+          accessibilityRole="button"
+          accessibilityLabel={`Reactions: ${reactions.map(([emoji]) => emoji).join(' ')}. Tap to see who reacted.`}
+        >
           {reactions.map(([emoji, count]) => (
             <Text key={emoji} style={styles.reactionPillText}>
               {emoji}{count > 1 ? ` ${count}` : ''}
             </Text>
           ))}
-        </View>
+        </TouchableOpacity>
       ) : null}
       <Text style={styles.bubbleTime}>
         {formatMessageTime(message.createdAt)}{message.edited ? ' · Edited' : ''}
@@ -184,6 +192,11 @@ function MessageActions({ message, side, uid, onClose, onReact, onReply, onCopy,
   const mine = message.sender === side;
   const current = message.reactions?.[uid];
   const actions = [
+    // Tapping the highlighted emoji again also removes it, but that is
+    // easy to miss, so taking a reaction back gets its own line too.
+    current
+      ? { key: 'unreact', icon: 'close-circle-outline', label: `Remove your ${current} reaction`, onPress: () => onReact(current) }
+      : null,
     { key: 'reply', icon: 'arrow-undo-outline', label: 'Reply', onPress: onReply },
     message.text ? { key: 'copy', icon: 'copy-outline', label: 'Copy text', onPress: onCopy } : null,
     canEdit(message, side) ? { key: 'edit', icon: 'create-outline', label: 'Edit', onPress: onEdit } : null,
@@ -230,6 +243,44 @@ function MessageActions({ message, side, uid, onClose, onReact, onReply, onCopy,
   );
 }
 
+// Tapping the reactions under a message: who reacted with what, and
+// yours with a way to take it back.
+function ReactionDetails({ message, uid, nameFor, onClose, onRemove }) {
+  if (!message) return null;
+  // Yours first, then everyone else's.
+  const entries = Object.entries(message.reactions || {}).sort(([a], [b]) =>
+    a === uid ? -1 : b === uid ? 1 : 0
+  );
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} accessibilityLabel="Close reactions">
+        <Pressable style={styles.sheet} onPress={() => {}}>
+          <Text style={styles.sheetTitle}>Reactions</Text>
+          {entries.map(([reactorId, emoji]) => {
+            const yours = reactorId === uid;
+            return (
+              <View key={reactorId} style={styles.reactorRow}>
+                <Text style={styles.reactorEmoji}>{emoji}</Text>
+                <Text style={styles.reactorName} numberOfLines={1}>{nameFor(reactorId)}</Text>
+                {yours ? (
+                  <TouchableOpacity
+                    onPress={() => onRemove(emoji)}
+                    style={styles.removeReaction}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove your ${emoji} reaction`}
+                  >
+                    <Text style={styles.removeReactionText}>Remove</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            );
+          })}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 /**
  * One order's conversation. Used by both sides:
  *   side 'customer' — from OrderDetailsScreen, talking to the store
@@ -251,6 +302,7 @@ export default function OrderChatScreen({ navigation, route }) {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [viewerUrl, setViewerUrl] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [reactionsFor, setReactionsFor] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null);
   const [editing, setEditing] = useState(null);
   const [toast, setToast] = useState(null);
@@ -259,6 +311,13 @@ export default function OrderChatScreen({ navigation, route }) {
   const inputRef = useRef(null);
 
   // The other side, as the bubbles and quotes name them.
+  // A reactor is known only by account id. The customer is the account
+  // the order sits under; anyone else reacting is the store's side.
+  const nameFor = (reactorId) => {
+    if (reactorId === uid) return 'You';
+    return whoLabel(reactorId === customerId ? 'customer' : 'store');
+  };
+
   const whoLabel = (sender) =>
     sender === side ? 'You' : side === 'customer' ? title || 'The store' : 'The buyer';
 
@@ -425,6 +484,18 @@ export default function OrderChatScreen({ navigation, route }) {
     }
   };
 
+  const handleRemoveReaction = async (emoji) => {
+    const message = reactionsFor;
+    setReactionsFor(null);
+    Haptics.selectionAsync();
+    try {
+      // Passing the current emoji as both makes setReaction take it back.
+      await setReaction(customerId, orderId, message.id, uid, emoji, emoji);
+    } catch (error) {
+      failed('Couldn’t remove reaction', error);
+    }
+  };
+
   const handleReply = () => {
     setEditing(null);
     setReplyingTo(selected);
@@ -557,6 +628,7 @@ export default function OrderChatScreen({ navigation, route }) {
                 whoLabel={whoLabel}
                 onLongPress={() => openActions(item)}
                 onOpenImage={setViewerUrl}
+                onOpenReactions={() => setReactionsFor(item)}
               />
             )}
           />
@@ -650,6 +722,14 @@ export default function OrderChatScreen({ navigation, route }) {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      <ReactionDetails
+        message={reactionsFor}
+        uid={uid}
+        nameFor={nameFor}
+        onClose={() => setReactionsFor(null)}
+        onRemove={handleRemoveReaction}
+      />
 
       <MessageActions
         message={selected}
@@ -851,6 +931,20 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 48, paddingHorizontal: 8 },
   actionLabel: { fontSize: 16, color: Colors.light.text },
   actionLabelDanger: { color: Colors.light.danger },
+
+  sheetTitle: { fontSize: 16, fontWeight: '600', color: Colors.light.text, marginBottom: 8, paddingHorizontal: 8 },
+  reactorRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 52, paddingHorizontal: 8 },
+  reactorEmoji: { fontSize: 24 },
+  reactorName: { flex: 1, fontSize: 16, color: Colors.light.text },
+  removeReaction: {
+    minHeight: 36,
+    paddingHorizontal: 14,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    justifyContent: 'center',
+  },
+  removeReactionText: { fontSize: 14, fontWeight: '600', color: Colors.light.danger },
 
   viewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '80%' },
