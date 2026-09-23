@@ -242,16 +242,20 @@ than a separate screen. See section 10.
 Store Manager in Edit User now also asks which store, with "Open a new
 store". See section 10.
 
+**Order Chat screen** (customer and Store Manager) — one conversation per
+order, opened from Order Details ("Message \<store\>") or Manage Orders
+("Message Buyer"). See section 11.
+
 ---
 
 ## 8. Verification — worth a short section if the SRS has one
 
-The security rules have an automated test suite: **114 tests** run against
+The security rules have an automated test suite: **127 tests** run against
 the Firestore emulator via `npm run test:rules`. Coverage includes
 privilege escalation attempts, role separation in both directions, field
 validation, checkout stock rules, order cancellation, audit log
 integrity, order creation, the verified-purchase chain behind reviews,
-and store separation (section 10).
+store separation (section 10) and order chat (section 11).
 Notable cases:
 
 - A signup cannot set a privileged role.
@@ -270,6 +274,9 @@ Notable cases:
 - A review must name the store that sold the item.
 - A support request goes to the store of the order it names, or to the
   Platform Admin, and the rules check that routing against the order.
+- Only an order's customer and its store can read or send in its chat;
+  a message cannot be deleted, edited after 15 minutes, or sent in
+  someone else's name.
 
 ---
 
@@ -491,10 +498,27 @@ The title promises an e-commerce app "for Ukay-Ukay and Ready-to-Wear
 multi-store: several stores sell through one app, each run by its own
 Store Manager, and a shopper can buy from several in one checkout.
 
-> **Status (22 Sep 2026):** built and tested on the `feature/multi-store`
-> branch, and deliberately kept out of the UAT build, which is still
-> single-store. Sections 9 and 10 describe the system **after** that
-> branch ships. Do not paste them into the SRS used for the UAT.
+> **Status (23 Sep 2026): LIVE.** Kept out of the UAT build on purpose,
+> and released to production after the UAT: indexes, data migration,
+> rules, Cloud Functions and the web app, in that order. Sections 9 and 10
+> describe the system as deployed. The UAT itself was run on the
+> single-store build, so any SRS text describing *what was tested in the
+> UAT* should still say single store.
+>
+> **The live stores.** The catalogue that existed before the release was
+> split by product type into two stores, named after common Filipino
+> shop names rather than the app:
+>
+> | Store | Sells | Manager |
+> |---|---|---|
+> | Ukay-Ukay ni Aling Nena | the 7 ukay-ukay listings | the three original Store Managers |
+> | Divisoria RTW Hub | the 8 ready-to-wear listings | estes@gmail.com |
+>
+> Past orders went with their items: an order of only ready-to-wear
+> pieces moved to Divisoria RTW Hub, and every other order stayed with
+> Ukay-Ukay ni Aling Nena. Done by a one-time script
+> (`scripts/split-stores.mjs`), which shows what it will change before
+> changing it and is safe to run twice.
 
 **Replace every sentence in the SRS that says PlainCo is a single store.**
 Earlier drafts of these notes said so in writing (the old section 9); the
@@ -642,7 +666,171 @@ either store.
 
 ---
 
-## 11. Still outstanding — SRS-side only, no code changes needed
+## 11. Order chat — NEW, added after the UAT
+
+Before this, a customer could send a store a support request, and the
+store could only mark it resolved; any reply happened outside the app.
+Order chat closes that gap, modelled on the buyer–seller chat in TikTok
+Shop and on Messenger's message actions. It suits secondhand stock in
+particular: every ukay-ukay piece is one of a kind, so a seller can send
+a photo of the exact item before it ships, and a buyer can show how it
+arrived.
+
+> **Status (23 Sep 2026):** built and tested; security rules deployed to
+> production. The screens reach the live web app and the APK with the
+> next release (version 1.1.0, build 2).
+
+### Scope — suggested wording
+
+> Each order has a private conversation between the customer who placed
+> it and the Store Manager of the store fulfilling it. Either party may
+> send text and photos. Messages appear in real time while the
+> conversation is open, and both order lists mark orders that have an
+> unread message. A participant may react to any message with one of six
+> emoji, reply to a specific message, copy a message's text, edit their
+> own message within 15 minutes of sending it, and unsend their own
+> message. No one else — not other stores, and not the Platform Admin —
+> can read or write a conversation.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-C1 | The customer can open a conversation with the fulfilling store from Order Details ("Message \<store\>"). |
+| FR-C2 | The Store Manager can open the same conversation from the order in Manage Orders ("Message Buyer"). |
+| FR-C3 | Either party can send a text message of up to 1000 characters, a photo (JPEG, PNG or WebP, up to 5 MB), or a photo with a caption. |
+| FR-C4 | New messages appear without refreshing, and the list stays on the newest message. |
+| FR-C5 | An order with a message the viewer has not read shows "New message" in My Orders (customer) and in Manage Orders (Store Manager). Opening the conversation clears it. |
+| FR-C6 | Long-pressing a message opens a menu with six reactions (❤️ 😆 😮 😢 😠 👍) and the actions that apply to that message. |
+| FR-C7 | **React:** each participant may set one reaction per message; choosing the same one again removes it. |
+| FR-C8 | **Reply:** the new message shows a quote of the message it answers. |
+| FR-C9 | **Copy text:** copies the message's text to the device clipboard. |
+| FR-C10 | **Edit:** the sender may change the text of their own message within 15 minutes of sending it. The message is then labelled "Edited". |
+| FR-C11 | **Unsend:** the sender may unsend their own message after confirming. It is replaced for both parties by "You unsent a message" / "\<name\> unsent a message". |
+| FR-C12 | Tapping a photo opens it full screen. |
+
+### New use case — Message about an Order
+
+> **Use case:** Message about an Order
+> **Actors:** Customer, Store Manager
+> **Precondition:** The actor is signed in, and is either the customer who
+> placed the order or the Store Manager of the store fulfilling it.
+> **Trigger:** The customer selects "Message \<store\>" on Order Details,
+> or the Store Manager selects "Message Buyer" on an order.
+>
+> **Main flow:**
+> 1. The system shows the conversation for that order, newest message at
+>    the bottom, and marks it read for the actor.
+> 2. The actor types a message, optionally attaching a photo from the
+>    camera or photo library.
+> 3. The actor sends it.
+> 4. The system stores the message and shows it to both parties. The
+>    other party's order list shows "New message" until they open the
+>    conversation.
+>
+> **Alternate flows:**
+> - *Long-press actions* — the actor long-presses a message and chooses a
+>   reaction, Reply, Copy text, Edit or Unsend (FR-C6 to FR-C11). Edit and
+>   Unsend are offered only on the actor's own messages, and Edit only
+>   within 15 minutes.
+> - *Photo refused* — a photo over 5 MB or in an unsupported format is
+>   refused before upload, with the reason.
+> - *Offline* — the send button is disabled and a banner says messages
+>   cannot be sent.
+> - *Not a participant* — the backend refuses the read or write; the
+>   screen reports that messages could not be loaded or sent.
+
+### Business rules / security (enforced by security rules, not the UI)
+
+- Only the customer who placed the order and the Store Manager of its
+  store can read or send messages in its conversation.
+- A message is stamped with the sender's account and side (customer or
+  store) and the server's time; no one can send as someone else.
+- Messages can never be deleted. **Unsend** removes the content but
+  leaves a visible placeholder, and **Edit** leaves an "Edited" label, so
+  a conversation about a disputed order remains a record of what was
+  said.
+- Editing is allowed only within 15 minutes, measured on the server's
+  clock so a device cannot fake it.
+- A participant can set or remove only their own reaction, and only one
+  of the six offered.
+- Opening a conversation marks it read only for the actor's own side,
+  and cannot change anything else on the order (status, total, address).
+- Chat photos are stored per order and can be uploaded only by the two
+  participants.
+
+### Data model changes
+
+**New subcollection: `users/{uid}/orders/{orderId}/messages/{messageId}`.**
+
+| Field | Type | Notes |
+|---|---|---|
+| `senderId` | string | The sender's account. Must be the signed-in user. |
+| `sender` | `'customer'` or `'store'` | Which side sent it. |
+| `text` | string, ≤ 1000 | May be empty only when there is a photo. Emptied on unsend. |
+| `imageUrl` | string, optional | Download URL of the photo. Removed on unsend. |
+| `createdAt` | timestamp | Server time. |
+| `replyTo` | map, optional | `{ id, text (≤ 200), sender, hasImage }` — the quoted message. |
+| `reactions` | map, optional | `{ <uid>: <emoji> }`, one entry per participant. |
+| `editedAt` | timestamp, optional | Set when edited. |
+| `deleted`, `deletedAt` | boolean, timestamp | Set when unsent. |
+
+**New fields on `orders`** (for the "New message" marker):
+
+| Field | Type | Notes |
+|---|---|---|
+| `lastMessageAt` | timestamp | Time of the latest message. |
+| `lastMessageBy` | `'customer'` or `'store'` | Who sent it. |
+| `customerReadAt` | timestamp | When the customer last opened the conversation. |
+| `storeReadAt` | timestamp | When the store last opened it. |
+
+**New Storage path:** `chat/{customerId}/{orderId}/{file}` for chat
+photos.
+
+### Screens — add to the module list (section 7)
+
+- **Order Chat** (customer and Store Manager) — one screen used by both.
+  Reached from Order Details ("Message \<store\>") and from Manage
+  Orders ("Message Buyer").
+- **Order Details** (customer) — gains the "Message \<store\>" card.
+- **My Orders** / **Manage Orders** — gain the "New message" marker.
+
+### Limitations — for the Limitations / Future Work section
+
+- **No push notifications.** Messages arrive in real time only while the
+  app is open; the phone is not notified otherwise. The "New message"
+  marker is how an unread message is noticed.
+- **An unsent photo is unlinked, not destroyed.** It disappears from the
+  conversation, but the file stays in cloud storage, where no one can
+  reach it through the app.
+- A conversation shows its latest 200 messages.
+- Chat is per order. Asking a store a question before buying is not
+  supported; the Help screen covers general questions.
+
+### Verification
+
+The rules test suite (section 8) grew from 114 to **127** tests. The
+chat tests check that:
+- only the two participants can read or send;
+- nobody can send as someone else or as the other side;
+- malformed, empty, oversized or backdated messages are refused;
+- no one can delete a message outright;
+- editing works only for the sender, only within 15 minutes, and is
+  always marked;
+- unsending leaves a placeholder and cannot be undone;
+- reactions are limited to your own entry and the six emoji;
+- the read markers cannot be used to change an order's status or total.
+
+The full flow was also exercised in the app against the local emulators:
+a customer messaged a store, the Store Manager saw "New message" and
+replied with a photo, the marker cleared when the customer opened the
+conversation, and react, reply, copy, edit and unsend each worked.
+Sending and the on-screen keyboard behaviour were then checked on an
+Android phone against production.
+
+---
+
+## 12. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
