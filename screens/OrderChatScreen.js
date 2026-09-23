@@ -252,7 +252,10 @@ export default function OrderChatScreen({ navigation, route }) {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        // 'height' on Android like every other form in the app: with
+        // edge-to-edge on, the OS no longer shrinks the window for the
+        // keyboard, so without it the keyboard covers the composer.
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         {loading ? (
           <View style={styles.center}>
