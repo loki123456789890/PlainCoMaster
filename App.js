@@ -118,17 +118,23 @@ export default function App() {
                     <Stack.Screen
                       name="Landing"
                       component={LandingScreen}
-                      options={({ route }) => (route.params?.returning ? { animation: 'none' } : {})}
+                      options={({ route }) =>
+                        route.params?.returning ? { animation: route.params.fade ? 'fade' : 'none' } : {}
+                      }
                     />
 
                     {/* iPhone 16 Pro Max - 1 */}
                     <Stack.Screen name="Home" component={HomeScreen} />
 
                     {/* iPhone 16 Pro Max - 7 */}
+                    {/* From the Staff Portal (ink) it fades; from Landing or Sign Up
+                        (same cream, same lockup) there is nothing to animate. */}
                     <Stack.Screen
                       name="Login"
                       component={LoginScreen}
-                      options={({ route }) => (route.params?.via ? { animation: 'none' } : {})}
+                      options={({ route }) =>
+                        route.params?.via ? { animation: route.params.via === 'staff' ? 'fade' : 'none' } : {}
+                      }
                     />
 
                     {/* iPhone 16 Pro Max - 6 */}
@@ -185,7 +191,9 @@ export default function App() {
                     <Stack.Screen name="OrderChat" component={OrderChatScreen} />
 
                     {/* Admin Screens */}
-                    <Stack.Screen name="AdminLogin" component={AdminLoginScreen} />
+                    {/* The Staff Portal: the same lockup on ink, so it fades in
+                        (cream to ink) rather than sliding. */}
+                    <Stack.Screen name="AdminLogin" component={AdminLoginScreen} options={{ animation: 'fade' }} />
                     <Stack.Screen name="AdminDashboard" component={GuardedStoreManagerDashboard} />
                     <Stack.Screen name="AdminProducts" component={GuardedAdminProductsScreen} />
                     <Stack.Screen name="AdminAddProduct" component={GuardedAdminAddProductScreen} />

@@ -4,7 +4,10 @@
 // plainco lockup sitting where Landing left it, a back arrow beside it,
 // fields that turn Clay while typing and red on a problem, the stagger the
 // copy rises in with, and the toast that confirms success.
-import React, { useCallback, useEffect, useState } from 'react';
+//
+// The Staff Portal uses the same pieces on ink: AuthScaffold's `dark`
+// passes down to everything inside it, which picks its colors from DARK.
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -39,6 +42,70 @@ import { Colors } from '../../constants/theme';
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const TITLE_LINE_HEIGHT = 31;
 
+// Colors for cream (customer) and ink (Staff Portal) screens. The dark set
+// is the approved staff preview's.
+const LIGHT = {
+  bg: Colors.light.background,
+  text: Colors.light.text,
+  sub: Colors.light.icon,
+  label: Colors.light.text,
+  labelFocus: Colors.light.tint,
+  bad: Colors.light.danger,
+  badBorder: Colors.light.danger,
+  good: Colors.light.success,
+  border: Colors.light.border,
+  fieldBg: '#FFFFFF',
+  placeholder: '#B3AAA0',
+  ringFocus: 'rgba(196,98,62,0.12)',
+  ringBad: 'rgba(196,70,62,0.08)',
+  eye: Colors.light.icon,
+  errBg: '#FBEDEB',
+  errBorder: '#F1CFCB',
+  errInk: '#7A1B12',
+  infoBg: '#EEF0EA',
+  infoBorder: '#D6DCCF',
+  infoInk: '#37412F',
+  link: Colors.light.text,
+  pressed: 'rgba(28,27,26,0.06)',
+  toastBg: Colors.light.text,
+  toastText: Colors.light.background,
+  offlineBg: Colors.light.danger + '15',
+  offlineText: Colors.light.danger,
+  statusBar: 'dark-content',
+};
+const DARK = {
+  ...LIGHT,
+  bg: Colors.light.text,
+  text: Colors.light.background,
+  sub: '#BDB3A9',
+  label: '#E6DED4',
+  labelFocus: '#E9A385',
+  bad: '#F09C92',
+  badBorder: '#E5776B',
+  border: '#4A423B',
+  fieldBg: '#2E2A26',
+  placeholder: '#8B8178',
+  ringFocus: 'rgba(196,98,62,0.22)',
+  ringBad: 'rgba(229,119,107,0.15)',
+  eye: '#BDB3A9',
+  errBg: 'rgba(229,119,107,0.12)',
+  errBorder: 'rgba(229,119,107,0.35)',
+  errInk: '#F6C2BB',
+  infoBg: 'rgba(143,163,125,0.14)',
+  infoBorder: 'rgba(143,163,125,0.4)',
+  infoInk: '#D5E0C9',
+  link: Colors.light.background,
+  pressed: 'rgba(250,247,242,0.08)',
+  toastBg: Colors.light.background,
+  toastText: Colors.light.text,
+  offlineBg: 'rgba(229,119,107,0.12)',
+  offlineText: '#F6C2BB',
+  statusBar: 'light-content',
+};
+const AuthTone = createContext(LIGHT);
+// The palette for the screen this is drawn on.
+export const useAuthColors = () => useContext(AuthTone);
+
 // Fades up 12 pt into place.
 export function FadeUp({ delay, skip, style, children }) {
   const progress = useSharedValue(skip ? 1 : 0);
@@ -55,6 +122,7 @@ export function FadeUp({ delay, skip, style, children }) {
 
 // The title rises out of its own clip, like Landing's headline.
 export function RiseTitle({ delay, skip, children }) {
+  const c = useAuthColors();
   const progress = useSharedValue(skip ? 1 : 0);
   useEffect(() => {
     if (skip) return;
@@ -65,13 +133,14 @@ export function RiseTitle({ delay, skip, children }) {
   }));
   return (
     <View style={styles.titleClip} accessible accessibilityRole="header">
-      <Animated.Text style={[styles.title, animated]}>{children}</Animated.Text>
+      <Animated.Text style={[styles.title, { color: c.text }, animated]}>{children}</Animated.Text>
     </View>
   );
 }
 
 export function Subtitle({ children }) {
-  return <Text style={styles.sub}>{children}</Text>;
+  const c = useAuthColors();
+  return <Text style={[styles.sub, { color: c.sub }]}>{children}</Text>;
 }
 
 // A shake, run each time `trigger` goes up — so a screen asks a field to
@@ -103,6 +172,7 @@ export function useShakes() {
 // Password show/hide control — a proper touch target around a 20 px icon,
 // a scale pulse on tap, and an icon crossfade instead of an instant swap.
 function PasswordToggle({ visible, onToggle, accessibilityLabel }) {
+  const c = useAuthColors();
   const reduceMotion = useReducedMotion();
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -133,7 +203,7 @@ function PasswordToggle({ visible, onToggle, accessibilityLabel }) {
           entering={reduceMotion ? undefined : FadeIn.duration(120)}
           exiting={reduceMotion ? undefined : FadeOut.duration(100)}
         >
-          <Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={20} color={Colors.light.icon} />
+          <Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={20} color={c.eye} />
         </Animated.View>
       </Animated.View>
     </Pressable>
@@ -144,6 +214,7 @@ function PasswordToggle({ visible, onToggle, accessibilityLabel }) {
 // line under it that says what's wrong (or, for passwords on Sign Up, that
 // it's fine). The label and border turn Clay while typing, red on a problem.
 export function Field({ label, status, message, inputRef, shakeKey, secure, toggleLabel, onBlur, ...inputProps }) {
+  const c = useAuthColors();
   const reduceMotion = useReducedMotion();
   const [focused, setFocused] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -161,20 +232,20 @@ export function Field({ label, status, message, inputRef, shakeKey, secure, togg
   }));
   const shakeStyle = useShakeOn(shakeKey);
 
-  const labelColor = bad ? Colors.light.danger : focused ? Colors.light.tint : Colors.light.text;
-  const borderColor = bad ? Colors.light.danger : focused ? Colors.light.tint : Colors.light.border;
-  const messageColor = bad ? Colors.light.danger : good ? Colors.light.success : Colors.light.icon;
+  const labelColor = bad ? c.bad : focused ? c.labelFocus : c.label;
+  const borderColor = bad ? c.badBorder : focused ? Colors.light.tint : c.border;
+  const messageColor = bad ? c.bad : good ? c.good : c.sub;
 
   return (
     <View style={styles.field}>
       <Text style={[styles.label, { color: labelColor }]}>{label}</Text>
       <Animated.View style={[styles.box, shakeStyle]}>
-        {focused || bad ? <View style={[styles.ring, bad ? styles.ringBad : styles.ringFocus]} /> : null}
+        {focused || bad ? <View style={[styles.ring, { backgroundColor: bad ? c.ringBad : c.ringFocus }]} /> : null}
         <TextInput
           {...inputProps}
           ref={inputRef}
-          style={[styles.input, { borderColor }, secure && styles.inputSecure]}
-          placeholderTextColor="#B3AAA0"
+          style={[styles.input, { borderColor, backgroundColor: c.fieldBg, color: c.text }, secure && styles.inputSecure]}
+          placeholderTextColor={c.placeholder}
           secureTextEntry={secure && !revealed}
           onFocus={() => setFocused(true)}
           onBlur={(e) => {
@@ -204,26 +275,33 @@ export function Field({ label, status, message, inputRef, shakeKey, secure, togg
 // A boxed notice above the form, for what isn't any one field's fault:
 // red for a problem, Moss for "you're in the wrong place".
 export function AuthAlert({ alert }) {
+  const c = useAuthColors();
   const reduceMotion = useReducedMotion();
   if (!alert) return null;
   const info = alert.kind === 'info';
+  const ink = info ? c.infoInk : c.errInk;
   return (
     <Animated.View
       key={alert.title}
       entering={reduceMotion ? undefined : FadeIn.duration(400).easing(EASE_OUT_QUINT)}
-      style={[styles.alert, info ? styles.alertInfo : styles.alertErr]}
+      style={[
+        styles.alert,
+        info
+          ? { backgroundColor: c.infoBg, borderColor: c.infoBorder }
+          : { backgroundColor: c.errBg, borderColor: c.errBorder },
+      ]}
       accessibilityRole="alert"
       accessibilityLiveRegion="assertive"
     >
-      <Ionicons name="alert-circle-outline" size={18} color={info ? INFO_INK : ERR_INK} style={styles.alertIcon} />
+      <Ionicons name="alert-circle-outline" size={18} color={ink} style={styles.alertIcon} />
       <View style={styles.flex}>
-        <Text style={[styles.alertText, { color: info ? INFO_INK : ERR_INK }]}>
+        <Text style={[styles.alertText, { color: ink }]}>
           <Text style={styles.alertTitle}>{alert.title}</Text>
           {alert.body ? `\n${alert.body}` : ''}
         </Text>
         {alert.action ? (
           <Text
-            style={[styles.alertAction, { color: info ? INFO_INK : ERR_INK }]}
+            style={[styles.alertAction, { color: ink }]}
             onPress={alert.action.onPress}
             accessibilityRole="link"
             suppressHighlighting
@@ -235,45 +313,48 @@ export function AuthAlert({ alert }) {
     </Animated.View>
   );
 }
-const ERR_INK = '#7A1B12';
-const INFO_INK = '#37412F';
-
 // "Welcome to PlainCo!" — slides up from the bottom once it has worked,
 // and back down when `text` is cleared (the last text stays on it while
-// it goes, rather than blanking mid-slide).
-export function SuccessToast({ text }) {
+// it goes, rather than blanking mid-slide). `detail` is an optional
+// smaller second line.
+export function SuccessToast({ text, detail }) {
+  const c = useAuthColors();
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const progress = useSharedValue(0);
-  const [shown, setShown] = useState(text);
+  const [shown, setShown] = useState({ text, detail });
   useEffect(() => {
-    if (text) setShown(text);
+    if (text) setShown({ text, detail });
     const to = text ? 1 : 0;
     progress.value = reduceMotion ? to : withTiming(to, { duration: 450, easing: EASE_OUT_QUINT });
-  }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [text, detail]); // eslint-disable-line react-hooks/exhaustive-deps
   const animated = useAnimatedStyle(() => ({
     opacity: progress.value,
     transform: [{ translateY: (1 - progress.value) * 16 }],
   }));
   return (
     <Animated.View
-      style={[styles.toast, { bottom: Math.max(insets.bottom, 16) + 12 }, animated]}
+      style={[styles.toast, { backgroundColor: c.toastBg, bottom: Math.max(insets.bottom, 16) + 12 }, animated]}
       pointerEvents="none"
       accessibilityLiveRegion="polite"
     >
       <View style={styles.toastIcon}>
         <Ionicons name="checkmark" size={13} color="#fff" />
       </View>
-      <Text style={styles.toastText}>{shown || ''}</Text>
+      <View style={styles.flex}>
+        <Text style={[styles.toastText, { color: c.toastText }]}>{shown.text || ''}</Text>
+        {shown.detail ? <Text style={[styles.toastDetail, { color: c.toastText }]}>{shown.detail}</Text> : null}
+      </View>
     </Animated.View>
   );
 }
 
 // A text link in the footer or under a field.
 export function AuthLink({ onPress, children, accent, style }) {
+  const c = useAuthColors();
   return (
     <Text
-      style={[accent ? styles.linkAccent : styles.linkPlain, style]}
+      style={[accent ? styles.linkAccent : [styles.linkPlain, { color: c.link }], style]}
       onPress={() => {
         Haptics.selectionAsync();
         onPress();
@@ -288,8 +369,10 @@ export function AuthLink({ onPress, children, accent, style }) {
 
 // The screen around a form: lockup where Landing left it, back arrow,
 // offline notice, and a scroll area that clears the header and the
-// keyboard. `overlay` renders above everything (toast, modals).
-export function AuthScaffold({ navigation, offlineText, isConnected, overlay, children }) {
+// keyboard. `overlay` renders above everything (toast, modals). `dark`
+// draws it all on ink, for the Staff Portal.
+export function AuthScaffold({ navigation, offlineText, isConnected, overlay, dark, children }) {
+  const c = dark ? DARK : LIGHT;
   const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();
   const [size, setSize] = useState(null);
@@ -309,11 +392,12 @@ export function AuthScaffold({ navigation, offlineText, isConnected, overlay, ch
     } else {
       // Opened from Landing with replace(), so there is nothing to go back
       // to. Landing comes back as the preview does: its copy fades in under
-      // the lockup, no replay.
-      navigation.replace('Landing', { returning: true });
+      // the lockup, no replay. From ink, the screen fades to cream rather
+      // than cutting.
+      navigation.replace('Landing', dark ? { returning: true, fade: true } : { returning: true });
     }
     return true;
-  }, [navigation]);
+  }, [navigation, dark]);
 
   // Android's back button follows the arrow, instead of closing the app
   // when this is the only screen in the stack.
@@ -325,43 +409,45 @@ export function AuthScaffold({ navigation, offlineText, isConnected, overlay, ch
   );
 
   return (
-    <View style={styles.root} onLayout={(e) => !size && setSize(e.nativeEvent.layout)}>
-      <StatusBar barStyle="dark-content" />
+    <AuthTone.Provider value={c}>
+      <View style={[styles.root, { backgroundColor: c.bg }]} onLayout={(e) => !size && setSize(e.nativeEvent.layout)}>
+        <StatusBar barStyle={c.statusBar} />
 
-      {/* The same lockup, on the same pixels, as Landing's header — so
-          moving between them, it doesn't move. */}
-      {size ? <StaticLockup width={size.width} height={size.height} topInset={insets.top} /> : null}
+        {/* The same lockup, on the same pixels, as Landing's header — so
+            moving between them, it doesn't move. */}
+        {size ? <StaticLockup width={size.width} height={size.height} topInset={insets.top} dark={dark} /> : null}
 
-      <Animated.View style={[styles.backWrap, { top: headerCenterY(insets.top) - 22 }, backStyle]}>
-        <Pressable
-          onPress={handleBack}
-          style={({ pressed }) => [styles.back, pressed && styles.backPressed]}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="chevron-back" size={24} color={Colors.light.text} />
-        </Pressable>
-      </Animated.View>
+        <Animated.View style={[styles.backWrap, { top: headerCenterY(insets.top) - 22 }, backStyle]}>
+          <Pressable
+            onPress={handleBack}
+            style={({ pressed }) => [styles.back, pressed && { backgroundColor: c.pressed }]}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Ionicons name="chevron-back" size={24} color={c.text} />
+          </Pressable>
+        </Animated.View>
 
-      <KeyboardAvoidingView behavior="padding" style={[styles.flex, { marginTop: headerCenterY(insets.top) + 44 }]}>
-        {!isConnected && (
-          <View style={styles.offlineBanner}>
-            <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-            <Text style={styles.offlineBannerText}>{offlineText}</Text>
-          </View>
-        )}
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={[styles.scroll, { paddingBottom: Math.max(insets.bottom, 16) + 14 }]}
-        >
-          {children}
-        </ScrollView>
-      </KeyboardAvoidingView>
+        <KeyboardAvoidingView behavior="padding" style={[styles.flex, { marginTop: headerCenterY(insets.top) + 44 }]}>
+          {!isConnected && (
+            <View style={[styles.offlineBanner, { backgroundColor: c.offlineBg }]}>
+              <Ionicons name="cloud-offline-outline" size={16} color={c.offlineText} />
+              <Text style={[styles.offlineBannerText, { color: c.offlineText }]}>{offlineText}</Text>
+            </View>
+          )}
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[styles.scroll, { paddingBottom: Math.max(insets.bottom, 16) + 14 }]}
+          >
+            {children}
+          </ScrollView>
+        </KeyboardAvoidingView>
 
-      {overlay}
-    </View>
+        {overlay}
+      </View>
+    </AuthTone.Provider>
   );
 }
 
@@ -371,13 +457,12 @@ export const authStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.light.background },
+  root: { flex: 1 },
   flex: { flex: 1 },
   scroll: { flexGrow: 1, paddingHorizontal: 24 },
 
   backWrap: { position: 'absolute', left: 16, zIndex: 2 },
   back: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  backPressed: { backgroundColor: 'rgba(28,27,26,0.06)' },
 
   offlineBanner: {
     flexDirection: 'row',
@@ -385,12 +470,11 @@ const styles = StyleSheet.create({
     gap: 8,
     marginHorizontal: 24,
     marginBottom: 12,
-    backgroundColor: Colors.light.danger + '15',
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: 12,
   },
-  offlineBannerText: { flex: 1, fontSize: 12.5, fontWeight: '600', color: Colors.light.danger },
+  offlineBannerText: { flex: 1, fontSize: 12.5, fontWeight: '600' },
 
   titleClip: { overflow: 'hidden' },
   // DESIGN.md's Display step, one size down from Landing's headline.
@@ -399,9 +483,8 @@ const styles = StyleSheet.create({
     lineHeight: TITLE_LINE_HEIGHT,
     fontWeight: '700',
     letterSpacing: -0.5,
-    color: Colors.light.text,
   },
-  sub: { fontSize: 13.5, lineHeight: 20, color: Colors.light.icon, marginTop: 6, marginBottom: 20 },
+  sub: { fontSize: 13.5, lineHeight: 20, marginTop: 6, marginBottom: 20 },
 
   field: { marginBottom: 12 },
   label: { fontSize: 12.5, fontWeight: '500', marginBottom: 6, marginLeft: 2 },
@@ -409,17 +492,13 @@ const styles = StyleSheet.create({
   // The preview's 4 pt focus halo, drawn as a tinted shape behind the
   // input since React Native has no box-shadow spread.
   ring: { position: 'absolute', top: -4, left: -4, right: -4, bottom: -4, borderRadius: 18 },
-  ringFocus: { backgroundColor: 'rgba(196,98,62,0.12)' },
-  ringBad: { backgroundColor: 'rgba(196,70,62,0.08)' },
   input: {
     height: 50,
     borderRadius: 14,
     borderWidth: 1.5,
-    backgroundColor: '#FFFFFF',
     paddingLeft: 15,
     paddingRight: 44,
     fontSize: 15,
-    color: Colors.light.text,
     // Above the halo: on web an absolutely positioned sibling would
     // otherwise paint over the field.
     zIndex: 1,
@@ -464,14 +543,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginBottom: 14,
   },
-  alertErr: { backgroundColor: '#FBEDEB', borderColor: '#F1CFCB' },
-  alertInfo: { backgroundColor: '#EEF0EA', borderColor: '#D6DCCF' },
   alertIcon: { marginTop: 1 },
   alertText: { fontSize: 12.5, lineHeight: 18 },
   alertTitle: { fontWeight: '600' },
   alertAction: { fontSize: 12.5, fontWeight: '600', textDecorationLine: 'underline', marginTop: 6 },
 
-  linkPlain: { color: Colors.light.text, fontWeight: '500', textDecorationLine: 'underline' },
+  linkPlain: { fontWeight: '500', textDecorationLine: 'underline' },
   linkAccent: { color: Colors.light.tint, fontWeight: '600' },
 
   toast: {
@@ -481,7 +558,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: Colors.light.text,
     borderRadius: 16,
     paddingVertical: 14,
     paddingHorizontal: 16,
@@ -495,5 +571,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  toastText: { flex: 1, fontSize: 13.5, color: Colors.light.background },
+  toastText: { fontSize: 13.5 },
+  toastDetail: { fontSize: 11, opacity: 0.7, marginTop: 1 },
 });

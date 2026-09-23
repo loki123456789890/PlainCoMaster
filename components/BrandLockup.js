@@ -5,6 +5,8 @@ import { Image } from 'expo-image';
 export const LOCKUP_MARK = require('../assets/images/splash-mark.png');
 export const LOCKUP_WORDMARK = require('../assets/images/splash-wordmark.png');
 export const LOCKUP_DOT = require('../assets/images/splash-dot.png');
+// The same wordmark in cream, for the Staff Portal's ink background.
+export const LOCKUP_WORDMARK_CREAM = require('../assets/images/splash-wordmark-cream.png');
 
 // Geometry of the lockup, in points from the centre of the screen, taken
 // from the approved splash/landing previews. The splash animates these;
@@ -26,7 +28,8 @@ export const headerCenterY = (topInset) => topInset + 44;
 // splash's final frame — a full-screen layer, scaled about the screen's
 // centre and moved up — rather than as a separately sized header, so the
 // two are the same picture by construction.
-export function StaticLockup({ width, height, topInset, style }) {
+// `dark` swaps in the cream wordmark; the Clay mark and dot read on both.
+export function StaticLockup({ width, height, topInset, style, dark }) {
   const cx = width / 2;
   const cy = height / 2;
   return (
@@ -56,7 +59,7 @@ export function StaticLockup({ width, height, topInset, style }) {
         <Image source={LOCKUP_MARK} style={styles.fill} contentFit="contain" />
       </View>
       <View style={[styles.abs, { left: cx + WORD.x, top: cy + WORD.y, width: WORD.w, height: WORD.h }]}>
-        <Image source={LOCKUP_WORDMARK} style={styles.fill} contentFit="contain" />
+        <Image source={dark ? LOCKUP_WORDMARK_CREAM : LOCKUP_WORDMARK} style={styles.fill} contentFit="contain" />
       </View>
       <View style={[styles.abs, { left: cx + DOT_BOX.x, top: cy + DOT_BOX.y, width: DOT_BOX.w, height: DOT_BOX.h }]}>
         <Image source={LOCKUP_DOT} style={styles.fill} contentFit="contain" />

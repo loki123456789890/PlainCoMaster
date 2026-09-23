@@ -54,12 +54,13 @@ function alertForAuthError(code) {
   }
 }
 
-export default function LoginScreen({ navigation }) {
+export default function LoginScreen({ navigation, route }) {
   const reduceMotion = useReducedMotion();
   const { isConnected } = useNetworkStatus();
   const { holdRevocationForSignIn } = useAdmin();
 
-  const [form, setForm] = useState({ email: '', password: '' });
+  // Prefilled when the Staff Portal sent a customer account here.
+  const [form, setForm] = useState({ email: route?.params?.email || '', password: '' });
   const [touched, setTouched] = useState({});
   const [fieldError, setFieldError] = useState({});
   const [alert, setAlert] = useState(null);
@@ -68,6 +69,11 @@ export default function LoginScreen({ navigation }) {
   const [shakes, shake] = useShakes();
 
   const passwordInputRef = useRef(null);
+  // ...or sent back to this screen while it was already open.
+  const sentEmail = route?.params?.email;
+  useEffect(() => {
+    if (sentEmail) setForm((prev) => ({ ...prev, email: sentEmail }));
+  }, [sentEmail]);
   const successTimer = useRef(null);
   useEffect(() => () => clearTimeout(successTimer.current), []);
 
@@ -82,7 +88,8 @@ export default function LoginScreen({ navigation }) {
     if (alert) setAlert(null);
   };
 
-  const goToStaffPortal = () => navigation.navigate('AdminLogin');
+  // The email comes along when a refused staff account is sent over.
+  const goToStaffPortal = (email) => navigation.navigate('AdminLogin', email ? { email } : undefined);
 
   const handleLogin = async () => {
     if (loading || done) return;
@@ -156,7 +163,7 @@ export default function LoginScreen({ navigation }) {
           kind: 'info',
           title: `This is a ${getRoleLabel(signedInRole)} account.`,
           body: 'Staff sign in through the Staff Portal.',
-          action: { label: 'Go to Staff Portal', onPress: goToStaffPortal },
+          action: { label: 'Go to Staff Portal', onPress: () => goToStaffPortal(form.email.trim()) },
         });
         return;
       }
@@ -277,7 +284,7 @@ export default function LoginScreen({ navigation }) {
         </Text>
         <View style={styles.staffRow}>
           <Text style={styles.staffText}>
-            Store staff? <AuthLink onPress={goToStaffPortal}>Sign in to the Staff Portal</AuthLink>
+            Store staff? <AuthLink onPress={() => goToStaffPortal()}>Sign in to the Staff Portal</AuthLink>
           </Text>
         </View>
       </FadeUp>

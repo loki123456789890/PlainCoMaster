@@ -933,7 +933,7 @@ and a shopper saw them on the store page and in "Shop by store".
 
 ---
 
-## 13. Onboarding redesign — icon, splash, landing, sign up, log in, password reset, Privacy Policy
+## 13. Onboarding redesign — icon, splash, landing, sign up, log in, password reset, Privacy Policy, Staff Portal
 
 The first screens a new user sees were redesigned from approved HTML
 previews, as one continuous flow rather than separate pages.
@@ -975,6 +975,16 @@ previews, as one continuous flow rather than separate pages.
 > **Privacy Policy** opens as a sheet from Sign Up and from Profile, with
 > jump-to-section chips and a reading-progress bar. From Sign Up it has
 > an **I Agree** button that ticks the consent box.
+>
+> **Staff Portal** is the same sign-in form on a dark background, marked
+> "Staff Portal", for Store Managers and Platform Admins. It reports
+> problems above the form: incorrect email or password, a deactivated
+> staff account, or a customer account (with a link back to the customer
+> log in). On success it names the role ("Signed in as Store Manager" or
+> "Signed in as Platform Admin") and opens the store dashboard or Manage
+> Users. When a staff account is typed into the customer Log In, or a
+> customer account into the Staff Portal, the link to the other screen
+> carries the email over.
 
 ### Functional requirements
 
@@ -987,6 +997,7 @@ previews, as one continuous flow rather than separate pages.
 | FR-O5 | Forgot Password sends a reset link and shows the same confirmation whether or not the email is registered. The link can be resent after 60 seconds. |
 | FR-O6 | The Privacy Policy can be read before agreeing. **I Agree** ticks the consent box; closing it does not. The policy can be re-read from Profile at any time. |
 | FR-O7 | Log In and Sign Up link to each other, and the back arrow on either returns to Landing. |
+| FR-O8 | The Staff Portal admits only Store Manager and Platform Admin accounts that are active. It shows, above the form: "Incorrect email or password" (and clears the password), "This staff account has been deactivated", or, for a customer account, that customers sign in on the main log-in screen, with a link to it. In each case the user is left signed out. A Store Manager lands on the store dashboard and a Platform Admin on Manage Users. |
 
 **Changed requirement — minimum password length is now 8 characters**
 (was 6). This applies to new accounts only; existing accounts still log
@@ -1005,6 +1016,11 @@ in with their current passwords.
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
   cannot be used to discover which emails are registered.
+- **Staff Login — alternate flows "Invalid credentials", "Not a staff
+  account" and "Deactivated account":** the message now appears in a
+  notice above the form instead of a pop-up. The customer-account case
+  offers a link to the customer log in. "Forgot password?" uses the same
+  Reset Password use case as customers.
 
 ### The Privacy Policy text
 
@@ -1104,12 +1120,11 @@ Full text, for an appendix:
 
 ### Screens — module list (section 7)
 
-No new screens. **Landing, Sign Up, Log In and Forgot Password** are
-redesigned; the **Privacy Policy** changes from a pop-up to a sheet.
+No new screens. **Landing, Sign Up, Log In, Forgot Password and the
+Staff Portal login** are redesigned; the **Privacy Policy** changes from a pop-up to a sheet.
 
 ### Limitations
 
-- The Staff Portal login keeps its previous design.
 - The animated splash and landing play in the web app and in Expo Go;
   the still splash image and the new home-screen icon appear only in an
   installed build (the APK).
@@ -1127,6 +1142,11 @@ browser, then run against the local emulators with test accounts:
   Sign Up and back; back arrow to Landing.
 - Forgot Password: carried-over email; invalid email; an unregistered
   email receiving the same confirmation and countdown; Back to Log In.
+- Staff Portal: invalid email; wrong password; deactivated Store
+  Manager; customer account and its link back to Log In (email carried
+  over); staff account on Log In reaching the portal with its email;
+  Store Manager reaching the dashboard; Platform Admin reaching Manage
+  Users; back arrow and footer link returning to Log In.
 
 ---
 
