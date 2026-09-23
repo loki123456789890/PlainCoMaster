@@ -343,14 +343,85 @@ service cloud.firestore {
         // carries the same private details (names, addresses, photos of
         // what arrived) that the order does.
         //
-        // Messages are permanent: no update, no delete, for anyone. A chat
-        // about a disputed order is evidence of what each side said, and an
-        // editable one would be evidence of nothing.
+        // Messages change only the way Messenger lets them, and each way
+        // leaves a trace, because a chat about a disputed order is a record
+        // of what each side said:
+        //   - edit: your own text, within 15 minutes, marked editedAt
+        //   - unsend: your own message, which stays as a "was unsent"
+        //     placeholder rather than vanishing
+        //   - react: one emoji per person per message, from a fixed set
+        // No delete, for anyone.
         match /messages/{messageId} {
+          function inThisChat() {
+            return isActiveOwner(userId) ||
+              managesStore(chatOrder(userId, orderId).data.get('storeId', null));
+          }
+          function isMine() {
+            return resource.data.senderId == request.auth.uid &&
+              resource.data.get('deleted', false) != true &&
+              inThisChat();
+          }
+          function changed() {
+            return request.resource.data.diff(resource.data).affectedKeys();
+          }
+
           allow read: if isOwner(userId) ||
             managesStore(chatOrder(userId, orderId).data.get('storeId', null));
+
+          allow update: if request.auth != null && (
+            // Edit. Text only, still something to say, and the clock is
+            // the server's, so "within 15 minutes" cannot be faked.
+            (
+              isMine() &&
+              changed().hasOnly(['text', 'editedAt']) &&
+              request.resource.data.editedAt == request.time &&
+              request.time < resource.data.createdAt + duration.value(15, 'm') &&
+              request.resource.data.text is string &&
+              request.resource.data.text.size() <= 1000 &&
+              (request.resource.data.text.matches('.*\\S.*') || 'imageUrl' in resource.data)
+            ) ||
+            // Unsend. The words, the photo link, the quote and the
+            // reactions go; that a message was here stays.
+            (
+              isMine() &&
+              changed().hasOnly(['deleted', 'deletedAt', 'text', 'imageUrl', 'replyTo', 'reactions', 'editedAt']) &&
+              request.resource.data.deleted == true &&
+              request.resource.data.deletedAt == request.time &&
+              request.resource.data.text == '' &&
+              !('imageUrl' in request.resource.data) &&
+              !('replyTo' in request.resource.data) &&
+              !('reactions' in request.resource.data)
+            ) ||
+            // React. Your own entry in the reactions map and nobody
+            // else's, from the same six the picker offers.
+            (
+              inThisChat() &&
+              resource.data.get('deleted', false) != true &&
+              changed().hasOnly(['reactions']) &&
+              request.resource.data.reactions is map &&
+              request.resource.data.reactions.diff(resource.data.get('reactions', {}))
+                .affectedKeys().hasOnly([request.auth.uid]) &&
+              (
+                !(request.auth.uid in request.resource.data.reactions) ||
+                request.resource.data.reactions[request.auth.uid] in
+                  ['❤️', '😆', '😮', '😢', '😠', '👍']
+              )
+            )
+          );
+
           allow create: if request.auth != null &&
-            request.resource.data.keys().hasOnly(['senderId', 'sender', 'text', 'imageUrl', 'createdAt']) &&
+            request.resource.data.keys().hasOnly(['senderId', 'sender', 'text', 'imageUrl', 'createdAt', 'replyTo']) &&
+            // A reply carries a short quote of what it answers, so the
+            // bubble can show it without a read per message.
+            (
+              !('replyTo' in request.resource.data) ||
+              (request.resource.data.replyTo is map &&
+               request.resource.data.replyTo.keys().hasOnly(['id', 'text', 'sender', 'hasImage']) &&
+               request.resource.data.replyTo.id is string &&
+               request.resource.data.replyTo.text is string &&
+               request.resource.data.replyTo.text.size() <= 200 &&
+               request.resource.data.replyTo.sender in ['customer', 'store'])
+            ) &&
             request.resource.data.keys().hasAll(['senderId', 'sender', 'text', 'createdAt']) &&
             request.resource.data.senderId == request.auth.uid &&
             request.resource.data.createdAt == request.time &&

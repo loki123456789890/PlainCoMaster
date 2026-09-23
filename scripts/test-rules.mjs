@@ -1610,11 +1610,71 @@ await test('CHAT-4  a message must be well-formed and stamped by the server', as
     chatMessage('customer', 'customer1')));
 });
 
-await test('CHAT-5  messages are permanent', async () => {
+await test('CHAT-5  no one can delete a message outright', async () => {
   await seedChatMessage();
-  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { text: 'edited' }));
   await assertFails(deleteDoc(doc(asSeller(), `${chatPath}/m1`)));
   await assertFails(deleteDoc(doc(asCustomer(), `${chatPath}/m1`)));
+});
+
+const seedMessageAt = (id, createdAt, overrides = {}) =>
+  testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), `${chatPath}/${id}`), {
+      senderId: 'seller1', sender: 'store', text: 'Walang mantsa po', createdAt, ...overrides,
+    });
+  });
+
+await test('CHAT-9  the sender can edit their text within 15 minutes, marked as edited', async () => {
+  await seedMessageAt('m1', new Date());
+  await assertSucceeds(updateDoc(doc(asSeller(), `${chatPath}/m1`), { text: 'Walang mantsa po, promise', editedAt: serverTimestamp() }));
+  // Unmarked, emptied, or by anyone else.
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { text: 'sneaky' }));
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { text: '  ', editedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(asCustomer(), `${chatPath}/m1`), { text: 'not mine', editedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { sender: 'customer', editedAt: serverTimestamp() }));
+});
+
+await test('CHAT-10  editing closes after 15 minutes', async () => {
+  await seedMessageAt('old', new Date(Date.now() - 16 * 60 * 1000));
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/old`), { text: 'too late', editedAt: serverTimestamp() }));
+});
+
+await test('CHAT-11  the sender can unsend, and it leaves a placeholder', async () => {
+  await seedMessageAt('m1', new Date(Date.now() - 60 * 60 * 1000), {
+    imageUrl: 'https://example.com/a.jpg', reactions: { customer1: '❤️' },
+  });
+  const unsend = { deleted: true, deletedAt: serverTimestamp(), text: '', imageUrl: deleteField(), reactions: deleteField() };
+  await assertFails(updateDoc(doc(asCustomer(), `${chatPath}/m1`), unsend));
+  // Keeping the photo is not unsending it.
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { ...unsend, imageUrl: 'https://example.com/a.jpg' }));
+  await assertSucceeds(updateDoc(doc(asSeller(), `${chatPath}/m1`), unsend));
+  // Once unsent, it cannot be brought back or edited.
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { text: 'back', editedAt: serverTimestamp() }));
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { deleted: false }));
+});
+
+await test('CHAT-12  both sides can react, one emoji each, from the set', async () => {
+  await seedMessageAt('m1', new Date());
+  await assertSucceeds(updateDoc(doc(asCustomer(), `${chatPath}/m1`), { 'reactions.customer1': '❤️' }));
+  await assertSucceeds(updateDoc(doc(asSeller(), `${chatPath}/m1`), { 'reactions.seller1': '👍' }));
+  await assertSucceeds(updateDoc(doc(asCustomer(), `${chatPath}/m1`), { 'reactions.customer1': deleteField() }));
+  // Someone else's reaction, an emoji outside the set, an outsider.
+  await assertFails(updateDoc(doc(asCustomer(), `${chatPath}/m1`), { 'reactions.seller1': deleteField() }));
+  await assertFails(updateDoc(doc(asCustomer(), `${chatPath}/m1`), { 'reactions.customer1': '💩' }));
+  await assertFails(updateDoc(doc(asOtherSeller(), `${chatPath}/m1`), { 'reactions.seller2': '❤️' }));
+  // A reaction cannot ride along with a change to the words.
+  await assertFails(updateDoc(doc(asCustomer(), `${chatPath}/m1`), { 'reactions.customer1': '❤️', text: 'x' }));
+});
+
+await test('CHAT-13  a reply carries a short, well-formed quote', async () => {
+  const reply = (replyTo) => setDoc(doc(asCustomer(), `${chatPath}/r`),
+    chatMessage('customer', 'customer1', { replyTo }));
+  await assertSucceeds(reply({ id: 'm1', text: 'Walang mantsa po', sender: 'store', hasImage: false }));
+  await assertFails(reply({ id: 'm1', text: 'x'.repeat(201), sender: 'store', hasImage: false }));
+  await assertFails(reply({ id: 'm1', text: 'hi', sender: 'admin', hasImage: false }));
+  await assertFails(reply({ id: 'm1', text: 'hi', sender: 'store', hasImage: false, extra: 1 }));
+  // Nobody creates a message pre-reacted, pre-edited or pre-unsent.
+  await assertFails(setDoc(doc(asCustomer(), `${chatPath}/x`), chatMessage('customer', 'customer1', { reactions: {} })));
+  await assertFails(setDoc(doc(asCustomer(), `${chatPath}/x`), chatMessage('customer', 'customer1', { deleted: true })));
 });
 
 await test('CHAT-6  a deactivated customer cannot send', async () => {

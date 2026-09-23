@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { query, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { auth } from '../firebaseConfig';
 import { Colors, Spacing, Radius } from '../constants/theme';
@@ -27,12 +28,17 @@ import { formatOrderNumber } from '../utils/orderNumber';
 import { pickAndUploadImage, uploadErrorMessage, CHAT_PICKER_OPTIONS } from '../utils/imageUpload';
 import {
   CHAT_TEXT_MAX,
+  REACTIONS,
   messagesRef,
   orderRef,
   chatFields,
   hasUnread,
   markRead,
   sendMessage,
+  editMessage,
+  unsendMessage,
+  setReaction,
+  canEdit,
   chatImageFolder,
 } from '../utils/orderChat';
 
@@ -58,28 +64,169 @@ function chatUploadErrorMessage(code) {
   return uploadErrorMessage(code);
 }
 
-function MessageBubble({ message, mine, onOpenImage }) {
+function mapMessage(docSnap) {
+  // 'estimate' so a message just sent shows a time straight away instead
+  // of "null" until the server stamps it.
+  const data = docSnap.data({ serverTimestamps: 'estimate' });
+  return {
+    id: docSnap.id,
+    senderId: data.senderId,
+    sender: data.sender,
+    text: data.text || '',
+    imageUrl: data.imageUrl || null,
+    replyTo: data.replyTo || null,
+    reactions: data.reactions || {},
+    deleted: data.deleted === true,
+    edited: !!data.editedAt,
+    createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null,
+  };
+}
+
+// What a quote shows. The live original wins when it is loaded, so an
+// edit shows through and an unsent message is not quoted back to life;
+// the snapshot stored on the reply covers anything older than the list.
+function resolveQuote(replyTo, byId) {
+  if (!replyTo) return null;
+  const original = byId.get(replyTo.id);
+  if (original?.deleted) return { sender: replyTo.sender, text: 'Message unsent', muted: true };
+  const text = original ? original.text : replyTo.text;
+  const hasImage = original ? !!original.imageUrl : replyTo.hasImage;
+  return { sender: replyTo.sender, text: text || (hasImage ? 'Photo' : ''), hasImage };
+}
+
+// Grouped as Messenger shows them: each emoji once, with a count when
+// both sides picked the same one.
+function reactionSummary(reactions) {
+  const counts = new Map();
+  Object.values(reactions || {}).forEach((emoji) => counts.set(emoji, (counts.get(emoji) || 0) + 1));
+  return [...counts.entries()];
+}
+
+function MessageBubble({ message, mine, quote, whoLabel, onLongPress, onOpenImage }) {
+  if (message.deleted) {
+    return (
+      <View style={[styles.bubbleRow, mine ? styles.bubbleRowMine : styles.bubbleRowTheirs]}>
+        <View style={[styles.bubble, styles.bubbleUnsent]}>
+          <Text style={styles.unsentText}>
+            {mine ? 'You unsent a message' : `${whoLabel(message.sender)} unsent a message`}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  const reactions = reactionSummary(message.reactions);
   return (
     <View style={[styles.bubbleRow, mine ? styles.bubbleRowMine : styles.bubbleRowTheirs]}>
-      <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-        {message.imageUrl ? (
-          <Pressable
-            onPress={() => onOpenImage(message.imageUrl)}
-            accessibilityRole="imagebutton"
-            accessibilityLabel="Photo. Tap to view full size."
-          >
-            <Image
-              source={{ uri: message.imageUrl }}
-              style={[styles.bubbleImage, message.text ? styles.bubbleImageWithText : null]}
-              contentFit="cover"
-              transition={150}
-            />
-          </Pressable>
-        ) : null}
-        {message.text ? <Text style={styles.bubbleText}>{message.text}</Text> : null}
-      </View>
-      <Text style={styles.bubbleTime}>{formatMessageTime(message.createdAt)}</Text>
+      <Pressable
+        onLongPress={onLongPress}
+        delayLongPress={300}
+        accessibilityRole="button"
+        accessibilityHint="Long press for reactions, reply, copy and more"
+        accessibilityLabel={
+          `${mine ? 'You' : whoLabel(message.sender)}: ` +
+          `${message.imageUrl ? 'photo. ' : ''}${message.text}${message.edited ? ', edited' : ''}`
+        }
+      >
+        {({ pressed }) => (
+          <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, pressed && styles.bubblePressed]}>
+            {quote ? (
+              <View style={styles.quote}>
+                <Text style={styles.quoteWho}>
+                  {whoLabel(quote.sender)}
+                </Text>
+                <Text style={[styles.quoteText, quote.muted && styles.quoteMuted]} numberOfLines={2}>
+                  {quote.hasImage && !quote.muted ? '📷 ' : ''}{quote.text}
+                </Text>
+              </View>
+            ) : null}
+            {message.imageUrl ? (
+              <Pressable
+                onPress={() => onOpenImage(message.imageUrl)}
+                onLongPress={onLongPress}
+                delayLongPress={300}
+                accessibilityRole="imagebutton"
+                accessibilityLabel="Photo. Tap to view full size."
+              >
+                <Image
+                  source={{ uri: message.imageUrl }}
+                  style={[styles.bubbleImage, message.text ? styles.bubbleImageWithText : null]}
+                  contentFit="cover"
+                  transition={150}
+                />
+              </Pressable>
+            ) : null}
+            {message.text ? <Text style={styles.bubbleText}>{message.text}</Text> : null}
+          </View>
+        )}
+      </Pressable>
+      {reactions.length > 0 ? (
+        <View style={[styles.reactionPill, mine ? styles.reactionPillMine : styles.reactionPillTheirs]}>
+          {reactions.map(([emoji, count]) => (
+            <Text key={emoji} style={styles.reactionPillText}>
+              {emoji}{count > 1 ? ` ${count}` : ''}
+            </Text>
+          ))}
+        </View>
+      ) : null}
+      <Text style={styles.bubbleTime}>
+        {formatMessageTime(message.createdAt)}{message.edited ? ' · Edited' : ''}
+      </Text>
     </View>
+  );
+}
+
+// The long-press sheet: the six reactions across the top, then what can
+// be done with this particular message. Only actions that will succeed
+// are offered — the rules would refuse the rest anyway.
+function MessageActions({ message, side, uid, onClose, onReact, onReply, onCopy, onEdit, onUnsend }) {
+  if (!message) return null;
+  const mine = message.sender === side;
+  const current = message.reactions?.[uid];
+  const actions = [
+    { key: 'reply', icon: 'arrow-undo-outline', label: 'Reply', onPress: onReply },
+    message.text ? { key: 'copy', icon: 'copy-outline', label: 'Copy text', onPress: onCopy } : null,
+    canEdit(message, side) ? { key: 'edit', icon: 'create-outline', label: 'Edit', onPress: onEdit } : null,
+    mine ? { key: 'unsend', icon: 'trash-outline', label: 'Unsend', onPress: onUnsend, danger: true } : null,
+  ].filter(Boolean);
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.sheetBackdrop} onPress={onClose} accessibilityLabel="Close menu">
+        <Pressable style={styles.sheet} onPress={() => {}}>
+          <View style={styles.reactionRow}>
+            {REACTIONS.map((emoji) => (
+              <TouchableOpacity
+                key={emoji}
+                onPress={() => onReact(emoji)}
+                style={[styles.reactionButton, current === emoji && styles.reactionButtonActive]}
+                accessibilityRole="button"
+                accessibilityLabel={current === emoji ? `Remove ${emoji} reaction` : `React with ${emoji}`}
+              >
+                <Text style={styles.reactionEmoji}>{emoji}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {actions.map((action) => (
+            <TouchableOpacity
+              key={action.key}
+              onPress={action.onPress}
+              style={styles.actionRow}
+              accessibilityRole="button"
+            >
+              <Ionicons
+                name={action.icon}
+                size={20}
+                color={action.danger ? Colors.light.danger : Colors.light.text}
+              />
+              <Text style={[styles.actionLabel, action.danger && styles.actionLabelDanger]}>
+                {action.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -103,8 +250,19 @@ export default function OrderChatScreen({ navigation, route }) {
   const [sending, setSending] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [viewerUrl, setViewerUrl] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [toast, setToast] = useState(null);
   // Stamping "read" is a write; one in flight at a time is enough.
   const markingRead = useRef(false);
+  const inputRef = useRef(null);
+
+  // The other side, as the bubbles and quotes name them.
+  const whoLabel = (sender) =>
+    sender === side ? 'You' : side === 'customer' ? title || 'The store' : 'The buyer';
+
+  const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
 
   useEffect(() => {
     if (!customerId || !orderId || !uid) return undefined;
@@ -114,20 +272,7 @@ export default function OrderChatScreen({ navigation, route }) {
     const unsubscribeMessages = onSnapshot(
       query(messagesRef(customerId, orderId), orderBy('createdAt', 'desc'), limit(MESSAGE_LIMIT)),
       (snapshot) => {
-        setMessages(
-          snapshot.docs.map((docSnap) => {
-            // 'estimate' so a message just sent shows a time straight
-            // away instead of "null" until the server stamps it.
-            const data = docSnap.data({ serverTimestamps: 'estimate' });
-            return {
-              id: docSnap.id,
-              text: data.text || '',
-              imageUrl: data.imageUrl || null,
-              sender: data.sender,
-              createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null,
-            };
-          })
-        );
+        setMessages(snapshot.docs.map(mapMessage));
         setLoading(false);
       },
       (error) => {
@@ -161,13 +306,59 @@ export default function OrderChatScreen({ navigation, route }) {
     };
   }, [customerId, orderId, side, uid, retryKey]);
 
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = setTimeout(() => setToast(null), 1600);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const failed = (heading, error) => {
+    console.error(`${heading}:`, error);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    showAppAlert(
+      heading,
+      error?.code === 'permission-denied'
+        ? 'That isn’t allowed for this message anymore.'
+        : 'Check your connection and try again.'
+    );
+  };
+
+  const cancelComposerMode = () => {
+    if (editing) setDraft('');
+    setEditing(null);
+    setReplyingTo(null);
+  };
+
   const send = async ({ imageUrl } = {}) => {
     const text = draft.trim();
-    if ((!text && !imageUrl) || !uid) return;
+    if (!uid) return;
+
+    if (editing) {
+      if (!text && !editing.imageUrl) return;
+      if (text === editing.text) {
+        cancelComposerMode();
+        return;
+      }
+      setSending(true);
+      try {
+        await editMessage(customerId, orderId, editing.id, text);
+        setDraft('');
+        setEditing(null);
+        Haptics.selectionAsync();
+      } catch (error) {
+        failed('Couldn’t edit message', error);
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    if (!text && !imageUrl) return;
     setSending(true);
     try {
-      await sendMessage({ customerId, orderId, side, senderId: uid, text, imageUrl });
+      await sendMessage({ customerId, orderId, side, senderId: uid, text, imageUrl, replyTo: replyingTo });
       setDraft('');
+      setReplyingTo(null);
       Haptics.selectionAsync();
     } catch (error) {
       console.error('Could not send message:', error);
@@ -216,8 +407,79 @@ export default function OrderChatScreen({ navigation, route }) {
     ]);
   };
 
+  // --- Long-press actions -------------------------------------------------
+  const openActions = (message) => {
+    if (message.deleted) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setSelected(message);
+  };
+
+  const handleReact = async (emoji) => {
+    const message = selected;
+    setSelected(null);
+    Haptics.selectionAsync();
+    try {
+      await setReaction(customerId, orderId, message.id, uid, emoji, message.reactions?.[uid]);
+    } catch (error) {
+      failed('Couldn’t react', error);
+    }
+  };
+
+  const handleReply = () => {
+    setEditing(null);
+    setReplyingTo(selected);
+    setSelected(null);
+    inputRef.current?.focus();
+  };
+
+  const handleCopy = async () => {
+    const text = selected.text;
+    setSelected(null);
+    try {
+      await Clipboard.setStringAsync(text);
+      Haptics.selectionAsync();
+      setToast('Copied');
+    } catch (error) {
+      failed('Couldn’t copy', error);
+    }
+  };
+
+  const handleEdit = () => {
+    setReplyingTo(null);
+    setEditing(selected);
+    setDraft(selected.text);
+    setSelected(null);
+    inputRef.current?.focus();
+  };
+
+  const handleUnsend = () => {
+    const message = selected;
+    setSelected(null);
+    showAppAlert(
+      'Unsend message?',
+      'It will be removed for both of you. They’ll see that a message was unsent.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unsend',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await unsendMessage(customerId, orderId, message.id);
+              if (editing?.id === message.id) cancelComposerMode();
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            } catch (error) {
+              failed('Couldn’t unsend', error);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const busy = sending || uploadProgress !== null;
-  const canSend = draft.trim().length > 0 && !busy && isConnected;
+  const hasWords = draft.trim().length > 0;
+  const canSend = !busy && isConnected && (hasWords || (editing && editing.imageUrl));
 
   const emptySubtitle =
     side === 'store'
@@ -284,40 +546,84 @@ export default function OrderChatScreen({ navigation, route }) {
             inverted
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
+            keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => (
-              <MessageBubble message={item} mine={item.sender === side} onOpenImage={setViewerUrl} />
+              <MessageBubble
+                message={item}
+                mine={item.sender === side}
+                quote={resolveQuote(item.replyTo, byId)}
+                whoLabel={whoLabel}
+                onLongPress={() => openActions(item)}
+                onOpenImage={setViewerUrl}
+              />
             )}
           />
         )}
 
+        {toast ? (
+          <View style={styles.toast} pointerEvents="none">
+            <Text style={styles.toastText}>{toast}</Text>
+          </View>
+        ) : null}
+
         {uploadProgress !== null && (
-          <View style={styles.uploadBar}>
+          <View style={styles.contextBar}>
             <ActivityIndicator size="small" color={Colors.light.tint} />
-            <Text style={styles.uploadText}>
+            <Text style={styles.contextText}>
               Sending photo… {Math.round(uploadProgress * 100)}%
             </Text>
           </View>
         )}
 
-        <View style={styles.composer}>
-          <TouchableOpacity
-            onPress={handleAddPhoto}
-            disabled={busy || !isConnected}
-            style={styles.composerIcon}
-            accessibilityRole="button"
-            accessibilityLabel="Send a photo"
-          >
+        {replyingTo || editing ? (
+          <View style={styles.contextBar}>
             <Ionicons
-              name="image-outline"
-              size={24}
-              color={busy || !isConnected ? Colors.light.border : Colors.light.icon}
+              name={editing ? 'create-outline' : 'arrow-undo-outline'}
+              size={18}
+              color={Colors.light.tint}
             />
-          </TouchableOpacity>
+            <View style={styles.flex}>
+              <Text style={styles.contextTitle}>
+                {editing ? 'Editing message' : `Replying to ${whoLabel(replyingTo.sender) === 'You' ? 'yourself' : whoLabel(replyingTo.sender)}`}
+              </Text>
+              <Text style={styles.contextText} numberOfLines={1}>
+                {(editing || replyingTo).text || '📷 Photo'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={cancelComposerMode}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="button"
+              accessibilityLabel={editing ? 'Cancel editing' : 'Cancel reply'}
+            >
+              <Ionicons name="close" size={20} color={Colors.light.icon} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        <View style={styles.composer}>
+          {/* A photo is a new message, so it has no place in an edit. */}
+          {!editing ? (
+            <TouchableOpacity
+              onPress={handleAddPhoto}
+              disabled={busy || !isConnected}
+              style={styles.composerIcon}
+              accessibilityRole="button"
+              accessibilityLabel="Send a photo"
+            >
+              <Ionicons
+                name="image-outline"
+                size={24}
+                color={busy || !isConnected ? Colors.light.border : Colors.light.icon}
+              />
+            </TouchableOpacity>
+          ) : null}
           <TextInput
+            ref={inputRef}
             style={styles.input}
             value={draft}
             onChangeText={setDraft}
-            placeholder="Write a message"
+            placeholder={editing ? 'Edit your message' : 'Write a message'}
             placeholderTextColor={Colors.light.icon}
             multiline
             // A browser textarea starts two rows tall; one, like the phones.
@@ -331,17 +637,29 @@ export default function OrderChatScreen({ navigation, route }) {
             disabled={!canSend}
             style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
             accessibilityRole="button"
-            accessibilityLabel="Send message"
+            accessibilityLabel={editing ? 'Save edit' : 'Send message'}
             accessibilityState={{ disabled: !canSend }}
           >
             {sending ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Ionicons name="send" size={18} color="#fff" />
+              <Ionicons name={editing ? 'checkmark' : 'send'} size={18} color="#fff" />
             )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      <MessageActions
+        message={selected}
+        side={side}
+        uid={uid}
+        onClose={() => setSelected(null)}
+        onReact={handleReact}
+        onReply={handleReply}
+        onCopy={handleCopy}
+        onEdit={handleEdit}
+        onUnsend={handleUnsend}
+      />
 
       <Modal visible={!!viewerUrl} transparent animationType="fade" onRequestClose={() => setViewerUrl(null)}>
         <Pressable
@@ -407,21 +725,70 @@ const styles = StyleSheet.create({
     borderColor: Colors.light.border,
     borderBottomLeftRadius: Radius.sm,
   },
+  bubblePressed: { opacity: 0.7 },
+  bubbleUnsent: {
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: Colors.light.border,
+    backgroundColor: 'transparent',
+  },
+  unsentText: { fontSize: 14, fontStyle: 'italic', color: Colors.light.icon },
   bubbleText: { fontSize: 15, lineHeight: 21, color: Colors.light.text },
   bubbleImage: { width: 200, height: 200, borderRadius: Radius.md, backgroundColor: Colors.light.border },
   bubbleImageWithText: { marginBottom: 6 },
   bubbleTime: { fontSize: 11, color: Colors.light.icon, marginTop: 3, marginHorizontal: 4 },
 
-  uploadBar: {
+  // The quoted message inside a reply: a Clay rule down the left, like
+  // a pulled quote, so it reads as "about that" rather than a second
+  // message.
+  quote: {
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.light.tint,
+    paddingLeft: 8,
+    paddingVertical: 2,
+    marginBottom: 6,
+  },
+  quoteWho: { fontSize: 12, fontWeight: '600', color: Colors.light.tint },
+  quoteText: { fontSize: 13, color: Colors.light.icon, lineHeight: 18 },
+  quoteMuted: { fontStyle: 'italic' },
+
+  reactionPill: {
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: -6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  reactionPillMine: { marginRight: 8 },
+  reactionPillTheirs: { marginLeft: 8 },
+  reactionPillText: { fontSize: 13, color: Colors.light.text },
+
+  toast: {
+    position: 'absolute',
+    alignSelf: 'center',
+    bottom: 80,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.light.text,
+  },
+  toastText: { fontSize: 13, color: '#fff', fontWeight: '600' },
+
+  contextBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 20,
+    gap: 10,
+    paddingHorizontal: 16,
     paddingVertical: 8,
     borderTopWidth: 1,
     borderTopColor: Colors.light.border,
   },
-  uploadText: { fontSize: 13, color: Colors.light.icon },
+  contextTitle: { fontSize: 12, fontWeight: '600', color: Colors.light.tint },
+  contextText: { fontSize: 13, color: Colors.light.icon },
 
   composer: {
     flexDirection: 'row',
@@ -457,6 +824,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sendButtonDisabled: { backgroundColor: Colors.light.border },
+
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(28,27,26,0.4)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: Colors.light.background,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 32,
+  },
+  reactionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    paddingBottom: 12,
+    marginBottom: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+  },
+  reactionButton: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center' },
+  reactionButtonActive: { backgroundColor: Colors.light.tint + '26' },
+  reactionEmoji: { fontSize: 28 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 48, paddingHorizontal: 8 },
+  actionLabel: { fontSize: 16, color: Colors.light.text },
+  actionLabelDanger: { color: Colors.light.danger },
 
   viewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '80%' },
