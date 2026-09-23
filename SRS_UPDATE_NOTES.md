@@ -882,7 +882,7 @@ customers, and their account details are managed in Manage Users.
 |---|---|
 | FR-P1 | A customer can add, change or remove their profile photo (camera or library; JPEG, PNG or WebP up to 5 MB). |
 | FR-P2 | A customer's photo is shown beside reviews they write after setting it. |
-| FR-P3 | The profile shows "Email verified" or "Not verified · Verify now"; Verify now sends a verification email, and the status updates when the customer returns to the profile. |
+| FR-P3 | The profile shows "Email verified" or "Not verified · Verify now"; Verify now sends a verification email. The status changes to "Email verified" by itself within seconds of the link being opened — on switching back to the app, or while the profile is open — without signing out. |
 | FR-P4 | The profile links to the saved delivery address and phone number. |
 | FR-S1 | A Store Manager can set, change or remove their store's logo and description from Store Profile, with a preview of how shoppers will see it. |
 | FR-S2 | The store's logo and description appear on its store page; the logo also appears in "Shop by store" and in the customer's order chat header. |
