@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 14):
+- **New use case — Reset Password** (fills the gap listed in section 15):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -1150,7 +1150,85 @@ browser, then run against the local emulators with test accounts:
 
 ---
 
-## 14. Still outstanding — SRS-side only, no code changes needed
+## 14. Home and Shop redesign, and the customer tab bar
+
+> **Status (23 Sep 2026):** built and tested against the local emulators;
+> reaches production with the next release (web app and APK). No
+> database, security-rule or Cloud Function changes. Everything shown is
+> read from the live catalogue, as before.
+
+### What changed — suggested wording
+
+> **Home** greets the customer by first name, with their profile photo
+> (or initials) opening Profile. Below it: a search bar that opens Shop
+> ready to type, the **Ukay-Ukay** and **Ready-to-Wear** tiles with live
+> item counts, **New arrivals** (the six newest listings across all
+> stores) and **Ukay finds** (up to ten ukay-ukay items). Each section's
+> "See all" opens Shop on the matching category.
+>
+> **Shop** keeps its title, item count, search bar and category tabs
+> (All, Ready-to-Wear, Ukay-Ukay) fixed at the top while the two-column
+> grid scrolls. Each card shows the photo, an Ukay or RTW tag, a
+> favorite heart, the name, the store and the price. An item whose stock
+> is 0 is shown dimmed with a "Sold out" label and a struck-through
+> price. A search with no results says so and offers to clear the search
+> and filters. A store's own page works as before, with a back arrow.
+>
+> **Tab bar.** Home and Shop share a bottom tab bar: Home, Shop,
+> Favorites, Cart (with the item count) and Profile.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-H1 | Home shows the number of ukay-ukay and ready-to-wear items currently listed, and each tile opens Shop filtered to that category. |
+| FR-H2 | Home lists the six most recently added products and up to ten ukay-ukay products. |
+| FR-H3 | Shop search matches the product name or its category, including the words "ukay", "secondhand", "thrift" and "rtw". Search and the category tab combine: a search never resets the selected tab. |
+| FR-H4 | A product with a recorded stock of 0 is marked "Sold out" in Home and Shop. A product with no stock recorded is not. |
+| FR-H5 | The tab bar on Home and Shop opens Home, Shop, Favorites, Cart and Profile. Choosing a screen that is already open returns to it rather than opening a second copy. |
+
+### Differences from the previous version
+
+- **Removed from Home:** the photo banner ("Looking for New Clothes in
+  Minutes?" with Start Shopping) and the "pre-loved pieces getting a
+  second life" strip. The ukay-ukay count now appears on the Ukay-Ukay
+  tile, and the search bar and tiles take the banner's place as the way
+  into Shop.
+- **Featured Picks** is renamed **New arrivals** (same six newest items),
+  and **Ukay finds** is added.
+- **Favorites is now in the tab bar.** Before, Home's navigation had only
+  Home, Shop, Cart and Profile.
+- **Shop no longer has a back arrow or cart icon** when opened as a tab;
+  the tab bar replaces both. A store's page keeps them.
+- **Search words:** category search previously matched only the stored
+  names ("ukay-ukay", "ready-to-wear").
+
+### Screens — module list (section 7)
+
+No new screens. **Home** and **Shop** are redesigned; the tab bar is a
+shared component used by both.
+
+### Limitations
+
+- The tab bar appears on Home and Shop only. Favorites, Cart and Profile
+  open as their own screens with a back arrow, as before.
+- Home's rails are not paged: New arrivals shows the six newest items
+  and Ukay finds the ten newest ukay-ukay items; "See all" opens the full
+  list in Shop.
+
+### Verification
+
+Compared with the approved preview in a browser, then run against the
+local emulators with a customer account, two stores and eight products
+(one with stock 0, two without photos): Home counts and rails; the
+search bar opening Shop focused; searching "denim"; a search with no
+results and clearing it; the category tabs; a category search inside a
+filtered tab; a store's page with its profile and sold-out item; the tab
+bar returning to Home; and each category tile opening Shop filtered.
+
+---
+
+## 15. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
