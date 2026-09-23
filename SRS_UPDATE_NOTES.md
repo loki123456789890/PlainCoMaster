@@ -1174,6 +1174,11 @@ browser, then run against the local emulators with test accounts:
 > price. A search with no results says so and offers to clear the search
 > and filters. A store's own page works as before, with a back arrow.
 >
+> Above the grid, **Shop by store** lists each store with its logo, item
+> count and seller rating (or "New store" for a store under 30 days old
+> with no reviews yet), followed by **Location** and **Help** buttons.
+> Both are hidden while a search is being typed.
+>
 > **Tab bar.** Home and Shop share a bottom tab bar: Home, Shop,
 > Favorites, Cart (with the item count) and Profile.
 

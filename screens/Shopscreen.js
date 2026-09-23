@@ -32,6 +32,7 @@ import Animated, {
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { showAppAlert } from '../utils/appAlert';
 import { auth } from '../firebaseConfig';
 import { useProducts } from '../context/ProductContext';
@@ -48,6 +49,7 @@ import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
 import ProductCard from '../components/shop/ProductCard';
 import TabBar from '../components/shop/TabBar';
+import Reveal from '../components/shop/Reveal';
 import { EASE_OUT_QUINT } from '../constants/motion';
 
 const FILTERS = [
@@ -62,6 +64,9 @@ const TYPE_WORDS = {
   'ukay-ukay': 'ukay-ukay ukay secondhand second-hand pre-loved preloved thrift',
   'ready-to-wear': 'ready-to-wear rtw brand new',
 };
+
+// A store younger than this, with no reviews yet, is labelled "New store".
+const NEW_STORE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const menuItems = [
   { icon: 'location-outline', label: 'Location' },
@@ -308,66 +313,99 @@ export default function ShopScreen({ navigation, route }) {
           ) : null}
         </View>
       ) : (
-        <>
-          {browsableStores.length > 0 && (
-            <>
-              <Text style={styles.subhead}>Shop by store</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.storesRow}>
-                {browsableStores.map((s) => (
-                  <AnimatedPressable
-                    key={s.id}
-                    style={styles.storeCard}
-                    onPress={() => navigation.push('Shop', { storeId: s.id })}
-                    rippleColor={Colors.light.border}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${s.name}, ${storeCounts[s.id]} ${storeCounts[s.id] === 1 ? 'item' : 'items'}${
-                      ratings[s.id]?.count > 0 ? `, rated ${formatAverage(ratings[s.id].average)} out of 5` : ''
-                    }`}
+        // Hidden while searching, like the preview: the results are what
+        // matter then. Remounting replays the entrance when it comes back.
+        !query && (
+          <View style={styles.extras}>
+            {browsableStores.length > 0 && (
+              <>
+                <Reveal delay={0}>
+                  <Text style={styles.subhead}>Shop by store</Text>
+                </Reveal>
+                <Reveal delay={60} style={styles.storesBleed}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.storesRow}
+                    decelerationRate="fast"
                   >
-                    <Avatar uri={s.logoUrl} size={30} icon="storefront-outline" />
-                    <View style={styles.storeCardText}>
-                      <Text style={styles.storeCardName} numberOfLines={1}>
-                        {s.name}
-                      </Text>
-                      <View style={styles.storeCardMetaRow}>
-                        <Text style={styles.storeCardMeta}>
-                          {storeCounts[s.id]} {storeCounts[s.id] === 1 ? 'item' : 'items'}
-                        </Text>
-                        {ratings[s.id]?.count > 0 && (
-                          <>
-                            <Text style={styles.storeCardMeta}>·</Text>
-                            <Ionicons name="star" size={11} color={Colors.light.highlight} />
-                            <Text style={styles.storeCardRating}>
-                              {formatAverage(ratings[s.id].average)} ({ratings[s.id].count})
+                    {browsableStores.map((s) => {
+                      const rating = ratings[s.id];
+                      const rated = rating?.count > 0;
+                      // "New store" only when it is: under 30 days on PlainCo
+                      // and not yet reviewed. Otherwise just the item count.
+                      const isNew = !rated && s.createdAt && Date.now() - s.createdAt.getTime() < NEW_STORE_MS;
+                      const count = storeCounts[s.id];
+                      const label = [
+                        s.name,
+                        `${count} ${count === 1 ? 'item' : 'items'}`,
+                        rated ? `rated ${formatAverage(rating.average)} out of 5` : isNew ? 'new store' : null,
+                      ]
+                        .filter(Boolean)
+                        .join(', ');
+                      return (
+                        <AnimatedPressable
+                          key={s.id}
+                          style={styles.storeCard}
+                          onPress={() => navigation.push('Shop', { storeId: s.id })}
+                          rippleColor={Colors.light.border}
+                          accessibilityRole="button"
+                          accessibilityLabel={label}
+                        >
+                          {s.logoUrl ? (
+                            <Image source={{ uri: s.logoUrl }} style={styles.storeLogo} contentFit="cover" transition={150} />
+                          ) : (
+                            <View style={[styles.storeLogo, styles.storeLogoEmpty]}>
+                              <Ionicons name="storefront-outline" size={20} color={Colors.light.tint} />
+                            </View>
+                          )}
+                          <View style={styles.storeCardText}>
+                            <Text style={styles.storeCardName} numberOfLines={1}>
+                              {s.name}
                             </Text>
-                          </>
-                        )}
-                      </View>
-                    </View>
-                    <Ionicons name="chevron-forward" size={14} color={Colors.light.icon} />
-                  </AnimatedPressable>
-                ))}
-              </ScrollView>
-            </>
-          )}
-          {/* Location and Help are about the shopper, not a store, so only
-              the main Shop carries them. */}
-          <View style={styles.menuRow}>
-            {menuItems.map((item) => (
-              <AnimatedPressable
-                key={item.label}
-                style={styles.menuButton}
-                onPress={() => navigation.navigate(item.label)}
-                rippleColor={Colors.light.border}
-                accessibilityRole="button"
-                accessibilityLabel={item.label}
-              >
-                <Ionicons name={item.icon} size={15} color={Colors.light.icon} />
-                <Text style={styles.menuButtonLabel}>{item.label}</Text>
-              </AnimatedPressable>
-            ))}
+                            <View style={styles.storeCardMetaRow}>
+                              <Text style={styles.storeCardMeta}>
+                                {count} {count === 1 ? 'item' : 'items'}
+                                {rated || isNew ? ' · ' : ''}
+                                {isNew ? 'New store' : ''}
+                              </Text>
+                              {rated ? (
+                                <>
+                                  <Ionicons name="star" size={12} color={Colors.light.tint} />
+                                  <Text style={styles.storeCardMeta}>
+                                    <Text style={styles.storeCardRating}>{formatAverage(rating.average)}</Text> ({rating.count})
+                                  </Text>
+                                </>
+                              ) : null}
+                            </View>
+                          </View>
+                          <Ionicons name="chevron-forward" size={16} color="#B3AAA0" style={styles.storeChevron} />
+                        </AnimatedPressable>
+                      );
+                    })}
+                  </ScrollView>
+                </Reveal>
+              </>
+            )}
+            {/* Location and Help are about the shopper, not a store, so only
+                the main Shop carries them. */}
+            <Reveal delay={120} style={styles.menuRow}>
+              {menuItems.map((item) => (
+                <AnimatedPressable
+                  key={item.label}
+                  style={styles.menuButton}
+                  onPress={() => navigation.navigate(item.label)}
+                  rippleColor={Colors.light.border}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.label}
+                >
+                  <Ionicons name={item.icon} size={17} color={Colors.light.text} />
+                  <Text style={styles.menuButtonLabel}>{item.label}</Text>
+                </AnimatedPressable>
+              ))}
+            </Reveal>
           </View>
-        </>
+        )
       )}
     </>
   );
@@ -637,39 +675,45 @@ const styles = StyleSheet.create({
   ratingCount: { fontSize: 13, color: Colors.light.icon, lineHeight: 19 },
   ratingMatched: { fontSize: 13, color: Colors.light.text, lineHeight: 19 },
 
-  subhead: { fontSize: 13, fontWeight: '600', color: Colors.light.icon, marginBottom: 8 },
-  storesRow: { gap: 10, paddingRight: 20 },
+  extras: { paddingTop: 4, paddingBottom: 18 },
+  subhead: { fontSize: 13, fontWeight: '600', color: Colors.light.icon, marginBottom: 10 },
+  // The row runs to the screen edges; its padding lines the first card up
+  // with the grid.
+  storesBleed: { marginHorizontal: -20 },
+  storesRow: { gap: 10, paddingHorizontal: 20, paddingBottom: 2 },
   storeCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    minHeight: 48,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 14,
+    gap: 12,
+    padding: 12,
+    borderRadius: 18,
     borderWidth: 1.5,
-    borderColor: Colors.light.border,
+    borderColor: '#EDE5DA',
     backgroundColor: '#FFFFFF',
-    maxWidth: 230,
+    maxWidth: 280,
   },
+  storeLogo: { width: 44, height: 44, borderRadius: 13 },
+  storeLogoEmpty: { backgroundColor: '#F3E3DA', alignItems: 'center', justifyContent: 'center' },
   storeCardText: { flexShrink: 1 },
-  storeCardName: { fontSize: 13.5, fontWeight: '600', color: Colors.light.text },
+  storeCardName: { fontSize: 14, fontWeight: '600', letterSpacing: -0.1, color: Colors.light.text },
   storeCardMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
-  storeCardMeta: { fontSize: 11.5, color: Colors.light.icon },
-  storeCardRating: { fontSize: 11.5, fontWeight: '600', color: Colors.light.text },
-  menuRow: { flexDirection: 'row', gap: 8, marginTop: 12, marginBottom: 14 },
+  storeCardMeta: { fontSize: 12, color: Colors.light.icon },
+  storeCardRating: { fontWeight: '600', color: Colors.light.text },
+  storeChevron: { marginLeft: 4 },
+  menuRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
   menuButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    height: 36,
-    paddingHorizontal: 12,
+    gap: 7,
+    height: 40,
+    paddingLeft: 12,
+    paddingRight: 15,
     borderRadius: 999,
     borderWidth: 1.5,
-    borderColor: Colors.light.border,
+    borderColor: '#EDE5DA',
     backgroundColor: '#FFFFFF',
   },
-  menuButtonLabel: { fontSize: 12.5, fontWeight: '500', color: Colors.light.text },
+  menuButtonLabel: { fontSize: 13, fontWeight: '500', color: Colors.light.text },
 
   empty: { alignItems: 'center', paddingTop: 36, paddingHorizontal: 16 },
   emptyIcon: {
