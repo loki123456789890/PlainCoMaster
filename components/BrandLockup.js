@@ -36,7 +36,10 @@ export function StaticLockup({ width, height, topInset, style, dark }) {
     <View
       pointerEvents="none"
       style={[
-        StyleSheet.absoluteFill,
+        // A fixed box, not absoluteFill: on Android the keyboard shrinks the
+        // window, and a layer that shrank with it would move the centre the
+        // scale is taken about, dragging the lockup up off the screen.
+        { position: 'absolute', top: 0, left: 0, width, height },
         { transform: [{ translateY: headerCenterY(topInset) - cy }, { scale: HEADER_SCALE }] },
         style,
       ]}
