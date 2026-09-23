@@ -2,8 +2,8 @@
 //
 // The customer tab bar from the approved home/shop preview: Home, Shop,
 // Favorites, Cart and Profile, with Clay marking the current tab and the
-// cart count on the cart. Home and Shop draw it; the other three are their
-// own screens with a back arrow, as before.
+// cart count on the cart. All five screens draw it (Shop only on its main
+// view, not a store's page).
 //
 // The app is one stack, not a tab navigator, so a tab goes back to its
 // screen if that screen is already open (navigate with pop) instead of
@@ -25,11 +25,11 @@ const TABS = [
 ];
 
 // Opens a tab from anywhere: back to it if it is already in the stack,
-// otherwise pushed. Shop opened as a tab fades in (see App.js), like the
-// preview's tab switch, rather than sliding over Home.
+// otherwise pushed. A screen opened as a tab fades in (see App.js), like the
+// preview's tab switch, rather than sliding; `via: 'tab'` also tells
+// Favorites, Cart and Profile to leave out their back arrow.
 export function goToTab(navigation, key, params) {
-  const tabParams = key === 'Shop' ? { via: 'tab', ...params } : params;
-  navigation.navigate(key, tabParams, { pop: true });
+  navigation.navigate(key, { via: 'tab', ...params }, { pop: true });
 }
 
 export default function TabBar({ navigation, current }) {

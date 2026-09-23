@@ -63,10 +63,12 @@ function Heart({ favorited, onToggle, name }) {
   );
 }
 
-export default function ProductCard({ product, favorited, storeName, onPress, onToggleFavorite, style }) {
+// `unavailable`: a saved favorite whose product has since been removed —
+// shown faded, with a note instead of a price.
+export default function ProductCard({ product, favorited, storeName, onPress, onToggleFavorite, style, unavailable }) {
   const [imageFailed, setImageFailed] = useState(false);
   const isUkay = product.type === 'ukay-ukay';
-  const soldOut = isSoldOut(product);
+  const soldOut = !unavailable && isSoldOut(product);
 
   return (
     <AnimatedPressable
@@ -74,9 +76,9 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
       onPress={onPress}
       rippleColor={Colors.light.border}
       accessibilityRole="button"
-      accessibilityLabel={`${product.name}, ₱${product.price}${soldOut ? ', sold out' : ''}`}
+      accessibilityLabel={`${product.name}, ${unavailable ? 'no longer available' : `₱${product.price}`}${soldOut ? ', sold out' : ''}`}
     >
-      <View style={styles.photo}>
+      <View style={[styles.photo, unavailable && styles.photoGone]}>
         {imageFailed || !product.imageUrl ? (
           <View style={styles.fallback}>
             <Ionicons name="shirt-outline" size={34} color={Colors.light.icon} />
@@ -109,7 +111,14 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
           {storeName}
         </Text>
       ) : null}
-      <Text style={[styles.price, soldOut && styles.priceSold]}>₱{Number(product.price).toLocaleString('en-PH')}</Text>
+      {unavailable ? (
+        <View style={styles.goneRow}>
+          <Ionicons name="ban-outline" size={13} color={Colors.light.icon} />
+          <Text style={styles.goneText}>No longer available</Text>
+        </View>
+      ) : (
+        <Text style={[styles.price, soldOut && styles.priceSold]}>₱{Number(product.price).toLocaleString('en-PH')}</Text>
+      )}
     </AnimatedPressable>
   );
 }
@@ -121,6 +130,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#EFE6DA',
   },
+  photoGone: { opacity: 0.55 },
   fallback: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   tag: {
     position: 'absolute',
@@ -166,5 +176,7 @@ const styles = StyleSheet.create({
   },
   store: { marginHorizontal: 2, marginBottom: 2, fontSize: 11.5, color: Colors.light.icon },
   price: { marginHorizontal: 2, fontSize: 14.5, fontWeight: '600', color: Colors.light.highlight },
+  goneRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginHorizontal: 2, marginTop: 2 },
+  goneText: { fontSize: 11.5, color: Colors.light.icon },
   priceSold: { color: '#A89F97', textDecorationLine: 'line-through' },
 });

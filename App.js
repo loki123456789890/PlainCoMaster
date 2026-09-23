@@ -54,6 +54,10 @@ LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
 
 const Stack = createNativeStackNavigator();
 
+// A screen opened from the tab bar fades in, like switching tabs, instead
+// of sliding over the one before it.
+const tabFade = ({ route }) => (route.params?.via === 'tab' ? { animation: 'fade' } : {});
+
 // Every admin screen except AdminLoginScreen itself is wrapped so it can
 // only render for someone whose AdminContext role matches the role named
 // here — mirrors the product/order/support-request vs. user-account split
@@ -159,14 +163,15 @@ export default function App() {
                     <Stack.Screen
                       name="Shop"
                       component={ShopScreen}
-                      options={({ route }) => (route.params?.via === 'tab' ? { animation: 'fade' } : {})}
+                      options={tabFade}
                     />
 
                     {/* iPhone 16 Pro Max - 16 & 18 */}
                     <Stack.Screen name="Product" component={ProductScreen} />
 
                     {/* iPhone 16 Pro Max - 24 & 25 */}
-                    <Stack.Screen name="Cart" component={CartScreen} />
+                    {/* Cart, Profile and Favorites fade in from the tab bar, like Shop. */}
+                    <Stack.Screen name="Cart" component={CartScreen} options={tabFade} />
 
                     {/* iPhone 16 Pro Max - 17 */}
                     <Stack.Screen name="Checkout" component={CheckoutScreen} />
@@ -176,10 +181,10 @@ export default function App() {
                     <Stack.Screen name="SandboxPayment" component={SandboxPaymentScreen} />
 
                     {/* iPhone 16 Pro Max - 13 */}
-                    <Stack.Screen name="Profile" component={ProfileScreen} />
+                    <Stack.Screen name="Profile" component={ProfileScreen} options={tabFade} />
 
                     {/* iPhone 16 Pro Max - 9 */}
-                    <Stack.Screen name="Favorites" component={FavoritesScreen} />
+                    <Stack.Screen name="Favorites" component={FavoritesScreen} options={tabFade} />
 
                     {/* New Screens for Shop Menu */}
                     <Stack.Screen name="Location" component={LocationScreen} />

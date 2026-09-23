@@ -55,7 +55,11 @@ export default function DialogButtonRow({ buttons }: DialogButtonRowProps) {
       return Typography.button;
     }
     const perButtonWidth = (rowWidth - ROW_GAP) / 2;
-    const availableTextWidth = perButtonWidth - Spacing.lg * 2;
+    // Button's horizontal padding, plus its 1pt border on each side and a
+    // point of slack for rounding — without them a label that only just
+    // needed shrinking still came out a hair too wide and was cut off
+    // ("Deactiv…").
+    const availableTextWidth = perButtonWidth - Spacing.lg * 2 - 4;
     const longest = Math.max(leftTextWidth, rightTextWidth);
     if (longest <= availableTextWidth) return Typography.button;
     const scale = availableTextWidth / longest;

@@ -1210,8 +1210,9 @@ shared component used by both.
 
 ### Limitations
 
-- The tab bar appears on Home and Shop only. Favorites, Cart and Profile
-  open as their own screens with a back arrow, as before.
+- A store's page has a back arrow instead of the tab bar. Favorites, Cart
+  and Profile, restyled afterwards, carry the tab bar too, and show a back
+  arrow only when opened from somewhere other than the tab bar.
 - Home's rails are not paged: New arrivals shows the six newest items
   and Ukay finds the ten newest ukay-ukay items; "See all" opens the full
   list in Shop.

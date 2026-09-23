@@ -1,26 +1,36 @@
+// screens/Profilescreen.js
+//
+// The account screen, in the approved favorites/cart/profile preview's
+// design: an ink identity card (photo, name, email, verification), the
+// saved delivery address, grouped rows, and the name edited in a sheet.
+// Everything it did before it still does: photo upload, email
+// verification with its re-checks, the name saved to both places it lives,
+// the Staff Portal row, log out, and deactivation with the sole-admin check.
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Pressable,
   ScrollView,
   ActivityIndicator,
   Platform,
   AppState,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
 } from 'react-native';
-import { showAppAlert } from '../utils/appAlert';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
+  runOnJS,
   useReducedMotion,
-  FadeIn,
-  FadeInDown,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 
 import { auth, db } from '../firebaseConfig';
@@ -36,82 +46,182 @@ import {
   getDocs,
   deleteField,
 } from 'firebase/firestore';
+import { showAppAlert } from '../utils/appAlert';
 import { pickAndUploadImage, uploadErrorMessage } from '../utils/imageUpload';
-import Avatar from '../components/ui/Avatar';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import { useAdmin } from '../context/AdminContext';
+import { useFavorites } from '../context/FavoritesContext';
 import { getPortalLabel } from '../constants/roles';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { Colors, Spacing } from '../constants/theme';
-import Card from '../components/ui/Card';
+import { Colors } from '../constants/theme';
 import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import Input from '../components/ui/Input';
-import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import TabBar, { goToTab } from '../components/shop/TabBar';
+import Reveal from '../components/shop/Reveal';
+import { PageHead, OfflineNotice } from '../components/shop/TabScreen';
+import { EASE_OUT_QUINT } from '../constants/motion';
+import appConfig from '../app.json';
 
-// Loading placeholder shaped like the real identity block (avatar + two
-// text lines), so there's no layout shift once the account data resolves —
-// same reasoning as OrdersSkeleton/CartSkeleton. Replaces the old
-// name: 'Loading...' placeholder text, which read as an unfinished string
-// rather than a deliberate loading state.
+const NAME_MAX = 60;
+
+const initialsOf = (name = '') => {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  return (words[0][0] + (words.length > 1 ? words[words.length - 1][0] : '')).toUpperCase();
+};
+
+// "12 Rizal St., Poblacion, Toledo City, Cebu 6038"
+const addressLine = (a) =>
+  [a.address, a.city, [a.province, a.zipCode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+
+// One row in a group: an icon tile, a label, an optional note, a chevron.
+function Row({ icon, label, note, onPress, danger, disabled, trailing, hint, last }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [styles.row, !last && styles.rowDivider, pressed && styles.rowPressed]}
+      accessibilityRole="button"
+      accessibilityLabel={note ? `${label}, ${note}` : label}
+      accessibilityHint={hint}
+      accessibilityState={{ disabled: Boolean(disabled) }}
+    >
+      <View style={[styles.rowIcon, danger && styles.rowIconDanger]}>
+        <Ionicons name={icon} size={18} color={danger ? DANGER_INK : Colors.light.text} />
+      </View>
+      <Text style={[styles.rowLabel, danger && styles.rowLabelDanger]}>{label}</Text>
+      {note ? <Text style={styles.rowNote}>{note}</Text> : null}
+      {trailing || <Ionicons name="chevron-forward" size={16} color="#B3AAA0" />}
+    </Pressable>
+  );
+}
+const DANGER_INK = '#B42318';
+
+function Group({ label, delay, children }) {
+  return (
+    <>
+      <Reveal delay={delay}>
+        <Text style={styles.groupLabel}>{label}</Text>
+      </Reveal>
+      <Reveal delay={delay + 30} style={styles.group}>
+        {children}
+      </Reveal>
+    </>
+  );
+}
+
+// The name editor: a sheet that rises from the bottom over a scrim. Stays
+// mounted through its closing slide, then unmounts.
+function NameSheet({ visible, onClose, value, onChange, error, email, saving, isConnected, onSave }) {
+  const reduceMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
+  const [mounted, setMounted] = useState(visible);
+  const [focused, setFocused] = useState(false);
+  const progress = useSharedValue(0);
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      progress.value = reduceMotion ? 1 : withTiming(1, { duration: 450, easing: EASE_OUT_QUINT });
+    } else if (mounted) {
+      if (reduceMotion) {
+        progress.value = 0;
+        setMounted(false);
+      } else {
+        progress.value = withTiming(0, { duration: 300, easing: EASE_OUT_QUINT }, (done) => {
+          if (done) runOnJS(setMounted)(false);
+        });
+      }
+    }
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const scrim = useAnimatedStyle(() => ({ opacity: progress.value }));
+  const sheet = useAnimatedStyle(() => ({ transform: [{ translateY: (1 - progress.value) * 420 }] }));
+
+  if (!mounted) return null;
+  return (
+    <Modal transparent visible animationType="none" onRequestClose={() => !saving && onClose()}>
+      <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, scrim]}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => !saving && onClose()} accessibilityLabel="Close" />
+      </Animated.View>
+      <KeyboardAvoidingView behavior="padding" style={styles.sheetWrap} pointerEvents="box-none">
+        <Animated.View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) + 14 }, sheet]}>
+          <View style={styles.grab} />
+          <Text style={styles.sheetTitle}>Edit profile</Text>
+          <Text style={styles.sheetSub}>
+            Your name appears on your orders, and on reviews as your first name and last initial.
+          </Text>
+
+          <Text style={[styles.fieldLabel, focused && { color: Colors.light.tint }, error && { color: DANGER_INK }]}>
+            Display name
+          </Text>
+          <View>
+            {focused || error ? (
+              <View style={[styles.halo, { backgroundColor: error ? 'rgba(196,70,62,0.08)' : 'rgba(196,98,62,0.12)' }]} />
+            ) : null}
+            <TextInput
+              value={value}
+              onChangeText={onChange}
+              maxLength={NAME_MAX}
+              autoFocus
+              editable={!saving}
+              autoComplete="name"
+              textContentType="name"
+              returnKeyType="done"
+              onSubmitEditing={onSave}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              style={[
+                styles.input,
+                { borderColor: error ? DANGER_INK : focused ? Colors.light.tint : Colors.light.border },
+              ]}
+              placeholder="Your name"
+              placeholderTextColor="#B3AAA0"
+              accessibilityLabel="Display name"
+            />
+          </View>
+          <Text style={styles.fieldError} accessibilityLiveRegion="polite">
+            {error || (!isConnected ? 'Network connection lost. Please check your connection and try again.' : '')}
+          </Text>
+
+          <Text style={styles.fieldLabel}>Email</Text>
+          <View style={styles.readOnly}>
+            <Text style={styles.readOnlyText} numberOfLines={1}>
+              {email}
+            </Text>
+            <Ionicons name="lock-closed-outline" size={16} color="#9C938A" />
+          </View>
+          <Text style={styles.readOnlyHint}>Email can&apos;t be changed because it&apos;s tied to your login.</Text>
+
+          <Button
+            variant="primary"
+            label={!isConnected ? 'Offline' : 'Save'}
+            fontSize={16}
+            onPress={onSave}
+            loading={saving}
+            disabled={saving || !isConnected}
+          />
+        </Animated.View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 function ProfileSkeleton() {
   return (
-    <View style={styles.profileSection}>
-      <SkeletonBlock style={styles.avatarSkeleton} />
-      <SkeletonBlock style={[styles.skeletonLine, styles.skeletonNameLine]} />
-      <SkeletonBlock style={[styles.skeletonLine, styles.skeletonEmailLine]} />
+    <View style={[styles.card, styles.cardSkeleton]}>
+      <SkeletonBlock style={styles.avatarSkeleton} color="#3A3531" />
+      <View style={{ flex: 1, gap: 8 }}>
+        <SkeletonBlock style={{ height: 14, width: '60%', borderRadius: 6 }} color="#3A3531" />
+        <SkeletonBlock style={{ height: 11, width: '80%', borderRadius: 6 }} color="#3A3531" />
+      </View>
     </View>
   );
 }
 
-// One account menu row: a tinted icon circle, a label, and a chevron (or a
-// trailing element in its place, e.g. a spinner). A shared shape for every
-// row on this screen — Orders, Favorites, Privacy Policy, Admin Portal,
-// Logout, and Deactivate all render through this so the menu reads as one
-// consistent list rather than several one-off treatments.
-function MenuRow({
-  icon,
-  iconColor,
-  circleColor,
-  label,
-  labelColor,
-  onPress,
-  disabled,
-  trailing,
-  accessibilityLabel,
-  accessibilityHint,
-  style,
-  index = 0,
-  reduceMotion,
-}) {
-  return (
-    <Animated.View
-      entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index, 8) * 40).duration(220).easing(EASE_OUT_QUART)}
-    >
-      <AnimatedPressable
-        onPress={onPress}
-        disabled={disabled}
-        accessibilityRole="button"
-        accessibilityLabel={accessibilityLabel || label}
-        accessibilityHint={accessibilityHint}
-        accessibilityState={{ disabled: Boolean(disabled) }}
-      >
-        <Card variant="flat" style={[styles.menuCard, style]}>
-          <View style={[styles.menuIconCircle, { backgroundColor: circleColor }]}>
-            <Ionicons name={icon} size={20} color={iconColor} />
-          </View>
-          <Text style={[styles.menuLabel, labelColor && { color: labelColor }]}>{label}</Text>
-          {trailing}
-        </Card>
-      </AnimatedPressable>
-    </Animated.View>
-  );
-}
-
-export default function ProfileScreen({ navigation }) {
-  const [userData, setUserData] = useState({ name: '', email: '', photoUrl: null });
+export default function ProfileScreen({ navigation, route }) {
+  const [userData, setUserData] = useState({ name: '', email: '', photoUrl: null, shippingAddress: null });
   const [photoBusy, setPhotoBusy] = useState(false);
   const [emailVerified, setEmailVerified] = useState(Boolean(auth.currentUser?.emailVerified));
   const [sendingVerification, setSendingVerification] = useState(false);
@@ -120,61 +230,67 @@ export default function ProfileScreen({ navigation }) {
   const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
   const [deactivateVisible, setDeactivateVisible] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
-  // True only while the sole-platform-admin check in handleOpenDeactivate
-  // is in flight, so the row can't be tapped twice into two queries.
+  // True only while the sole-platform-admin check is in flight, so the row
+  // can't be tapped twice into two queries.
   const [checkingSoleAdmin, setCheckingSoleAdmin] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
   const [nameError, setNameError] = useState('');
   const [savingName, setSavingName] = useState(false);
   const { role, adminLoading, acknowledgeSelfDeactivation } = useAdmin();
+  const { favorites } = useFavorites();
   const { isConnected } = useNetworkStatus();
-  const reduceMotion = useReducedMotion();
+  const fromTab = route.params?.via === 'tab';
 
   useEffect(() => {
-    const user = auth.currentUser;
+    // Profile is customer-only; a guest goes to Login.
+    if (!auth.currentUser) navigation.replace('Login');
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    if (!user) {
-      // Previously there was no else branch here at all — if nobody was
-      // signed in, userData just stayed at its initial placeholder state
-      // forever, which is why the name literally showed "Loading...".
-      // Profile is a customer-only screen, so redirect instead.
-      navigation.replace('Login');
-      return;
-    }
-
-    const fetchUserData = async () => {
-      try {
-        const userDoc = await getDoc(doc(db, "users", user.uid));
-        if (userDoc.exists()) {
-          setUserData({
-            name: userDoc.data().name,
-            email: userDoc.data().email,
-            photoUrl: userDoc.data().photoUrl || null,
-          });
-        } else {
-          setUserData({ name: user.displayName || 'User', email: user.email, photoUrl: null });
+  // Re-read on focus, so the address card shows what was just saved on the
+  // Delivery Address screen.
+  useFocusEffect(
+    useCallback(() => {
+      const user = auth.currentUser;
+      if (!user) return undefined;
+      let active = true;
+      (async () => {
+        try {
+          const snap = await getDoc(doc(db, 'users', user.uid));
+          if (!active) return;
+          if (snap.exists()) {
+            const data = snap.data();
+            setUserData({
+              name: data.name,
+              email: data.email,
+              photoUrl: data.photoUrl || null,
+              shippingAddress: data.shippingAddress || null,
+            });
+          } else {
+            setUserData({ name: user.displayName || 'User', email: user.email, photoUrl: null, shippingAddress: null });
+          }
+        } catch (error) {
+          console.error('Error fetching user data:', error);
+          if (active) {
+            setUserData((prev) =>
+              prev.email ? prev : { name: user.displayName || 'User', email: user.email, photoUrl: null, shippingAddress: null }
+            );
+          }
+        } finally {
+          if (active) setLoadingProfile(false);
         }
-      } catch (error) {
-        console.error("Error fetching user data:", error);
-        setUserData({ name: user.displayName || 'User', email: user.email, photoUrl: null });
-      } finally {
-        setLoadingProfile(false);
-      }
-    };
-    fetchUserData();
-  }, []);
+      })();
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
   // emailVerified on the cached user only changes after reload(), and
-  // Firebase does not tell the app when the link is clicked — so the app
-  // asks. The customer verifies in their mail app, outside PlainCo, and
-  // comes back by switching apps, which is not navigation: the 'focus'
-  // event alone never fired for it, and the profile kept saying "Verify
-  // now" until they signed out and in. So it asks:
-  //   - when this screen gains focus (navigating back to it);
-  //   - when PlainCo returns to the foreground (back from Gmail);
-  //   - every few seconds for a while after a link is sent, for a link
-  //     opened on another device, where PlainCo never left the screen.
+  // Firebase doesn't say when the link is clicked — so the app asks: when
+  // this screen gains focus, when PlainCo returns to the foreground (back
+  // from the mail app, which is not navigation), and every few seconds for
+  // a while after a link is sent (for a link opened on another device).
   const [verificationSentAt, setVerificationSentAt] = useState(null);
   const refreshVerification = useCallback(() => {
     const user = auth.currentUser;
@@ -225,10 +341,7 @@ export default function ProfileScreen({ navigation }) {
     try {
       await sendEmailVerification(auth.currentUser);
       setVerificationSentAt(Date.now());
-      showAppAlert(
-        'Check your email',
-        `We sent a verification link to ${userData.email}. Open it, then come back here.`
-      );
+      showAppAlert('Check your email', `We sent a verification link to ${userData.email}. Open it, then come back here.`);
     } catch (error) {
       console.error('Could not send verification email:', error?.code);
       showAppAlert(
@@ -242,9 +355,8 @@ export default function ProfileScreen({ navigation }) {
     }
   };
 
-  // Stored on the user document (the profile's source of truth) and on
-  // the Auth profile, which is what WriteReviewScreen copies onto a review
-  // — the same two places the name lives, for the same reason.
+  // Stored on the user document (the profile's source of truth) and on the
+  // Auth profile, which is what WriteReviewScreen copies onto a review.
   const savePhoto = async (photoUrl) => {
     const user = auth.currentUser;
     await updateDoc(doc(db, 'users', user.uid), { photoUrl: photoUrl || deleteField() });
@@ -295,9 +407,7 @@ export default function ProfileScreen({ navigation }) {
             { text: 'Take Photo', onPress: () => uploadPhoto('camera') },
             { text: 'Choose from Library', onPress: () => uploadPhoto('library') },
           ];
-    if (userData.photoUrl) {
-      options.push({ text: 'Remove Photo', style: 'destructive', onPress: removePhoto });
-    }
+    if (userData.photoUrl) options.push({ text: 'Remove Photo', style: 'destructive', onPress: removePhoto });
     options.push({ text: 'Cancel', style: 'cancel' });
     showAppAlert('Profile photo', undefined, options);
   };
@@ -309,158 +419,81 @@ export default function ProfileScreen({ navigation }) {
     setEditingName(true);
   };
 
-  const handleCancelEditName = () => {
-    setEditingName(false);
-    setNameDraft('');
-    setNameError('');
-  };
-
-  const handleChangeNameDraft = (text) => {
-    setNameDraft(text);
-    if (nameError) setNameError('');
-  };
-
   const handleSaveName = async () => {
     const trimmed = nameDraft.trim();
     if (!trimmed) {
       setNameError('Name cannot be empty.');
       return;
     }
-    if (trimmed.length > 60) {
-      setNameError('Name must be 60 characters or fewer.');
+    if (trimmed.length > NAME_MAX) {
+      setNameError(`Name must be ${NAME_MAX} characters or fewer.`);
       return;
     }
-    // Save is already disabled while offline — this is just a defensive
-    // no-op in case isConnected flips between render and press.
-    if (!isConnected) return;
+    if (!isConnected || savingName) return;
 
     setSavingName(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      // Field-scoped update — only "name" is sent, so no other field on
-      // the document can be touched by this write. Matches the allowlist
-      // in firestore.rules, which permits owners to change "name" alone.
-      await updateDoc(doc(db, "users", auth.currentUser.uid), { name: trimmed });
-
-      // The Firestore document is the source of truth for display, but it
-      // is not the only place the name is stored: Signupscreen writes it
-      // to the Auth profile as well, and WriteReviewScreen stamps
-      // auth.currentUser.displayName onto every review it creates. This
-      // screen used to update only the Firestore half, so a customer who
-      // renamed themselves kept publishing reviews under the name they
-      // signed up with.
-      //
-      // Not awaited as part of the success path, and its failure is not
-      // surfaced: the Firestore write above has already succeeded, the
-      // name the user is looking at is already correct, and telling them
-      // the rename failed because a secondary mirror did not update would
-      // be false. Logged so it is diagnosable.
+      // Only "name" is sent — firestore.rules lets an owner change that
+      // field alone.
+      await updateDoc(doc(db, 'users', auth.currentUser.uid), { name: trimmed });
+      // The Auth profile carries the name too, and WriteReviewScreen stamps
+      // it onto new reviews. Not awaited: the rename has already succeeded,
+      // and a failed mirror would be wrong to report as a failed rename.
       updateProfile(auth.currentUser, { displayName: trimmed }).catch((error) => {
         console.error('Name saved, but Auth displayName did not sync:', error?.code, error?.message);
       });
-
       setUserData((prev) => ({ ...prev, name: trimmed }));
       setEditingName(false);
-      setSavingName(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      setSavingName(false);
-      console.error("Error updating name:", error);
+      console.error('Error updating name:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-
       const isNetworkError = !isConnected || error.code === 'unavailable';
-      if (isNetworkError) {
-        showAppAlert(
-          'No Internet Connection',
-          'Network connection lost. Please check your connection and try again.'
-        );
-      } else {
-        showAppAlert('Error', 'Could not update your name. Please try again.');
-      }
+      showAppAlert(
+        isNetworkError ? 'No Internet Connection' : 'Error',
+        isNetworkError
+          ? 'Network connection lost. Please check your connection and try again.'
+          : 'Could not update your name. Please try again.'
+      );
+    } finally {
+      setSavingName(false);
     }
   };
 
-  // Routes straight to the right portal for a restored privileged session —
-  // seller to the dashboard, platformAdmin to user management — or to
-  // AdminLogin otherwise (guests and unprivileged accounts alike, this row
-  // stays reachable by everyone, see the row's own comment below). Guarded
-  // by `disabled={adminLoading}` on the row itself, so this can't fire
-  // while role is still unresolved — that's exactly the race that used to
-  // send a real seller/platformAdmin back to AdminLogin.
+  // Straight to the right portal for a restored privileged session, or to
+  // the Staff Portal sign-in otherwise. The row is disabled while the role
+  // is still resolving, so a real seller isn't sent to the sign-in.
   const handleAdminPortalPress = () => {
     Haptics.selectionAsync();
-    if (role === 'seller') {
-      navigation.navigate('AdminDashboard');
-    } else if (role === 'platformAdmin') {
-      navigation.navigate('AdminUsers');
-    } else {
-      navigation.navigate('AdminLogin');
-    }
-  };
-
-  const handleOpenLogout = () => {
-    setLogoutVisible(true);
+    if (role === 'seller') navigation.navigate('AdminDashboard');
+    else if (role === 'platformAdmin') navigation.navigate('AdminUsers');
+    else navigation.navigate('AdminLogin');
   };
 
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      setUserData({ name: '', email: '' });
       setLogoutVisible(false);
       navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
     } catch (error) {
+      console.error('Logout failed:', error?.code);
       setLogoutVisible(false);
-      showAppAlert("Error", "Failed to log out. Please try again.");
+      showAppAlert('Error', 'Failed to log out. Please try again.');
     }
   };
 
-  // Self-deactivation is permitted for every account by firestore.rules'
-  // owner branch, and for almost everyone that's fine — a customer who
-  // deactivates can be reactivated by a platform admin. The exception is
-  // the LAST active platform admin: only that role can set isActive back
-  // to true, so if the last one deactivates itself there is nobody left
-  // who can undo it, and account management can only be restored by
-  // editing the document in the Firebase console.
-  //
-  // firestore.rules already blocks a platform admin from deactivating
-  // themselves through AdminUsersScreen, for exactly this reason.
-  //
-  // REACHABILITY, honestly: a platform admin cannot currently open this
-  // screen at all. No staff screen navigates to Profile, and Loginscreen
-  // signs staff accounts out and redirects them to the Staff Portal, so
-  // there is no path from a privileged session into the customer stack.
-  // (The handleAdminPortalPress branch above, which routes a privileged
-  // viewer to their portal, predates that redirect and describes a state
-  // the app no longer reaches.) A customer promoted mid-session doesn't
-  // reach it either: AdminContext only re-resolves role on auth state
-  // change, so `role` is still null for them and this check wouldn't fire.
-  //
-  // It is kept as defence in depth, not because it currently protects
-  // anything: it costs nothing at runtime (the query only runs when role
-  // is already platformAdmin, which never happens here today) and it would
-  // become load-bearing again the moment someone adds a route from the
-  // staff stack to Profile, or makes a persisted session enter the app
-  // directly. Anyone reading this should know it is currently dormant
-  // rather than assume the door is being held shut.
-  //
-  // A client-side check, deliberately: rules can't count documents, so
-  // this can't be enforced server-side. That's acceptable here because
-  // this guards against a mistake, not an attacker — someone determined to
-  // strand their own account has other ways, and no security property
-  // depends on stopping them.
+  // The last active Platform Admin must not deactivate themselves: only
+  // that role can reactivate an account, so nobody could undo it. Dormant
+  // today (staff never reach this screen), kept as defence in depth. Rules
+  // can't count documents, so this is a client-side check; it guards a
+  // mistake, not an attack. Fails closed if the count can't be read.
   const handleOpenDeactivate = async () => {
     if (role === 'platformAdmin') {
       setCheckingSoleAdmin(true);
       try {
-        // Only a platform admin may read /users, which is also the only
-        // role this check applies to.
-        const adminsSnap = await getDocs(
-          query(collection(db, 'users'), where('role', '==', 'platformAdmin'))
-        );
-        const activeAdmins = adminsSnap.docs.filter(
-          (d) => d.data().isActive !== false
-        ).length;
-
+        const adminsSnap = await getDocs(query(collection(db, 'users'), where('role', '==', 'platformAdmin')));
+        const activeAdmins = adminsSnap.docs.filter((d) => d.data().isActive !== false).length;
         if (activeAdmins <= 1) {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
           showAppAlert(
@@ -470,10 +503,6 @@ export default function ProfileScreen({ navigation }) {
           return;
         }
       } catch (error) {
-        // Fails closed. Deactivation is irreversible from inside the app
-        // for this role, so proceeding on an unverified count risks the
-        // exact outcome this check exists to prevent — better to ask them
-        // to retry than to strand the account on a network blip.
         console.error('Could not verify platform admin count:', error);
         showAppAlert(
           'Could not verify',
@@ -484,7 +513,6 @@ export default function ProfileScreen({ navigation }) {
         setCheckingSoleAdmin(false);
       }
     }
-
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     setDeactivateVisible(true);
   };
@@ -492,74 +520,55 @@ export default function ProfileScreen({ navigation }) {
   const handleDeactivateAccount = async () => {
     const user = auth.currentUser;
     if (!user) return;
-
     setDeactivating(true);
     try {
-      // Tells AdminContext that the deactivation about to be written is
-      // this user's own doing. Its listener watches this document and
-      // signs out anyone it sees deactivated — correct for an account
-      // disabled by staff, wrong here, where it would answer a deliberate
-      // choice with "contact support if you believe this is a mistake".
-      //
-      // Before the write, not after: the snapshot can land while the
-      // updateDoc below is still in flight.
+      // Tells AdminContext this deactivation is the user's own, before the
+      // write (its snapshot can land while the write is in flight), so it
+      // doesn't answer it with "contact support if this is a mistake".
       acknowledgeSelfDeactivation();
-
-      // Must happen before signOut() — the rule permitting this write
-      // checks isOwner(userId) against the current request.auth, so once
-      // signed out this same write would fail on permissions instead of
-      // succeeding. Both fields are written together in one call, not two
-      // separate writes.
-      await updateDoc(doc(db, "users", user.uid), {
-        isActive: false,
-        deactivatedAt: serverTimestamp(),
-      });
-
+      // Before signOut: the rule allowing this write checks the owner.
+      await updateDoc(doc(db, 'users', user.uid), { isActive: false, deactivatedAt: serverTimestamp() });
       await signOut(auth);
-
       setDeactivateVisible(false);
       setDeactivating(false);
-      // Reset (not navigate) so "back" can't return to this authenticated
-      // screen now that the session is gone — same reasoning as logout.
       navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
     } catch (error) {
       setDeactivating(false);
-      console.error("Error deactivating account:", error);
-
+      console.error('Error deactivating account:', error);
       const isNetworkError = !isConnected || error.code === 'unavailable';
-      if (isNetworkError) {
-        showAppAlert(
-          'No Internet Connection',
-          'Network connection lost. Please check your connection and try again.'
-        );
-      } else {
-        showAppAlert('Error', 'Could not deactivate your account. Please try again.');
-      }
+      showAppAlert(
+        isNetworkError ? 'No Internet Connection' : 'Error',
+        isNetworkError
+          ? 'Network connection lost. Please check your connection and try again.'
+          : 'Could not deactivate your account. Please try again.'
+      );
     }
   };
 
+  const address = userData.shippingAddress;
+  const initials = initialsOf(userData.name);
+  const favoriteCount = favorites.length;
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       <ConfirmDialog
         visible={logoutVisible}
         onClose={() => setLogoutVisible(false)}
-        title="Logout"
-        confirmLabel="Logout"
+        icon="log-out-outline"
+        title="Log out of PlainCo?"
+        confirmLabel="Log Out"
         confirmVariant="primary"
         onConfirm={handleLogout}
       >
-        <Text style={styles.modalMessage}>Are you sure you want to log out?</Text>
+        <Text style={styles.dialogText}>You&apos;ll need to log in again next time you open the app.</Text>
       </ConfirmDialog>
-
-      <PrivacyPolicyModal
-        visible={privacyPolicyVisible}
-        onClose={() => setPrivacyPolicyVisible(false)}
-      />
 
       <ConfirmDialog
         visible={deactivateVisible}
         onClose={() => setDeactivateVisible(false)}
-        title="Deactivate Account"
+        icon="ban-outline"
+        iconTone="danger"
+        title="Deactivate your account?"
         confirmLabel={!isConnected ? 'Offline' : 'Deactivate'}
         confirmVariant="danger"
         onConfirm={handleDeactivateAccount}
@@ -567,386 +576,363 @@ export default function ProfileScreen({ navigation }) {
         confirmDisabled={deactivating || !isConnected}
         cancelDisabled={deactivating}
       >
-        <Text style={styles.deactivateModalMessage}>
-          Your account will be disabled and you will be signed out. You will
-          not be able to sign in again. Your personal information is
-          retained only as required for order and transaction records. To
-          request further action on your data, contact the Store Manager
-          through the Help Center.
-        </Text>
+        <View style={styles.dialogList}>
+          {[
+            "You'll be signed out and can't sign in again.",
+            'Your past orders are kept for transaction records.',
+            'Only a PlainCo Platform Admin can reactivate your account.',
+            'To ask about your data, use Contact Support in the Help Center.',
+          ].map((line) => (
+            <View key={line} style={styles.dialogItem}>
+              <Text style={styles.dialogBullet}>•</Text>
+              <Text style={styles.dialogItemText}>{line}</Text>
+            </View>
+          ))}
+        </View>
       </ConfirmDialog>
 
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profile</Text>
-        <TouchableOpacity
-          onPress={() => navigation.navigate('Help')}
-          style={styles.headerAction}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Get help"
-        >
-          <Ionicons name="help-circle-outline" size={24} color={Colors.light.tint} />
-        </TouchableOpacity>
-      </View>
+      <PrivacyPolicyModal visible={privacyPolicyVisible} onClose={() => setPrivacyPolicyVisible(false)} />
 
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — some account actions are unavailable.
-          </Text>
-        </View>
-      )}
+      <NameSheet
+        visible={editingName}
+        onClose={() => setEditingName(false)}
+        value={nameDraft}
+        onChange={(text) => {
+          setNameDraft(text);
+          if (nameError) setNameError('');
+        }}
+        error={nameError}
+        email={userData.email}
+        saving={savingName}
+        isConnected={isConnected}
+        onSave={handleSaveName}
+      />
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      {/* The "?" is what the Privacy Policy points to for Contact Support. */}
+      <PageHead
+        title="Profile"
+        onBack={fromTab ? null : () => navigation.goBack()}
+        right={
+          <Pressable
+            onPress={() => navigation.navigate('Help')}
+            style={({ pressed }) => [styles.helpButton, pressed && styles.rowPressed]}
+            hitSlop={6}
+            accessibilityRole="button"
+            accessibilityLabel="Get help"
+          >
+            <Ionicons name="help-circle-outline" size={24} color={Colors.light.tint} />
+          </Pressable>
+        }
+      />
+
+      {!isConnected && <OfflineNotice>No internet connection — some account actions are unavailable.</OfflineNotice>}
+
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         {loadingProfile ? (
           <ProfileSkeleton />
         ) : (
-          <Animated.View
-            style={styles.profileSection}
-            entering={reduceMotion ? undefined : FadeIn.duration(240).easing(EASE_OUT_QUART)}
-            accessible
-            accessibilityLabel={`Signed in as ${userData.name}, ${userData.email}`}
-          >
-            <Pressable
-              onPress={handleChangePhoto}
-              disabled={photoBusy}
-              style={styles.avatarWrap}
-              accessibilityRole="button"
-              accessibilityLabel={userData.photoUrl ? 'Change profile photo' : 'Add a profile photo'}
-            >
-              <Avatar uri={userData.photoUrl} size={100} />
-              {photoBusy ? (
-                <View style={styles.avatarBusy}>
-                  <ActivityIndicator color="#fff" />
-                </View>
-              ) : null}
-              <View style={styles.avatarBadge}>
-                <Ionicons name="camera" size={15} color="#fff" />
-              </View>
-            </Pressable>
-
-            {editingName ? (
-              <View style={styles.nameEditWrap}>
-                <Input
-                  value={nameDraft}
-                  onChangeText={handleChangeNameDraft}
-                  placeholder="Your name"
-                  maxLength={60}
-                  autoFocus
-                  editable={!savingName}
-                  error={
-                    nameError ||
-                    (!isConnected
-                      ? 'Network connection lost. Please check your connection and try again.'
-                      : '')
-                  }
-                  accessibilityLabel="Name"
-                />
-                <View style={styles.nameEditButtons}>
-                  <View style={styles.nameEditButtonWrap}>
-                    <Button
-                      variant="secondary"
-                      label="Cancel"
-                      onPress={handleCancelEditName}
-                      disabled={savingName}
-                    />
-                  </View>
-                  <View style={styles.nameEditButtonWrap}>
-                    <Button
-                      variant="primary"
-                      label={!isConnected ? 'Offline' : 'Save'}
-                      onPress={handleSaveName}
-                      loading={savingName}
-                      disabled={savingName || !isConnected}
-                    />
-                  </View>
-                </View>
-              </View>
-            ) : (
-              <View style={styles.nameRow}>
-                <Text style={styles.name}>{userData.name}</Text>
-                <Pressable
-                  onPress={handleStartEditName}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Edit name"
-                >
-                  <Ionicons name="pencil" size={16} color={Colors.light.tint} />
-                </Pressable>
-              </View>
-            )}
-            <Text style={styles.email}>{userData.email}</Text>
-            {emailVerified ? (
-              <View style={styles.verifyRow}>
-                <Ionicons name="checkmark-circle" size={14} color={Colors.light.success} />
-                <Text style={styles.verifiedText}>Email verified</Text>
-              </View>
-            ) : (
+          <Reveal delay={90}>
+            <View style={styles.card} accessible={false}>
+              <View style={styles.cardRing} pointerEvents="none" />
               <Pressable
-                onPress={handleSendVerification}
-                disabled={sendingVerification || !isConnected}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                style={styles.verifyRow}
+                onPress={handleChangePhoto}
+                disabled={photoBusy}
                 accessibilityRole="button"
-                accessibilityLabel="Email not verified. Send a verification link."
+                accessibilityLabel={userData.photoUrl ? 'Change profile photo' : 'Add a profile photo'}
               >
-                <Ionicons name="alert-circle-outline" size={14} color={Colors.light.icon} />
-                <Text style={styles.unverifiedText}>Not verified ·</Text>
-                <Text style={styles.verifyLink}>
-                  {sendingVerification ? 'Sending…' : 'Verify now'}
-                </Text>
+                {userData.photoUrl ? (
+                  <Image source={{ uri: userData.photoUrl }} style={styles.avatar} contentFit="cover" transition={150} />
+                ) : (
+                  <View style={[styles.avatar, styles.avatarInitials]}>
+                    {initials ? (
+                      <Text style={styles.avatarText}>{initials}</Text>
+                    ) : (
+                      <Ionicons name="person" size={24} color="#fff" />
+                    )}
+                  </View>
+                )}
+                {photoBusy ? (
+                  <View style={[styles.avatar, styles.avatarBusy]}>
+                    <ActivityIndicator color="#fff" />
+                  </View>
+                ) : null}
+                <View style={styles.cameraBadge}>
+                  <Ionicons name="camera" size={11} color="#fff" />
+                </View>
               </Pressable>
-            )}
-          </Animated.View>
+              <View style={styles.cardText}>
+                <Text style={styles.cardName} numberOfLines={1}>
+                  {userData.name}
+                </Text>
+                <Text style={styles.cardEmail} numberOfLines={1}>
+                  {userData.email}
+                </Text>
+                {emailVerified ? (
+                  <View style={styles.verify}>
+                    <Ionicons name="checkmark-circle" size={13} color="#A9BD97" />
+                    <Text style={styles.verified}>Email verified</Text>
+                  </View>
+                ) : (
+                  <Pressable
+                    onPress={handleSendVerification}
+                    disabled={sendingVerification || !isConnected}
+                    hitSlop={8}
+                    style={styles.verify}
+                    accessibilityRole="button"
+                    accessibilityLabel="Email not verified. Send a verification link."
+                  >
+                    <Ionicons name="alert-circle-outline" size={13} color="#BDB3A9" />
+                    <Text style={styles.unverified}>Not verified ·</Text>
+                    <Text style={styles.verifyLink}>{sendingVerification ? 'Sending…' : 'Verify now'}</Text>
+                  </Pressable>
+                )}
+              </View>
+              <Pressable
+                onPress={handleStartEditName}
+                style={({ pressed }) => [styles.editButton, pressed && { opacity: 0.7 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Edit display name"
+              >
+                <Ionicons name="pencil" size={16} color={Colors.light.background} />
+              </Pressable>
+            </View>
+          </Reveal>
         )}
 
-        <View style={styles.menuContent}>
-          <Text style={styles.sectionTitle}>Account</Text>
+        {/* The phone lives with the saved delivery address, where checkout
+            reads it — one copy, edited in one place. */}
+        <Reveal delay={150}>
+          <Pressable
+            onPress={() => navigation.navigate('Location')}
+            style={({ pressed }) => [styles.address, pressed && styles.rowPressed]}
+            accessibilityRole="button"
+            accessibilityLabel={address ? 'Delivery address and phone. Edit' : 'Add a delivery address and phone'}
+          >
+            <View style={styles.addressHead}>
+              <Text style={styles.addressLabel}>Delivery address</Text>
+              <Text style={styles.addressAction}>{address ? 'Edit' : 'Add'}</Text>
+            </View>
+            {address ? (
+              <>
+                <Text style={styles.addressName}>
+                  {[address.fullName, address.phone].filter(Boolean).join(' · ')}
+                </Text>
+                <Text style={styles.addressText}>{addressLine(address)}</Text>
+              </>
+            ) : (
+              <Text style={styles.addressText}>Add where your orders should be delivered, and a phone number.</Text>
+            )}
+          </Pressable>
+        </Reveal>
 
-          <MenuRow
-            index={0}
-            icon="document-text-outline"
-            iconColor={Colors.light.icon}
-            circleColor={Colors.light.border}
+        <Group label="Shopping" delay={200}>
+          <Row
+            icon="receipt-outline"
             label="My Orders"
             onPress={() => navigation.navigate('Orders')}
-            accessibilityHint="Opens your order history"
-            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
-            reduceMotion={reduceMotion}
+            hint="Opens your order history"
           />
-
-          <MenuRow
-            index={1}
+          <Row
             icon="heart-outline"
-            iconColor={Colors.light.icon}
-            circleColor={Colors.light.border}
             label="Favorites"
-            onPress={() => navigation.navigate('Favorites')}
-            accessibilityHint="Opens your saved items"
-            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
-            reduceMotion={reduceMotion}
+            note={favoriteCount ? String(favoriteCount) : null}
+            onPress={() => goToTab(navigation, 'Favorites')}
+            hint="Opens your saved items"
+            last
           />
+        </Group>
 
-          {/* The phone lives with the saved delivery address, where
-              checkout reads it — one copy, edited in one place. */}
-          <MenuRow
-            index={2}
-            icon="location-outline"
-            iconColor={Colors.light.icon}
-            circleColor={Colors.light.border}
-            label="Delivery Address & Phone"
-            onPress={() => navigation.navigate('Location')}
-            accessibilityHint="Opens your saved delivery address and phone number"
-            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
-            reduceMotion={reduceMotion}
-          />
-
-          <MenuRow
-            index={2}
+        <Group label="Support & legal" delay={280}>
+          <Row icon="help-circle-outline" label="Help & Support" onPress={() => navigation.navigate('Help')} />
+          <Row
             icon="shield-outline"
-            iconColor={Colors.light.icon}
-            circleColor={Colors.light.border}
             label="Privacy Policy"
             onPress={() => setPrivacyPolicyVisible(true)}
-            accessibilityHint="Opens the privacy policy"
-            trailing={<Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />}
-            reduceMotion={reduceMotion}
+            hint="Opens the privacy policy"
+            last
           />
+        </Group>
 
-          {/* Stays visible and reachable for everyone, staff or not —
-              AdminLoginScreen has to remain the one in-app entry point to
-              the portal for a signed-out staff member. A customer tapping
-              this still only ever lands on AdminLogin and can't get
-              further; that's already enforced by Firestore rules +
-              withRoleGuard, not by hiding this row.
-
-              The label names the role for a restored privileged session
-              ("Store Manager" / "Platform Admin") and falls back to the
-              neutral "Staff Portal" for everyone else — so it always
-              matches the screen handleAdminPortalPress() is about to open,
-              and never promises a customer a portal they can't enter. */}
-          <MenuRow
-            index={3}
-            icon="shield-checkmark"
-            iconColor={Colors.light.tint}
-            circleColor={Colors.light.tint + '15'}
+        <Group label="Account" delay={360}>
+          {/* Reachable by everyone: the Staff Portal sign-in has to stay
+              the one way in for a signed-out staff member, and a customer
+              gets no further than it (rules + withRoleGuard). The label
+              names the portal a restored staff session will open. */}
+          <Row
+            icon="shield-checkmark-outline"
             label={getPortalLabel(role)}
-            labelColor={Colors.light.tint}
             onPress={handleAdminPortalPress}
             disabled={adminLoading}
-            accessibilityHint={`Opens the ${getPortalLabel(role)}`}
-            style={styles.adminCard}
-            trailing={
-              adminLoading ? (
-                <ActivityIndicator size="small" color={Colors.light.tint} />
-              ) : (
-                <Ionicons name="chevron-forward" size={20} color={Colors.light.tint} />
-              )
-            }
-            reduceMotion={reduceMotion}
+            hint={`Opens the ${getPortalLabel(role)}`}
+            trailing={adminLoading ? <ActivityIndicator size="small" color={Colors.light.tint} /> : null}
           />
+          <Row icon="log-out-outline" label="Log Out" onPress={() => setLogoutVisible(true)} hint="Signs you out" />
+          {/* Last, and red: irreversible from the user's side. */}
+          <Row
+            icon="ban-outline"
+            label="Deactivate Account"
+            danger
+            onPress={handleOpenDeactivate}
+            disabled={checkingSoleAdmin}
+            hint="Opens a confirmation to deactivate your account"
+            last
+          />
+        </Group>
 
-          <View style={styles.sessionSection}>
-            <MenuRow
-              index={4}
-              icon="log-out-outline"
-              iconColor={Colors.light.danger}
-              circleColor={Colors.light.danger + '12'}
-              label="Logout"
-              labelColor={Colors.light.danger}
-              onPress={handleOpenLogout}
-              accessibilityHint="Signs you out of your account"
-              reduceMotion={reduceMotion}
-            />
-
-            {/* Deliberately separated from Logout above (extra top margin) and
-                placed last — this is irreversible from the user's side, so it
-                shouldn't sit where a normal settings row would be tapped by
-                accident. */}
-            <MenuRow
-              index={5}
-              icon="person-remove-outline"
-              iconColor={Colors.light.danger}
-              circleColor={Colors.light.danger + '12'}
-              label="Deactivate My Account"
-              labelColor={Colors.light.danger}
-              onPress={handleOpenDeactivate}
-              disabled={checkingSoleAdmin}
-              accessibilityHint="Opens a confirmation to deactivate your account"
-              style={styles.deactivateCard}
-              reduceMotion={reduceMotion}
-            />
-          </View>
-        </View>
+        <Text style={styles.version}>PlainCo v{appConfig.expo.version} · BSIT-4C Group 5</Text>
       </ScrollView>
+
+      <TabBar navigation={navigation} current="Profile" />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  backButton: { width: 40, height: 40, justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
-  headerAction: { width: 40, height: 40, justifyContent: 'center', alignItems: 'flex-end' },
+  scroll: { paddingHorizontal: 20, paddingBottom: 28 },
+  helpButton: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginRight: -8 },
 
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
-  },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-
-  content: { flex: 1 },
-
-  // Identity block — kept full-bleed under the header (not inset with the
-  // menu below) so it reads as the screen's one hero moment, the same way
-  // Home's greeting + hero photo sit outside its padded content sections.
-  profileSection: {
-    alignItems: 'center',
-    paddingVertical: Spacing.xl,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  avatarWrap: { width: 100, height: 100, marginBottom: Spacing.md },
-  avatarBusy: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 50,
-    backgroundColor: 'rgba(28,27,26,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  // Clay, because tapping the photo is this block's one action.
-  avatarBadge: {
-    position: 'absolute',
-    right: 0,
-    bottom: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: Colors.light.tint,
-    borderWidth: 2,
-    borderColor: Colors.light.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  name: { fontSize: 19, fontWeight: '700', color: Colors.light.text },
-  email: { fontSize: 14, color: Colors.light.icon, marginTop: 4 },
-  verifyRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, minHeight: 24 },
-  verifiedText: { fontSize: 13, fontWeight: '600', color: Colors.light.success },
-  unverifiedText: { fontSize: 13, color: Colors.light.icon },
-  verifyLink: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
-
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  nameEditWrap: { width: '100%', paddingHorizontal: 20 },
-  nameEditButtons: { flexDirection: 'row', gap: 12, marginTop: Spacing.xs },
-  nameEditButtonWrap: { flex: 1 },
-
-  avatarSkeleton: { width: 100, height: 100, borderRadius: 50, marginBottom: Spacing.md },
-  skeletonLine: { height: 14, borderRadius: 4, marginTop: 6 },
-  skeletonNameLine: { width: 140 },
-  skeletonEmailLine: { width: 180, height: 12 },
-
-  menuContent: { paddingHorizontal: 20, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl },
-  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: Colors.light.text, marginBottom: 12 },
-
-  menuCard: {
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-    padding: 12,
-    marginBottom: 10,
-  },
-  menuIconCircle: {
-    width: 40,
-    height: 40,
+    padding: 16,
     borderRadius: 20,
-    justifyContent: 'center',
+    backgroundColor: Colors.light.text,
+    marginBottom: 18,
+    overflow: 'hidden',
+  },
+  cardSkeleton: { minHeight: 88 },
+  cardRing: {
+    position: 'absolute',
+    right: -40,
+    top: -40,
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    borderWidth: 1.5,
+    borderColor: 'rgba(250,247,242,0.1)',
+  },
+  avatar: { width: 56, height: 56, borderRadius: 18 },
+  avatarInitials: { backgroundColor: Colors.light.tint, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 19, fontWeight: '600', color: '#fff' },
+  avatarBusy: { position: 'absolute', backgroundColor: 'rgba(28,27,26,0.5)', alignItems: 'center', justifyContent: 'center' },
+  avatarSkeleton: { width: 56, height: 56, borderRadius: 18 },
+  cameraBadge: {
+    position: 'absolute',
+    right: -4,
+    bottom: -4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: Colors.light.tint,
+    borderWidth: 2,
+    borderColor: Colors.light.text,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  menuLabel: { fontSize: 15, fontWeight: '600', color: Colors.light.text, flex: 1 },
+  cardText: { flex: 1, minWidth: 0 },
+  cardName: { fontSize: 17, fontWeight: '600', color: Colors.light.background },
+  cardEmail: { fontSize: 12, color: '#BDB3A9', marginTop: 1 },
+  verify: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5 },
+  verified: { fontSize: 11.5, fontWeight: '600', color: '#A9BD97' },
+  unverified: { fontSize: 11.5, color: '#BDB3A9' },
+  verifyLink: { fontSize: 11.5, fontWeight: '600', color: '#E9A385' },
+  editButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: 'rgba(250,247,242,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  adminCard: { backgroundColor: Colors.light.tint + '0D', borderColor: Colors.light.tint + '30' },
+  address: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE7DD',
+    marginBottom: 18,
+  },
+  addressHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  addressLabel: { fontSize: 12, color: Colors.light.icon },
+  addressAction: { fontSize: 12, fontWeight: '600', color: Colors.light.tint },
+  addressName: { fontSize: 13.5, fontWeight: '600', color: Colors.light.text },
+  addressText: { fontSize: 12.5, lineHeight: 19, color: Colors.light.icon, marginTop: 2 },
 
-  sessionSection: { marginTop: Spacing.lg },
-  deactivateCard: { marginTop: 14, marginBottom: 0 },
-
-  // Confirmation dialogs (rendered through the shared ConfirmDialog component
-  // — only the message text styles below are local to this screen)
-  modalMessage: { fontSize: 15, color: Colors.light.icon, textAlign: 'center', marginBottom: Spacing.lg },
-  // Left-aligned and smaller than modalMessage — this dialog's copy is a
-  // full paragraph the user actually needs to read and understand (privacy
-  // implications), not a short one-line confirmation, so centered text
-  // would be harder to read here.
-  deactivateModalMessage: {
-    fontSize: 14,
+  groupLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1.3,
+    textTransform: 'uppercase',
     color: Colors.light.icon,
-    textAlign: 'left',
-    lineHeight: 20,
-    marginBottom: Spacing.lg,
-    alignSelf: 'stretch',
+    marginHorizontal: 4,
+    marginBottom: 8,
   },
+  group: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE7DD',
+    borderRadius: 18,
+    overflow: 'hidden',
+    marginBottom: 14,
+  },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, minHeight: 56 },
+  rowDivider: { borderBottomWidth: 1, borderBottomColor: '#F1EBE3' },
+  rowPressed: { backgroundColor: '#F7F2EB' },
+  rowIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: '#F3EEE6', alignItems: 'center', justifyContent: 'center' },
+  rowIconDanger: { backgroundColor: '#FBEDEB' },
+  rowLabel: { flex: 1, fontSize: 14, color: Colors.light.text },
+  rowLabelDanger: { color: DANGER_INK },
+  rowNote: { fontSize: 12, color: Colors.light.icon },
+
+  version: { textAlign: 'center', fontSize: 11, color: '#8E857B', marginTop: 8 },
+
+  dialogText: { fontSize: 13.5, lineHeight: 20, color: Colors.light.icon, textAlign: 'center', marginBottom: 18 },
+  dialogList: { alignSelf: 'stretch', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 12, marginBottom: 18, gap: 4 },
+  dialogItem: { flexDirection: 'row', gap: 8 },
+  dialogBullet: { fontSize: 12.5, lineHeight: 19, color: Colors.light.icon },
+  dialogItemText: { flex: 1, fontSize: 12.5, lineHeight: 19, color: Colors.light.text },
+
+  scrim: { backgroundColor: 'rgba(28,27,26,0.42)' },
+  sheetWrap: { flex: 1, justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: Colors.light.background,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingTop: 10,
+    paddingHorizontal: 20,
+  },
+  grab: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#D8CFC4', alignSelf: 'center', marginBottom: 14 },
+  sheetTitle: { fontSize: 18, fontWeight: '600', color: Colors.light.text, marginBottom: 4 },
+  sheetSub: { fontSize: 13, lineHeight: 19, color: Colors.light.icon, marginBottom: 16 },
+  fieldLabel: { fontSize: 12.5, fontWeight: '500', color: Colors.light.text, marginBottom: 6, marginLeft: 2 },
+  halo: { position: 'absolute', top: -4, left: -4, right: -4, bottom: -4, borderRadius: 18 },
+  input: {
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 15,
+    fontSize: 15,
+    color: Colors.light.text,
+    // Above the halo; on web an absolute sibling would paint over it.
+    zIndex: 1,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
+  },
+  fieldError: { fontSize: 11.5, color: DANGER_INK, minHeight: 16, marginTop: 6, marginBottom: 10, marginLeft: 2 },
+  readOnly: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 50,
+    borderRadius: 14,
+    backgroundColor: '#F1EBE3',
+    paddingHorizontal: 15,
+    marginBottom: 6,
+  },
+  readOnlyText: { flex: 1, fontSize: 14, color: Colors.light.icon, marginRight: 8 },
+  readOnlyHint: { fontSize: 11.5, color: Colors.light.icon, marginBottom: 16, marginLeft: 2 },
 });

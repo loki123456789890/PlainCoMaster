@@ -1,5 +1,6 @@
 import React from 'react';
 import { Modal, View, Text, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 import { Colors, Radius, Spacing, Shadow } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
@@ -18,6 +19,9 @@ interface ConfirmDialogProps {
   loading?: boolean;
   confirmDisabled?: boolean;
   cancelDisabled?: boolean;
+  /** An icon in a tile above the title; `danger` tints it red. */
+  icon?: keyof typeof Ionicons.glyphMap;
+  iconTone?: 'neutral' | 'danger';
 }
 
 /**
@@ -42,6 +46,8 @@ export default function ConfirmDialog({
   loading = false,
   confirmDisabled = false,
   cancelDisabled = false,
+  icon,
+  iconTone = 'neutral',
 }: ConfirmDialogProps) {
   const reduceMotion = useReducedMotion();
   if (!visible) return null;
@@ -60,6 +66,11 @@ export default function ConfirmDialog({
           style={styles.content}
           entering={reduceMotion ? undefined : FadeIn.duration(200).easing(EASE_OUT_QUART)}
         >
+          {icon ? (
+            <View style={[styles.iconTile, iconTone === 'danger' && styles.iconTileDanger]}>
+              <Ionicons name={icon} size={26} color={iconTone === 'danger' ? DANGER_INK : Colors.light.text} />
+            </View>
+          ) : null}
           <Text style={styles.title}>{title}</Text>
           {children}
           <DialogButtonRow
@@ -74,6 +85,8 @@ export default function ConfirmDialog({
   );
 }
 
+const DANGER_INK = '#B42318';
+
 const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   content: {
@@ -84,5 +97,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     ...Shadow.card,
   },
-  title: { fontSize: 18, fontWeight: '700', marginBottom: 10, color: Colors.light.text },
+  iconTile: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    backgroundColor: '#F3EEE6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  iconTileDanger: { backgroundColor: '#FBEDEB' },
+  title: { textAlign: 'center', fontSize: 18, fontWeight: '700', marginBottom: 10, color: Colors.light.text },
 });
