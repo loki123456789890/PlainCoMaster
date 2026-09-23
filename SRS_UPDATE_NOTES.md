@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 15):
+- **New use case — Reset Password** (fills the gap listed in section 16):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -1211,7 +1211,7 @@ shared component used by both.
 ### Limitations
 
 - A store's page has a back arrow instead of the tab bar. Favorites, Cart
-  and Profile, restyled afterwards, carry the tab bar too, and show a back
+  and Profile, restyled afterwards (section 15), carry the tab bar too, and show a back
   arrow only when opened from somewhere other than the tab bar.
 - Home's rails are not paged: New arrivals shows the six newest items
   and Ukay finds the ten newest ukay-ukay items; "See all" opens the full
@@ -1229,7 +1229,102 @@ bar returning to Home; and each category tile opening Shop filtered.
 
 ---
 
-## 15. Still outstanding — SRS-side only, no code changes needed
+## 15. Favorites, Cart and Profile redesign
+
+> **Status (23 Sep 2026):** built and tested against the local emulators;
+> reaches production with the next release (web app and APK). No
+> database, security-rule or Cloud Function changes. The rules for stock,
+> availability, checkout and deactivation are unchanged; only the screens
+> around them are new.
+
+### What changed — suggested wording
+
+> **Favorites** shows saved items in the same cards as Shop, with each
+> item's current price and stock. If a saved item's product has been
+> removed from the shop, it stays in the list, faded and marked "No
+> longer available", so the customer can see what happened and remove
+> it. Removing a favorite can be undone for a few seconds.
+>
+> **Cart** lists each item with its photo, colour, size and a quantity
+> control, followed by a summary (subtotal, free shipping, total, and a
+> note that Cash on Delivery is available). The **Checkout** button shows
+> the total and stays in view above the tab bar. An item that is no longer
+> sold is marked "No longer available" and left out of checkout. A
+> one-of-a-kind ukay-ukay item says so when its single piece is already in
+> the cart. Removing an item can be undone for a few seconds.
+>
+> **Profile** opens with an identity card: the customer's photo (or
+> initials), name, email and whether the email is verified. Tapping the
+> photo changes it; the pencil opens a sheet to change the display name.
+> Below it are the saved delivery address and phone, then **Shopping**
+> (My Orders, Favorites), **Support & legal** (Help & Support, Privacy
+> Policy) and **Account** (Staff Portal, Log Out, Deactivate Account). The
+> app version is shown at the bottom.
+>
+> All three screens carry the customer tab bar (section 14).
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-P1 | Favorites shows each saved item's current price and stock where the product still exists, and marks it "No longer available" where it does not. Availability is decided only after the product list has loaded. |
+| FR-P2 | Removing a favorite or a cart item shows an Undo option for about four seconds; undoing restores it. |
+| FR-P3 | The cart limits each item's quantity to the stock remaining after the same product's other cart lines, and states the limit when it is reached ("Only 3 in stock"; for a one-of-a-kind ukay-ukay item, "Only 1 available (one-of-a-kind)"). |
+| FR-P4 | The cart total and the Checkout button exclude items that are no longer available, and say so. Checkout is disabled only when no available items remain. |
+| FR-P5 | Profile shows the saved delivery address and phone, or a prompt to add them, and opens the Delivery Address screen to edit them. |
+| FR-P6 | The display name is edited in a sheet; it must not be empty and may be at most 60 characters. The email is shown read-only. |
+| FR-P7 | Log Out and Deactivate each ask for confirmation. The Deactivate confirmation states that the user will be signed out and cannot sign in again, that past orders are kept for transaction records, that only a Platform Admin can reactivate the account, and that data questions go through Contact Support in the Help Center. |
+
+### Differences from the previous version
+
+- **Favorites:** the "My Orders" and "Settings" shortcuts at the top are
+  removed; Profile, now in the tab bar, leads to both. Removed products
+  were previously shown as ordinary cards with their old price.
+- **Cart:** Checkout moves from the bottom of the summary to a button
+  that stays above the tab bar and shows the total. The stock note is now
+  Moss (information) rather than red (error).
+- **Profile:** the name is edited in a sheet instead of inline; the
+  delivery address is shown on the screen instead of only as a menu row;
+  Log Out and Deactivate confirmations are reworded as above.
+- **Where the app differs from the approved preview, and why:**
+  - Shipping reads "Free", matching Checkout, not "Calculated at
+    checkout".
+  - Checkout stays available when some items are unavailable (they are
+    left out), rather than blocked until they are removed — the existing
+    behaviour.
+  - The Deactivate confirmation does not say it "withdraws consent to data
+    processing", because the Privacy Policy (section 13) does not say so.
+  - Profile keeps the Staff Portal row, the "?" Help button (which the
+    Privacy Policy points to) and email verification, none of which the
+    preview shows.
+
+### Screens — module list (section 7)
+
+No new screens. **Favorites, Cart and Profile** are redesigned. Shared
+pieces (the page title, empty states, the Undo message, the offline
+notice) are one component used by all three.
+
+### Limitations
+
+- A saved favorite is a copy of the product taken when it was saved. If
+  the product is removed, only that copy remains, so its photo may be
+  missing.
+- The Undo window is about four seconds; after that the removal stands.
+
+### Verification
+
+Compared with the approved preview in a browser, then run against the
+local emulators with a customer account holding a saved address, four
+favorites (one for a deleted product) and three cart lines (one for a
+deleted product, one ukay-ukay item with one in stock): the removed
+favorite marked unavailable; removing and undoing a favorite; the cart
+total and Checkout amount; raising a quantity; removing a cart line and
+the unavailable note clearing; the address card; renaming through the
+sheet; the Deactivate confirmation; and logging out to Landing.
+
+---
+
+## 16. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
