@@ -55,7 +55,8 @@ const SECTIONS = [
     title: 'Who can see your information',
     paragraphs: [
       ['When you place an order, the ', { b: 'store you ordered from' }, ' sees your name, delivery address, phone number, order details, and your messages about that order, so they can fulfil it. Stores cannot see your orders from other stores.'],
-      ['PlainCo platform administrators can access account records to manage users and resolve issues. Your reviews show your display name and profile photo publicly.'],
+      ['PlainCo platform administrators can access account records to manage users and resolve issues.'],
+      ['Your reviews are shown to other PlainCo shoppers with your first name and last initial (for example, "Juan D.") and your profile photo. Your full name is not shown.'],
     ],
   },
   {

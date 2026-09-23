@@ -933,7 +933,204 @@ and a shopper saw them on the store page and in "Shop by store".
 
 ---
 
-## 13. Still outstanding — SRS-side only, no code changes needed
+## 13. Onboarding redesign — icon, splash, landing, sign up, log in, password reset, Privacy Policy
+
+The first screens a new user sees were redesigned from approved HTML
+previews, as one continuous flow rather than separate pages.
+
+> **Status (23 Sep 2026):** built and tested against the local emulators;
+> reaches production with the next release (web app and APK). No
+> database, security-rule or Cloud Function changes.
+
+### What changed — suggested wording
+
+> **App icon.** A cream "P" on a Clay tile, on both iOS and Android
+> home screens.
+>
+> **Launch splash.** The Clay tile appears on a cream background, shrinks
+> to the left as the "plainco" wordmark slides out beside it, and the
+> Clay dot drops onto the "i". For a signed-out user the logo then
+> glides up to become the Landing screen's header; for a signed-in user
+> the splash fades straight into Home.
+>
+> **Landing.** Under the logo: "Ukay-Ukay · Ready-to-Wear", the headline
+> "Pre-loved finds. Brand-new styles. One app.", two category cards
+> (Ukay-Ukay and Ready-to-Wear), **Get Started**, **Log In**, and a link
+> to the Staff Portal. The logo stays in place when moving to Sign Up,
+> Log In or Forgot Password; only the content below it changes.
+>
+> **Sign Up** checks each field as the user leaves it and shows the
+> result under the field. **Create Account** stays disabled until every
+> field is valid and the Privacy Policy is agreed to. On success the
+> button shows "Account created" and the user is taken to Home.
+>
+> **Log In** reports problems in a notice above the form rather than a
+> pop-up: incorrect email or password, a deactivated account, or a staff
+> account (with a link to the Staff Portal).
+>
+> **Forgot Password** carries over the email typed on Log In, sends a
+> reset link, and confirms with "Check your email". The confirmation is
+> the same whether or not an account exists for that email.
+>
+> **Privacy Policy** opens as a sheet from Sign Up and from Profile, with
+> jump-to-section chips and a reading-progress bar. From Sign Up it has
+> an **I Agree** button that ticks the consent box.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-O1 | On launch, the app plays the logo animation, then shows Landing to a signed-out user or Home to a signed-in one. |
+| FR-O2 | Sign Up requires a full name (at least 2 characters), a valid email address, a password of **at least 8 characters**, a matching confirmation, and agreement to the Privacy Policy. Each field shows its own error or confirmation. |
+| FR-O3 | If the email is already registered, Sign Up says so on the email field ("An account with this email already exists. Try logging in."). |
+| FR-O4 | Log In shows, above the form: "Incorrect email or password" (and clears the password), "This account has been deactivated", or, for a Store Manager or Platform Admin account, that staff sign in through the Staff Portal, with a link to it. In each case the user is left signed out. |
+| FR-O5 | Forgot Password sends a reset link and shows the same confirmation whether or not the email is registered. The link can be resent after 60 seconds. |
+| FR-O6 | The Privacy Policy can be read before agreeing. **I Agree** ticks the consent box; closing it does not. The policy can be re-read from Profile at any time. |
+| FR-O7 | Log In and Sign Up link to each other, and the back arrow on either returns to Landing. |
+
+**Changed requirement — minimum password length is now 8 characters**
+(was 6). This applies to new accounts only; existing accounts still log
+in with their current passwords.
+
+### Use-case updates
+
+- **Register — alternate flow "Email already in use":** the error now
+  appears on the email field and the form stays filled in, instead of a
+  pop-up.
+- **Log In — alternate flows "Invalid credentials", "Deactivated account"
+  and "Staff account":** the message now appears in a notice above the
+  form. The staff case offers a link to the Staff Portal.
+- **New use case — Reset Password** (fills the gap listed in section 14):
+  the user taps "Forgot password?" on Log In, enters their email and taps
+  Send Reset Link. *Postcondition:* a reset email is sent if an account
+  exists; the confirmation screen is identical either way, so the screen
+  cannot be used to discover which emails are registered.
+
+### The Privacy Policy text
+
+The in-app policy follows the approved preview, with four corrections
+made after checking each statement against the app:
+
+1. **Payments:** the preview had a placeholder. The policy states that
+   payments in this version are simulated: the user can choose GCash,
+   Maya, Card or Cash on Delivery, no money is charged, and no card or
+   e-wallet details are collected or stored.
+2. **Contact:** the preview had a "[support email]" placeholder. The
+   policy points to the Contact Support form in the Help Center, which
+   is the channel the app actually provides.
+3. **Added:** the optional profile photo, photos sent in order chat, the
+   order-confirmation email, and Cloud Storage (where photos are kept).
+4. **Review names:** the policy states that reviews show the author's
+   first name and last initial (e.g. "Juan D.") and profile photo, not
+   the full name, matching section 9.
+
+Full text, for an appendix:
+
+> **Privacy Policy** — Last updated: September 2026
+>
+> PlainCo connects you with local Ukay-Ukay and Ready-to-Wear stores.
+> This policy explains what personal information we collect, why we need
+> it, and the rights you have under the Data Privacy Act of 2012
+> (Republic Act No. 10173).
+>
+> **1. Information we collect**
+> - *Account details:* your name, email address, and password (passwords
+>   are handled by Firebase Authentication and are never visible to
+>   PlainCo or store staff).
+> - *Profile photo (optional):* a picture you choose to add. It appears
+>   on your profile and next to your reviews.
+> - *Delivery details:* recipient name, phone number, street address,
+>   city, province, and ZIP code.
+> - *Location (optional):* only when you tap "Use Current Location," to
+>   fill in your address. We do not track your location in the
+>   background.
+> - *Shopping activity:* your cart, favorites, orders, reviews, and the
+>   messages and photos you send to a store about an order.
+>
+> **2. How we use your information**
+> - To create and secure your account.
+> - To process your orders and deliver them to you.
+> - To email you a confirmation when you place an order.
+> - To show your order status and let you message the store about an
+>   order.
+> - To display your reviews on products you have purchased.
+>
+> We do not sell your personal information or use it for advertising.
+>
+> **3. Who can see your information**
+> When you place an order, the store you ordered from sees your name,
+> delivery address, phone number, order details, and your messages about
+> that order, so they can fulfil it. Stores cannot see your orders from
+> other stores. PlainCo platform administrators can access account
+> records to manage users and resolve issues. Your reviews are shown to
+> other PlainCo shoppers with your first name and last initial (for
+> example, "Juan D.") and your profile photo. Your full name is not
+> shown.
+>
+> **4. Payments**
+> Payments in this version are simulated. You can choose GCash, Maya,
+> Card, or Cash on Delivery, but no money is charged in the app, and
+> PlainCo does not collect or store card or e-wallet details.
+>
+> **5. How your data is stored and protected**
+> Your data is stored on Google Firebase (Authentication, Cloud
+> Firestore, and Cloud Storage for photos). Data is encrypted in transit,
+> and access is limited by security rules so that each user and store
+> can only reach the records they are allowed to see. Firebase servers
+> may be located outside the Philippines.
+>
+> **6. How long we keep it**
+> We keep your information while your account is active. If you
+> deactivate your account, you can no longer sign in, but your past
+> order records are kept for transaction history.
+>
+> **7. Your rights**
+> Under the Data Privacy Act, you have the right to: be informed about
+> how your data is processed; access the personal data we hold about
+> you; correct inaccurate information; object to processing, or request
+> that your data be blocked or erased, subject to legal and
+> transaction-record requirements; obtain a copy of your data in a
+> portable format; and file a complaint with the National Privacy
+> Commission.
+>
+> **8. Contact us**
+> For privacy questions or requests, send us a message through the
+> Contact Support form in the Help Center (tap the ? at the top of your
+> Profile). We will respond within a reasonable time.
+>
+> **9. Changes to this policy**
+> If we make significant changes, we will update the date above and let
+> you know in the app.
+
+### Screens — module list (section 7)
+
+No new screens. **Landing, Sign Up, Log In and Forgot Password** are
+redesigned; the **Privacy Policy** changes from a pop-up to a sheet.
+
+### Limitations
+
+- The Staff Portal login keeps its previous design.
+- The animated splash and landing play in the web app and in Expo Go;
+  the still splash image and the new home-screen icon appear only in an
+  installed build (the APK).
+- The resend cooldown is 60 seconds in the app; Firebase applies its own
+  limit on top, and past it the screen says "Too many requests".
+
+### Verification
+
+Each screen was compared frame by frame with its approved preview in a
+browser, then run against the local emulators with test accounts:
+- Sign Up: all field errors; duplicate email; account creation reaching
+  Home; the policy's I Agree ticking the box.
+- Log In: wrong password; deactivated account; Store Manager account and
+  its Staff Portal link; successful login reaching Home; switching to
+  Sign Up and back; back arrow to Landing.
+- Forgot Password: carried-over email; invalid email; an unregistered
+  email receiving the same confirmation and countdown; Back to Log In.
+
+---
+
+## 14. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
@@ -941,7 +1138,7 @@ documentation gaps:
 
 **Category B — the app does it, the SRS doesn't mention it**
 - Password reset by email (a full flow exists; the SRS documents only
-  registration and login/logout).
+  registration and login/logout). Section 13 now gives a use case for it.
 - A Store Manager can set an order status of "Cancelled", which restores
   the stock checkout decremented, and is permitted only from Pending or
   Processing. See section 4a — the SRS documents neither the restoration
