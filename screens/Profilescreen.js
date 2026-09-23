@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Platform,
+  AppState,
 } from 'react-native';
 import { showAppAlert } from '../utils/appAlert';
 import Animated, {
@@ -164,21 +165,58 @@ export default function ProfileScreen({ navigation }) {
     fetchUserData();
   }, []);
 
-  // emailVerified on the cached user only changes after reload(), and the
-  // customer verifies in their mail app, outside PlainCo — so it is
-  // re-read each time they come back to this screen.
+  // emailVerified on the cached user only changes after reload(), and
+  // Firebase does not tell the app when the link is clicked — so the app
+  // asks. The customer verifies in their mail app, outside PlainCo, and
+  // comes back by switching apps, which is not navigation: the 'focus'
+  // event alone never fired for it, and the profile kept saying "Verify
+  // now" until they signed out and in. So it asks:
+  //   - when this screen gains focus (navigating back to it);
+  //   - when PlainCo returns to the foreground (back from Gmail);
+  //   - every few seconds for a while after a link is sent, for a link
+  //     opened on another device, where PlainCo never left the screen.
+  const [verificationSentAt, setVerificationSentAt] = useState(null);
+  const refreshVerification = useCallback(() => {
+    const user = auth.currentUser;
+    if (!user || user.emailVerified) return;
+    user
+      .reload()
+      .then(() => {
+        const verified = Boolean(auth.currentUser?.emailVerified);
+        setEmailVerified(verified);
+        if (verified) {
+          setVerificationSentAt(null);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+      })
+      .catch((error) => console.error('Could not refresh verification status:', error?.code));
+  }, []);
+
   useEffect(() => {
-    const refresh = () => {
-      const user = auth.currentUser;
-      if (!user || user.emailVerified) return;
-      user
-        .reload()
-        .then(() => setEmailVerified(Boolean(auth.currentUser?.emailVerified)))
-        .catch((error) => console.error('Could not refresh verification status:', error?.code));
+    refreshVerification();
+    const unsubscribeFocus = navigation.addListener('focus', refreshVerification);
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshVerification();
+    });
+    return () => {
+      unsubscribeFocus();
+      appStateSub.remove();
     };
-    refresh();
-    return navigation.addListener('focus', refresh);
-  }, [navigation]);
+  }, [navigation, refreshVerification]);
+
+  useEffect(() => {
+    if (!verificationSentAt || emailVerified) return undefined;
+    const POLL_MS = 4000;
+    const POLL_FOR_MS = 3 * 60 * 1000;
+    const timer = setInterval(() => {
+      if (Date.now() - verificationSentAt > POLL_FOR_MS) {
+        clearInterval(timer);
+        return;
+      }
+      refreshVerification();
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [verificationSentAt, emailVerified, refreshVerification]);
 
   const handleSendVerification = async () => {
     if (!auth.currentUser || sendingVerification) return;
@@ -186,6 +224,7 @@ export default function ProfileScreen({ navigation }) {
     setSendingVerification(true);
     try {
       await sendEmailVerification(auth.currentUser);
+      setVerificationSentAt(Date.now());
       showAppAlert(
         'Check your email',
         `We sent a verification link to ${userData.email}. Open it, then come back here.`
