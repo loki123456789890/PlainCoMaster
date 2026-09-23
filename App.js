@@ -1,7 +1,8 @@
 // App.js - MAIN FILE (UPDATED)
 
-import React from 'react';
+import React, { useState } from 'react';
 import { LogBox } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -12,6 +13,7 @@ import { FavoritesProvider } from './context/FavoritesContext';
 import { CartProvider } from './context/CartContext';
 import withRoleGuard from './components/withRoleGuard';
 import AppAlertHost from './components/ui/AppAlertHost';
+import AnimatedSplash from './components/AnimatedSplash';
 import { navigationRef } from './navigationRef';
 
 // Import all screens
@@ -86,7 +88,12 @@ const GuardedAdminStoreProfileScreen = withRoleGuard(AdminStoreProfileScreen, 's
 // data — see AdminActivityScreen's VIEWS map.
 const GuardedAdminActivityScreen = withRoleGuard(AdminActivityScreen, ['seller', 'platformAdmin']);
 
+// The OS splash stays up until AnimatedSplash has drawn its first frame
+// (the same picture), then hands over — see components/AnimatedSplash.js.
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
 export default function App() {
+  const [showSplash, setShowSplash] = useState(true);
   return (
     <SafeAreaProvider>
       <AdminProvider>
@@ -173,6 +180,7 @@ export default function App() {
                   </Stack.Navigator>
                 </NavigationContainer>
                 <AppAlertHost />
+                {showSplash ? <AnimatedSplash onFinish={() => setShowSplash(false)} /> : null}
               </CartProvider>
             </FavoritesProvider>
           </StoreProvider>
