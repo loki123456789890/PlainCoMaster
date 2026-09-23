@@ -113,7 +113,13 @@ export default function App() {
                     }}
                   >
                     {/* Landing Screen */}
-                    <Stack.Screen name="Landing" component={LandingScreen} />
+                    {/* Landing and Sign Up share a header lockup. Between the two there
+                        is no slide: each fades its own copy while the lockup stays put. */}
+                    <Stack.Screen
+                      name="Landing"
+                      component={LandingScreen}
+                      options={({ route }) => (route.params?.returning ? { animation: 'none' } : {})}
+                    />
 
                     {/* iPhone 16 Pro Max - 1 */}
                     <Stack.Screen name="Home" component={HomeScreen} />
@@ -122,7 +128,11 @@ export default function App() {
                     <Stack.Screen name="Login" component={LoginScreen} />
 
                     {/* iPhone 16 Pro Max - 6 */}
-                    <Stack.Screen name="Signup" component={SignupScreen} />
+                    <Stack.Screen
+                      name="Signup"
+                      component={SignupScreen}
+                      options={({ route }) => (route.params?.via === 'landing' ? { animation: 'none' } : {})}
+                    />
 
                     {/* New Forgot Password Screen */}
                     <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />

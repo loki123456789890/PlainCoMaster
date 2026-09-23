@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -6,27 +6,32 @@ import {
   TextInput,
   Pressable,
   ScrollView,
-  Platform,
   KeyboardAvoidingView,
+  StatusBar,
+  Platform,
+  BackHandler,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import Svg, { Path } from 'react-native-svg';
 import { showAppAlert } from '../utils/appAlert';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedProps,
   withTiming,
+  withDelay,
   withSequence,
   useReducedMotion,
   Easing,
   FadeIn,
-  FadeInDown,
   FadeOut,
 } from 'react-native-reanimated';
 
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
-import AnimatedPressable from '../components/ui/AnimatedPressable';
+import { StaticLockup, headerCenterY } from '../components/BrandLockup';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
 // --- FIREBASE IMPORTS ---
@@ -34,17 +39,80 @@ import { auth, db } from '../firebaseConfig';
 import { createUserWithEmailAndPassword, updateProfile, deleteUser } from 'firebase/auth';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { Colors, Spacing, Radius } from '../constants/theme';
-import Input from '../components/ui/Input';
+import { Colors } from '../constants/theme';
 import Button from '../components/ui/Button';
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AnimatedPath = Animated.createAnimatedComponent(Path);
 
-// Password show/hide control — a proper 44pt-plus touch target (the icon
-// itself is only 20px), a satisfying scale pulse on tap, and an icon
-// crossfade instead of an instant swap so the state change reads as
-// deliberate rather than a flicker. Identical to Loginscreen.js's version
-// so both password fields in the auth flow behave the same way.
+const PASSWORD_MIN = 8;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const FIELDS = ['name', 'email', 'password', 'confirmPassword'];
+
+// The approved sign-up preview's rules and wording. Each returns the
+// problem, or '' when the value is fine.
+const RULES = {
+  name: (v) => (v.trim().length < 2 ? 'Please enter your full name.' : ''),
+  email: (v) => (!EMAIL_PATTERN.test(v.trim()) ? 'Enter a valid email address.' : ''),
+  password: (v) => (v.length < PASSWORD_MIN ? `Use at least ${PASSWORD_MIN} characters.` : ''),
+  confirmPassword: (v, form) =>
+    !v ? 'Please confirm your password.' : v !== form.password ? "Passwords don't match." : '',
+};
+const OK_MESSAGE = {
+  name: '',
+  email: '',
+  password: 'Strong enough to go.',
+  confirmPassword: 'Passwords match.',
+};
+
+// When each piece arrives, in ms after the screen opens — the preview's
+// stagger, which starts as Landing's copy finishes fading away.
+const T = {
+  title: 120,
+  sub: 220,
+  name: 280,
+  email: 340,
+  password: 400,
+  confirmPassword: 460,
+  agree: 520,
+  create: 580,
+  foot: 660,
+};
+const TITLE_LINE_HEIGHT = 31;
+const SUCCESS_HOLD_MS = 1400;
+
+// Fades up 12 pt into place.
+function FadeUp({ delay, skip, style, children }) {
+  const progress = useSharedValue(skip ? 1 : 0);
+  useEffect(() => {
+    if (skip) return;
+    progress.value = withDelay(delay, withTiming(1, { duration: 560, easing: EASE_OUT_QUINT }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const animated = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [{ translateY: (1 - progress.value) * 12 }],
+  }));
+  return <Animated.View style={[style, animated]}>{children}</Animated.View>;
+}
+
+// The title rises out of its own clip, like Landing's headline.
+function RiseTitle({ delay, skip, children }) {
+  const progress = useSharedValue(skip ? 1 : 0);
+  useEffect(() => {
+    if (skip) return;
+    progress.value = withDelay(delay, withTiming(1, { duration: 650, easing: EASE_OUT_QUINT }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const animated = useAnimatedStyle(() => ({
+    transform: [{ translateY: (1 - progress.value) * TITLE_LINE_HEIGHT * 1.05 }],
+  }));
+  return (
+    <View style={styles.titleClip} accessible accessibilityRole="header">
+      <Animated.Text style={[styles.title, animated]}>{children}</Animated.Text>
+    </View>
+  );
+}
+
+// Password show/hide control — a proper touch target around a 20 px icon,
+// a scale pulse on tap, and an icon crossfade instead of an instant swap.
 function PasswordToggle({ visible, onToggle, reduceMotion, accessibilityLabel }) {
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -63,7 +131,8 @@ function PasswordToggle({ visible, onToggle, reduceMotion, accessibilityLabel })
   return (
     <Pressable
       onPress={handlePress}
-      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+      style={styles.eye}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityHint="Toggles whether your password is visible"
@@ -81,177 +150,254 @@ function PasswordToggle({ visible, onToggle, reduceMotion, accessibilityLabel })
   );
 }
 
-// Privacy-policy consent checkbox — same tap-pulse vocabulary as
-// PasswordToggle above so every interactive control in the form feels like
-// one system.
-function ConsentCheckbox({ checked, onToggle, reduceMotion }) {
-  const scale = useSharedValue(1);
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+// One form field: label, input, a Moss tick once the value is good, and a
+// line under it that says what's wrong (or, for the passwords, that it's
+// fine). The label and border turn Clay while typing, red on a problem.
+function Field({
+  label,
+  status,
+  message,
+  inputRef,
+  shakeX,
+  secure,
+  reduceMotion,
+  toggleLabel,
+  onBlur,
+  ...inputProps
+}) {
+  const [focused, setFocused] = useState(false);
+  const [revealed, setRevealed] = useState(false);
 
-  const handlePress = () => {
-    Haptics.selectionAsync();
-    if (!reduceMotion) {
-      scale.value = withSequence(
-        withTiming(0.8, { duration: 80, easing: EASE_OUT_QUINT }),
-        withTiming(1, { duration: 140, easing: EASE_OUT_QUART })
-      );
-    }
-    onToggle();
-  };
+  const good = status === 'good';
+  const bad = status === 'bad';
+
+  const tick = useSharedValue(0);
+  useEffect(() => {
+    tick.value = reduceMotion ? (good ? 1 : 0) : withTiming(good ? 1 : 0, { duration: 300, easing: EASE_OUT_QUINT });
+  }, [good]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tickStyle = useAnimatedStyle(() => ({
+    opacity: tick.value,
+    transform: [{ scale: 0.4 + tick.value * 0.6 }],
+  }));
+  const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shakeX.value }] }));
+
+  const labelColor = bad ? Colors.light.danger : focused ? Colors.light.tint : Colors.light.text;
+  const borderColor = bad ? Colors.light.danger : focused ? Colors.light.tint : Colors.light.border;
+  const messageColor = bad ? Colors.light.danger : good ? Colors.light.success : Colors.light.icon;
 
   return (
-    <Pressable
-      onPress={handlePress}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked }}
-      accessibilityLabel="Agree to the Privacy Policy"
-    >
-      <Animated.View style={animatedStyle}>
-        <Ionicons
-          name={checked ? 'checkbox' : 'square-outline'}
-          size={22}
-          color={checked ? Colors.light.tint : Colors.light.icon}
+    <View style={styles.field}>
+      <Text style={[styles.label, { color: labelColor }]}>{label}</Text>
+      <Animated.View style={[styles.box, shakeStyle]}>
+        {focused || bad ? <View style={[styles.ring, bad ? styles.ringBad : styles.ringFocus]} /> : null}
+        <TextInput
+          {...inputProps}
+          ref={inputRef}
+          style={[styles.input, { borderColor }, secure && styles.inputSecure]}
+          placeholderTextColor="#B3AAA0"
+          secureTextEntry={secure && !revealed}
+          onFocus={() => setFocused(true)}
+          onBlur={(e) => {
+            setFocused(false);
+            onBlur?.(e);
+          }}
+          accessibilityLabel={label}
         />
+        <Animated.View style={[styles.tick, secure && styles.tickSecure, tickStyle]} pointerEvents="none">
+          <Ionicons name="checkmark" size={13} color="#fff" />
+        </Animated.View>
+        {secure ? (
+          <PasswordToggle
+            visible={revealed}
+            onToggle={() => setRevealed((v) => !v)}
+            reduceMotion={reduceMotion}
+            accessibilityLabel={`${revealed ? 'Hide' : 'Show'} ${toggleLabel}`}
+          />
+        ) : null}
       </Animated.View>
-    </Pressable>
+      <Text style={[styles.message, { color: messageColor }]} accessibilityLiveRegion="polite">
+        {message}
+      </Text>
+    </View>
+  );
+}
+
+// The Privacy Policy consent box: fills Clay and draws its check.
+function AgreeRow({ checked, onToggle, onOpenPolicy, shakeX, reduceMotion }) {
+  const draw = useSharedValue(checked ? 0 : 20);
+  useEffect(() => {
+    const to = checked ? 0 : 20;
+    draw.value = reduceMotion ? to : withDelay(50, withTiming(to, { duration: 300, easing: EASE_OUT_QUINT }));
+  }, [checked]); // eslint-disable-line react-hooks/exhaustive-deps
+  const drawProps = useAnimatedProps(() => ({ strokeDashoffset: draw.value }));
+  const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shakeX.value }] }));
+
+  return (
+    <Animated.View style={shakeStyle}>
+      <Pressable
+        onPress={onToggle}
+        style={styles.agree}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked }}
+        accessibilityLabel="I agree to PlainCo's Privacy Policy"
+      >
+        <View style={[styles.checkbox, checked && styles.checkboxOn]}>
+          <Svg width={13} height={13} viewBox="0 0 14 14">
+            <AnimatedPath
+              d="M3 7.3l2.6 2.6L11 4.4"
+              fill="none"
+              stroke="#fff"
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeDasharray={[20, 20]}
+              animatedProps={drawProps}
+            />
+          </Svg>
+        </View>
+        <Text style={styles.agreeText}>
+          I agree to PlainCo&apos;s{' '}
+          <Text style={styles.agreeLink} onPress={onOpenPolicy} accessibilityRole="link">
+            Privacy Policy
+          </Text>
+          .
+        </Text>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+// "Welcome to PlainCo!" — slides up from the bottom once the account exists.
+function SuccessToast({ visible, bottom, reduceMotion }) {
+  const progress = useSharedValue(0);
+  useEffect(() => {
+    if (!visible) return;
+    progress.value = reduceMotion ? 1 : withTiming(1, { duration: 450, easing: EASE_OUT_QUINT });
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  const animated = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [{ translateY: (1 - progress.value) * 16 }],
+  }));
+  return (
+    <Animated.View style={[styles.toast, { bottom }, animated]} pointerEvents="none" accessibilityLiveRegion="polite">
+      <View style={styles.toastIcon}>
+        <Ionicons name="checkmark" size={13} color="#fff" />
+      </View>
+      <Text style={styles.toastText}>{visible ? 'Welcome to PlainCo! Taking you to Home…' : ''}</Text>
+    </Animated.View>
   );
 }
 
 export default function SignupScreen({ navigation }) {
-  const [form, setForm] = useState({
-    name: '',
-    email: '',
-    password: '',
-    confirmPassword: ''
-  });
-
-  const [loading, setLoading] = useState(false);
-  const [agreedToPrivacyPolicy, setAgreedToPrivacyPolicy] = useState(false);
-  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [errors, setErrors] = useState({ name: '', email: '', password: '', confirmPassword: '', consent: '' });
-  const { isConnected } = useNetworkStatus();
+  const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();
+  const { isConnected } = useNetworkStatus();
+  const [size, setSize] = useState(null);
+
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
+  // A field shows its verdict only once it has been "touched" — left with
+  // something in it, or submitted — so nobody is told off mid-word.
+  const [touched, setTouched] = useState({});
+  const [serverError, setServerError] = useState({});
+  const [agreed, setAgreed] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
 
   const emailInputRef = useRef(null);
   const passwordInputRef = useRef(null);
   const confirmPasswordInputRef = useRef(null);
+  const successTimer = useRef(null);
+  useEffect(() => () => clearTimeout(successTimer.current), []);
 
-  // Shake targets, one per field — same shake shape Loginscreen.js and
-  // Checkoutscreen.js use for invalid or missing selections, applied here
-  // to every field with a validation error on submit.
-  const nameShakeX = useSharedValue(0);
-  const emailShakeX = useSharedValue(0);
-  const passwordShakeX = useSharedValue(0);
-  const confirmShakeX = useSharedValue(0);
-  const consentShakeX = useSharedValue(0);
-  const nameShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: nameShakeX.value }] }));
-  const emailShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: emailShakeX.value }] }));
-  const passwordShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: passwordShakeX.value }] }));
-  const confirmShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: confirmShakeX.value }] }));
-  const consentShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: consentShakeX.value }] }));
-
+  const shake = {
+    name: useSharedValue(0),
+    email: useSharedValue(0),
+    password: useSharedValue(0),
+    confirmPassword: useSharedValue(0),
+    agree: useSharedValue(0),
+  };
   const triggerShake = (sharedValue) => {
     if (reduceMotion) return;
     sharedValue.value = withSequence(
-      withTiming(-6, { duration: 45, easing: Easing.linear }),
-      withTiming(6, { duration: 45, easing: Easing.linear }),
-      withTiming(-4, { duration: 45, easing: Easing.linear }),
-      withTiming(4, { duration: 45, easing: Easing.linear }),
-      withTiming(0, { duration: 45, easing: Easing.linear })
+      withTiming(-6, { duration: 60, easing: Easing.linear }),
+      withTiming(5, { duration: 70, easing: Easing.linear }),
+      withTiming(-3, { duration: 70, easing: Easing.linear }),
+      withTiming(2, { duration: 70, easing: Easing.linear }),
+      withTiming(0, { duration: 70, easing: Easing.linear })
     );
   };
 
-  const handleBack = () => {
+  // The back arrow slides in beside the lockup.
+  const back = useSharedValue(reduceMotion ? 1 : 0);
+  useEffect(() => {
+    if (!reduceMotion) back.value = withTiming(1, { duration: 400, easing: EASE_OUT_QUINT });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const backStyle = useAnimatedStyle(() => ({
+    opacity: back.value,
+    transform: [{ translateX: (1 - back.value) * 8 }],
+  }));
+
+  const errorFor = (id) => serverError[id] || RULES[id](form[id], form);
+  const statusFor = (id) => (touched[id] || serverError[id] ? (errorFor(id) ? 'bad' : 'good') : null);
+  const messageFor = (id) => {
+    const status = statusFor(id);
+    if (!status) return '';
+    return status === 'bad' ? errorFor(id) : OK_MESSAGE[id];
+  };
+  const allValid = FIELDS.every((id) => !errorFor(id)) && agreed;
+
+  const handleBack = useCallback(() => {
     if (navigation.canGoBack()) {
       navigation.goBack();
     } else {
-      // Reached here via navigation.replace('Signup') from LandingScreen,
-      // which swaps the stack entry instead of pushing one — so there's no
-      // history to go back to. Landing is the natural pre-auth fallback,
-      // same as Loginscreen.js's handleBack.
-      navigation.navigate('Landing');
+      // Opened from Landing with replace(), so there is nothing to go back
+      // to. Landing comes back as the preview does: its copy fades in under
+      // the lockup, no replay.
+      navigation.replace('Landing', { returning: true });
     }
+    return true;
+  }, [navigation]);
+
+  // Android's back button follows the arrow, instead of closing the app
+  // when Sign Up is the only screen in the stack.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', handleBack);
+      return () => sub.remove();
+    }, [handleBack])
+  );
+
+  const setField = (id) => (text) => {
+    setForm((prev) => ({ ...prev, [id]: text }));
+    // The confirmation starts judging itself once it's as long as the
+    // password — before that, "don't match" is just "not finished".
+    if (id === 'confirmPassword' && text.length > 0 && text.length >= form.password.length) {
+      setTouched((t) => (t.confirmPassword ? t : { ...t, confirmPassword: true }));
+    }
+    if (serverError[id]) setServerError((prev) => ({ ...prev, [id]: '' }));
+  };
+  const touchOnBlur = (id) => () => {
+    if (form[id]) setTouched((t) => (t[id] ? t : { ...t, [id]: true }));
   };
 
-  const handleNameChange = (text) => {
-    setForm((prev) => ({ ...prev, name: text }));
-    if (errors.name) setErrors((prev) => ({ ...prev, name: '' }));
-  };
-
-  const handleEmailChange = (text) => {
-    setForm((prev) => ({ ...prev, email: text }));
-    if (errors.email) setErrors((prev) => ({ ...prev, email: '' }));
-  };
-
-  const handlePasswordChange = (text) => {
-    setForm((prev) => ({ ...prev, password: text }));
-    if (errors.password) setErrors((prev) => ({ ...prev, password: '' }));
-  };
-
-  const handleConfirmPasswordChange = (text) => {
-    setForm((prev) => ({ ...prev, confirmPassword: text }));
-    if (errors.confirmPassword) setErrors((prev) => ({ ...prev, confirmPassword: '' }));
-  };
-
-  const handleConsentToggle = () => {
-    setAgreedToPrivacyPolicy((prev) => !prev);
-    if (errors.consent) setErrors((prev) => ({ ...prev, consent: '' }));
-  };
-
-  // Client-side check before ever touching the network — instant feedback
-  // for the most common slips (empty fields, short password, mismatched
-  // confirmation, missing consent), no modal required since every error
-  // renders right under its field. Mirrors Loginscreen.js's validate().
-  const validate = () => {
-    const trimmedName = form.name.trim();
-    const trimmedEmail = form.email.trim();
-    const nextErrors = { name: '', email: '', password: '', confirmPassword: '', consent: '' };
-
-    if (!trimmedName) {
-      nextErrors.name = 'Enter your name.';
-    }
-
-    if (!trimmedEmail) {
-      nextErrors.email = 'Enter your email address.';
-    } else if (!EMAIL_PATTERN.test(trimmedEmail)) {
-      nextErrors.email = 'Enter a valid email address.';
-    }
-
-    if (!form.password) {
-      nextErrors.password = 'Enter a password.';
-    } else if (form.password.length < 6) {
-      nextErrors.password = 'Password should be at least 6 characters.';
-    }
-
-    if (!form.confirmPassword) {
-      nextErrors.confirmPassword = 'Confirm your password.';
-    } else if (form.confirmPassword !== form.password) {
-      nextErrors.confirmPassword = 'Passwords do not match.';
-    }
-
-    if (!agreedToPrivacyPolicy) {
-      nextErrors.consent = 'Please agree to the Privacy Policy to continue.';
-    }
-
-    setErrors(nextErrors);
-
-    const hasErrors = Object.values(nextErrors).some(Boolean);
-    if (hasErrors) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      if (nextErrors.name) triggerShake(nameShakeX);
-      if (nextErrors.email) triggerShake(emailShakeX);
-      if (nextErrors.password) triggerShake(passwordShakeX);
-      if (nextErrors.confirmPassword) triggerShake(confirmShakeX);
-      if (nextErrors.consent) triggerShake(consentShakeX);
-    }
-    return !hasErrors;
+  const handleAgree = () => {
+    Haptics.selectionAsync();
+    setAgreed((v) => !v);
   };
 
   const handleSignup = async () => {
-    if (!validate()) return;
+    if (loading || done) return;
+
+    const bad = FIELDS.filter((id) => errorFor(id));
+    if (bad.length || !agreed) {
+      setTouched({ name: true, email: true, password: true, confirmPassword: true });
+      bad.forEach((id) => triggerShake(shake[id]));
+      if (!agreed) triggerShake(shake.agree);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+    if (!isConnected) return;
 
     const trimmedName = form.name.trim();
     const trimmedEmail = form.email.trim();
@@ -261,26 +407,34 @@ export default function SignupScreen({ navigation }) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     // Phase 1: create the Auth account. Nothing exists yet if this fails,
-    // so a failure here needs no cleanup — just report it, same as before.
+    // so a failure here needs no cleanup — just report it. Problems with a
+    // field are shown on that field, like every other check on this form.
     let user = null;
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
       user = userCredential.user;
     } catch (error) {
       setLoading(false);
-      let errorMessage = "Something went wrong. Please try again.";
-
-      if (error.code === 'auth/network-request-failed') {
-        errorMessage = "No internet connection. Please check your connection and try again.";
-      } else if (error.code === 'auth/email-already-in-use') {
-        errorMessage = "That email address is already in use!";
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = "That email address is invalid!";
-      }
-
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showAppAlert("Signup Failed", errorMessage);
       console.error(error.code, error.message);
+
+      const inline = {
+        'auth/email-already-in-use': ['email', 'An account with this email already exists. Try logging in.'],
+        'auth/invalid-email': ['email', 'Enter a valid email address.'],
+        'auth/weak-password': ['password', 'Choose a stronger password.'],
+      }[error.code];
+      if (inline) {
+        const [id, text] = inline;
+        setServerError((prev) => ({ ...prev, [id]: text }));
+        triggerShake(shake[id]);
+        return;
+      }
+      showAppAlert(
+        'Signup Failed',
+        error.code === 'auth/network-request-failed'
+          ? 'No internet connection. Please check your connection and try again.'
+          : 'Something went wrong. Please try again.'
+      );
       return;
     }
 
@@ -293,7 +447,7 @@ export default function SignupScreen({ navigation }) {
     try {
       await updateProfile(user, { displayName: trimmedName });
 
-      await setDoc(doc(db, "users", user.uid), {
+      await setDoc(doc(db, 'users', user.uid), {
         uid: user.uid,
         name: trimmedName,
         email: trimmedEmail,
@@ -301,9 +455,7 @@ export default function SignupScreen({ navigation }) {
         // client-supplied date is whatever the device's clock says — a
         // wrong timezone, a skewed clock, or a deliberately set one — and
         // it does not sort against the Timestamps every other collection
-        // stores. The users create rule allows the field without
-        // constraining its type, so this was accepted; it was just the
-        // one place still writing a string.
+        // stores.
         createdAt: serverTimestamp(),
         // Auditable consent record for the Philippine Data Privacy Act —
         // the checkbox above is just a UI gate, this is what actually
@@ -312,10 +464,14 @@ export default function SignupScreen({ navigation }) {
         privacyConsentTimestamp: serverTimestamp(),
       });
 
+      setLoading(false);
+      setDone(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert("Success", "Account created successfully!", [
-        { text: "OK", onPress: () => navigation.navigate('Home') }
-      ]);
+      // reset, not navigate: Sign Up must not sit behind Home where a back
+      // gesture could return a signed-in user to it.
+      successTimer.current = setTimeout(() => {
+        navigation.reset({ index: 0, routes: [{ name: 'Home' }] });
+      }, SUCCESS_HOLD_MS);
     } catch (error) {
       console.error('Error finishing signup, rolling back Auth account:', error.code, error.message);
 
@@ -336,296 +492,315 @@ export default function SignupScreen({ navigation }) {
         }
       }
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showAppAlert("Signup Failed", "Could not complete signup. Please try again.");
-    } finally {
       setLoading(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showAppAlert('Signup Failed', 'Could not complete signup. Please try again.');
     }
   };
 
+  const skip = reduceMotion;
+  const headerBottom = headerCenterY(insets.top) + 44;
+  const buttonLabel = done ? 'Account created' : !isConnected ? 'No Internet Connection' : 'Create Account';
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <AnimatedPressable
+    <View style={styles.root} onLayout={(e) => !size && setSize(e.nativeEvent.layout)}>
+      <StatusBar barStyle="dark-content" />
+
+      {/* The same lockup, on the same pixels, as Landing's header — so
+          going from one to the other, it doesn't move. */}
+      {size ? <StaticLockup width={size.width} height={size.height} topInset={insets.top} /> : null}
+
+      <Animated.View style={[styles.backWrap, { top: headerCenterY(insets.top) - 22 }, backStyle]}>
+        <Pressable
           onPress={handleBack}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={({ pressed }) => [styles.back, pressed && styles.backPressed]}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           accessibilityRole="button"
           accessibilityLabel="Go back"
         >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </AnimatedPressable>
-      </View>
+          <Ionicons name="chevron-back" size={24} color={Colors.light.text} />
+        </Pressable>
+      </Animated.View>
 
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — account creation will be unavailable until you&apos;re back online.
-          </Text>
-        </View>
-      )}
+      <KeyboardAvoidingView behavior="padding" style={[styles.flex, { marginTop: headerBottom }]}>
+        {!isConnected && (
+          <View style={styles.offlineBanner}>
+            <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
+            <Text style={styles.offlineBannerText}>
+              No internet connection — you can create your account once you&apos;re back online.
+            </Text>
+          </View>
+        )}
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scroll, { paddingBottom: Math.max(insets.bottom, 16) + 14 }]}
         >
-          <View style={styles.content}>
-            <Animated.Text
-              entering={reduceMotion ? undefined : FadeIn.duration(260).easing(EASE_OUT_QUART)}
-              style={styles.title}
-            >
-              Create Account
-            </Animated.Text>
-            <Animated.Text
-              entering={reduceMotion ? undefined : FadeIn.duration(240).delay(60).easing(EASE_OUT_QUART)}
-              style={styles.subtitle}
-            >
-              Join PlainCo and start shopping smarter
-            </Animated.Text>
+          <RiseTitle delay={T.title} skip={skip}>Create your account</RiseTitle>
+          <FadeUp delay={T.sub} skip={skip}>
+            <Text style={styles.sub}>Shop ukay and ready-to-wear from local stores.</Text>
+          </FadeUp>
 
-            {/* Form */}
-            <Animated.View
-              entering={reduceMotion ? undefined : FadeInDown.duration(280).delay(120).easing(EASE_OUT_QUART)}
-              style={styles.form}
-            >
-              <Animated.View style={nameShakeStyle}>
-                <Input
-                  label="Name"
-                  value={form.name}
-                  onChangeText={handleNameChange}
-                  placeholder="Enter your name"
-                  textContentType="name"
-                  autoComplete="name"
-                  returnKeyType="next"
-                  onSubmitEditing={() => emailInputRef.current?.focus()}
-                  error={errors.name}
-                  accessibilityLabel="Name"
-                  accessibilityHint="Enter your full name"
-                />
-              </Animated.View>
+          <FadeUp delay={T.name} skip={skip}>
+            <Field
+              label="Full name"
+              value={form.name}
+              onChangeText={setField('name')}
+              onBlur={touchOnBlur('name')}
+              status={statusFor('name')}
+              message={messageFor('name')}
+              shakeX={shake.name}
+              reduceMotion={reduceMotion}
+              placeholder="Juan Dela Cruz"
+              textContentType="name"
+              autoComplete="name"
+              autoCapitalize="words"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => emailInputRef.current?.focus()}
+            />
+          </FadeUp>
 
-              <Animated.View style={emailShakeStyle}>
-                <Input
-                  ref={emailInputRef}
-                  label="Email Address"
-                  value={form.email}
-                  onChangeText={handleEmailChange}
-                  placeholder="Enter your email"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  textContentType="username"
-                  autoComplete="email"
-                  returnKeyType="next"
-                  onSubmitEditing={() => passwordInputRef.current?.focus()}
-                  error={errors.email}
-                  accessibilityLabel="Email address"
-                  accessibilityHint="Enter the email address for your new account"
-                />
-              </Animated.View>
+          <FadeUp delay={T.email} skip={skip}>
+            <Field
+              label="Email address"
+              inputRef={emailInputRef}
+              value={form.email}
+              onChangeText={setField('email')}
+              onBlur={touchOnBlur('email')}
+              status={statusFor('email')}
+              message={messageFor('email')}
+              shakeX={shake.email}
+              reduceMotion={reduceMotion}
+              placeholder="you@email.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="username"
+              autoComplete="email"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => passwordInputRef.current?.focus()}
+            />
+          </FadeUp>
 
-              <Animated.View style={passwordShakeStyle}>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Password</Text>
-                  <View
-                    style={[
-                      styles.passwordInputContainer,
-                      errors.password && styles.passwordInputContainerError,
-                    ]}
-                  >
-                    <TextInput
-                      ref={passwordInputRef}
-                      style={styles.passwordInput}
-                      placeholder="At least 6 characters"
-                      placeholderTextColor={Colors.light.icon}
-                      value={form.password}
-                      onChangeText={handlePasswordChange}
-                      secureTextEntry={!showPassword}
-                      textContentType="newPassword"
-                      autoComplete="password-new"
-                      returnKeyType="next"
-                      onSubmitEditing={() => confirmPasswordInputRef.current?.focus()}
-                      accessibilityLabel="Password"
-                      accessibilityHint="Create a password with at least 6 characters"
-                    />
-                    <PasswordToggle
-                      visible={showPassword}
-                      onToggle={() => setShowPassword((v) => !v)}
-                      reduceMotion={reduceMotion}
-                      accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
-                    />
-                  </View>
-                  {errors.password ? <Text style={styles.errorText}>{errors.password}</Text> : null}
-                </View>
-              </Animated.View>
+          <FadeUp delay={T.password} skip={skip}>
+            <Field
+              label="Password"
+              inputRef={passwordInputRef}
+              secure
+              toggleLabel="password"
+              value={form.password}
+              onChangeText={setField('password')}
+              onBlur={touchOnBlur('password')}
+              status={statusFor('password')}
+              message={messageFor('password')}
+              shakeX={shake.password}
+              reduceMotion={reduceMotion}
+              placeholder={`At least ${PASSWORD_MIN} characters`}
+              textContentType="newPassword"
+              autoComplete="password-new"
+              autoCapitalize="none"
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => confirmPasswordInputRef.current?.focus()}
+            />
+          </FadeUp>
 
-              <Animated.View style={confirmShakeStyle}>
-                <View style={styles.inputGroup}>
-                  <Text style={styles.label}>Confirm Password</Text>
-                  <View
-                    style={[
-                      styles.passwordInputContainer,
-                      errors.confirmPassword && styles.passwordInputContainerError,
-                    ]}
-                  >
-                    <TextInput
-                      ref={confirmPasswordInputRef}
-                      style={styles.passwordInput}
-                      placeholder="Re-enter your password"
-                      placeholderTextColor={Colors.light.icon}
-                      value={form.confirmPassword}
-                      onChangeText={handleConfirmPasswordChange}
-                      secureTextEntry={!showConfirmPassword}
-                      textContentType="newPassword"
-                      autoComplete="password-new"
-                      returnKeyType="done"
-                      onSubmitEditing={handleSignup}
-                      accessibilityLabel="Confirm password"
-                      accessibilityHint="Re-enter your password to confirm it matches"
-                    />
-                    <PasswordToggle
-                      visible={showConfirmPassword}
-                      onToggle={() => setShowConfirmPassword((v) => !v)}
-                      reduceMotion={reduceMotion}
-                      accessibilityLabel={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
-                    />
-                  </View>
-                  {errors.confirmPassword ? <Text style={styles.errorText}>{errors.confirmPassword}</Text> : null}
-                </View>
-              </Animated.View>
+          <FadeUp delay={T.confirmPassword} skip={skip}>
+            <Field
+              label="Confirm password"
+              inputRef={confirmPasswordInputRef}
+              secure
+              toggleLabel="confirm password"
+              value={form.confirmPassword}
+              onChangeText={setField('confirmPassword')}
+              onBlur={touchOnBlur('confirmPassword')}
+              status={statusFor('confirmPassword')}
+              message={messageFor('confirmPassword')}
+              shakeX={shake.confirmPassword}
+              reduceMotion={reduceMotion}
+              placeholder="Re-enter your password"
+              textContentType="newPassword"
+              autoComplete="password-new"
+              autoCapitalize="none"
+              returnKeyType="done"
+              onSubmitEditing={handleSignup}
+            />
+          </FadeUp>
 
-              <Animated.View style={consentShakeStyle}>
-                <View style={styles.consentRow}>
-                  <ConsentCheckbox
-                    checked={agreedToPrivacyPolicy}
-                    onToggle={handleConsentToggle}
-                    reduceMotion={reduceMotion}
-                  />
-                  <Text style={styles.consentText}>
-                    I have read and agree to the{' '}
-                    <Text style={styles.consentLink} onPress={() => setShowPrivacyModal(true)}>
-                      Privacy Policy
-                    </Text>
-                  </Text>
-                </View>
-                {errors.consent ? <Text style={styles.errorText}>{errors.consent}</Text> : null}
-              </Animated.View>
+          <FadeUp delay={T.agree} skip={skip}>
+            <AgreeRow
+              checked={agreed}
+              onToggle={handleAgree}
+              onOpenPolicy={() => setShowPrivacyModal(true)}
+              shakeX={shake.agree}
+              reduceMotion={reduceMotion}
+            />
+          </FadeUp>
 
-              <View style={styles.signupButtonWrap}>
-                <Button
-                  variant="primary"
-                  label={!isConnected ? 'No Internet Connection' : 'Sign Up'}
-                  onPress={handleSignup}
-                  disabled={loading || !isConnected}
-                  loading={loading}
-                />
-              </View>
+          {/* Stays disabled until every field is good and the box is
+              ticked; turns Moss once the account exists. */}
+          <FadeUp delay={T.create} skip={skip}>
+            <Button
+              variant={done ? 'success' : 'primary'}
+              label={buttonLabel}
+              fontSize={16}
+              onPress={handleSignup}
+              disabled={!done && (!allValid || !isConnected)}
+              loading={loading}
+            />
+          </FadeUp>
 
-              <View style={styles.trustRow}>
-                <Ionicons name="shield-checkmark-outline" size={13} color={Colors.light.icon} />
-                <Text style={styles.trustText}>Your information stays private and secure</Text>
-              </View>
-
-              <AnimatedPressable
-                style={styles.loginButton}
+          <FadeUp delay={T.foot} skip={skip} style={styles.foot}>
+            <Text style={styles.footText}>
+              Already have an account?{' '}
+              <Text
+                style={styles.footLink}
+                accessibilityRole="link"
                 onPress={() => {
                   Haptics.selectionAsync();
                   navigation.navigate('Login');
                 }}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                accessibilityRole="button"
-                accessibilityLabel="Sign in instead"
-                accessibilityHint="Opens the sign in screen"
               >
-                <Text style={styles.loginText}>Already a member? Sign in</Text>
-              </AnimatedPressable>
-            </Animated.View>
-          </View>
+                Log In
+              </Text>
+            </Text>
+          </FadeUp>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <PrivacyPolicyModal
-        visible={showPrivacyModal}
-        onClose={() => setShowPrivacyModal(false)}
-      />
-    </SafeAreaView>
+      <SuccessToast visible={done} bottom={Math.max(insets.bottom, 16) + 12} reduceMotion={reduceMotion} />
+
+      <PrivacyPolicyModal visible={showPrivacyModal} onClose={() => setShowPrivacyModal(false)} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.light.background },
-  header: { paddingHorizontal: 20, paddingVertical: 16 },
-  backButton: { width: 40, height: 40, justifyContent: 'center' },
+  root: { flex: 1, backgroundColor: Colors.light.background },
+  flex: { flex: 1 },
+  scroll: { flexGrow: 1, paddingHorizontal: 24 },
+
+  backWrap: { position: 'absolute', left: 16, zIndex: 2 },
+  back: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  backPressed: { backgroundColor: 'rgba(28,27,26,0.06)' },
+
   offlineBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginHorizontal: 24,
+    marginBottom: 12,
     backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: 20,
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
+    borderRadius: 12,
   },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-  keyboardView: { flex: 1 },
-  scrollContent: { paddingBottom: Spacing.xxl },
-  content: { paddingHorizontal: 20, paddingTop: 8 },
-  title: { fontSize: 28, fontWeight: '700', color: Colors.light.text, marginBottom: 8 },
-  subtitle: { fontSize: 17, color: Colors.light.icon, marginBottom: 32 },
-  form: { marginTop: 12 },
-  inputGroup: { marginBottom: Spacing.md },
-  label: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: Spacing.xs },
-  // Mirrors Input's own field styling (Radius.md, same padding/type scale)
-  // so the two fields read as one consistent pair — only the trailing eye
-  // toggle needs this to be a hand-rolled row instead of the Input
-  // component itself. Identical to Loginscreen.js's password field.
-  passwordInputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.light.background,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.md,
-  },
-  passwordInputContainerError: {
-    borderColor: Colors.light.danger,
-  },
-  passwordInput: {
-    flex: 1,
-    paddingVertical: 12,
-    fontSize: 16,
+  offlineBannerText: { flex: 1, fontSize: 12.5, fontWeight: '600', color: Colors.light.danger },
+
+  titleClip: { overflow: 'hidden' },
+  // DESIGN.md's Display step, one size down from Landing's headline.
+  title: {
+    fontSize: 26,
+    lineHeight: TITLE_LINE_HEIGHT,
+    fontWeight: '700',
+    letterSpacing: -0.5,
     color: Colors.light.text,
   },
-  errorText: {
-    fontSize: 12,
-    color: Colors.light.danger,
-    marginTop: Spacing.xs,
+  sub: { fontSize: 13.5, lineHeight: 20, color: Colors.light.icon, marginTop: 6, marginBottom: 20 },
+
+  field: { marginBottom: 12 },
+  label: { fontSize: 12.5, fontWeight: '500', marginBottom: 6, marginLeft: 2 },
+  box: { position: 'relative' },
+  // The preview's 4 pt focus halo, drawn as a tinted shape behind the
+  // input since React Native has no box-shadow spread.
+  ring: { position: 'absolute', top: -4, left: -4, right: -4, bottom: -4, borderRadius: 18 },
+  ringFocus: { backgroundColor: 'rgba(196,98,62,0.12)' },
+  ringBad: { backgroundColor: 'rgba(196,70,62,0.08)' },
+  input: {
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    backgroundColor: '#FFFFFF',
+    paddingLeft: 15,
+    paddingRight: 44,
+    fontSize: 15,
+    color: Colors.light.text,
+    // Above the halo: on web an absolutely positioned sibling would
+    // otherwise paint over the field.
+    zIndex: 1,
+    // The Clay border is the focus indicator; the browser's own outline
+    // would cover it.
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
   },
-  signupButtonWrap: { marginTop: 8 },
-  trustRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+  inputSecure: { paddingRight: 78 },
+  tick: {
+    position: 'absolute',
+    right: 14,
+    top: 15,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: Colors.light.success,
     alignItems: 'center',
-    gap: 6,
-    marginTop: 14,
+    justifyContent: 'center',
+    zIndex: 2,
   },
-  trustText: { fontSize: 12, color: Colors.light.icon },
-  loginButton: { alignItems: 'center', marginTop: 16, paddingVertical: 12 },
-  loginText: { fontSize: 16, color: Colors.light.tint },
-  consentRow: {
+  tickSecure: { right: 44 },
+  eye: {
+    position: 'absolute',
+    right: 8,
+    top: 8,
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  message: { fontSize: 11.5, lineHeight: 15, minHeight: 15, marginTop: 6, marginLeft: 2 },
+
+  agree: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 4, marginBottom: 16 },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxOn: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  agreeText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: Colors.light.icon, paddingTop: 2 },
+  agreeLink: { color: Colors.light.text, fontWeight: '500', textDecorationLine: 'underline' },
+
+  foot: { marginTop: 'auto', paddingTop: 20, alignItems: 'center' },
+  footText: { fontSize: 13, color: Colors.light.icon },
+  footLink: { color: Colors.light.tint, fontWeight: '600' },
+
+  toast: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    marginTop: 4,
-    marginBottom: Spacing.md,
+    backgroundColor: Colors.light.text,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    zIndex: 5,
   },
-  consentText: { flex: 1, fontSize: 14, color: Colors.light.icon, lineHeight: 20 },
-  consentLink: { color: Colors.light.tint, fontWeight: '600', textDecorationLine: 'underline' },
+  toastIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: Colors.light.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toastText: { flex: 1, fontSize: 13.5, color: Colors.light.background },
 });

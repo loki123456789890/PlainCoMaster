@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, StatusBar } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -172,21 +172,36 @@ function ResolvingSession() {
   );
 }
 
-function LandingContent({ navigation }) {
+function LandingContent({ navigation, returning }) {
   const reduceMotion = useReducedMotion();
+  // Back from Sign Up: no entrance replay. The copy just fades back in
+  // under the lockup, the reverse of how it left.
+  const skipEntrance = reduceMotion || returning;
   const insets = useSafeAreaInsets();
   const [size, setSize] = useState(null);
   const [delayFor] = useState(makeDelayFor);
+
+  // Leaving for Sign Up, the copy fades up and away while the lockup stays
+  // put; Sign Up draws the same lockup on the same pixels and opens with
+  // no transition, so the header never moves — the approved preview.
+  const contentGone = useSharedValue(returning && !reduceMotion ? 1 : 0);
+  const contentStyle = useAnimatedStyle(() => ({
+    opacity: 1 - contentGone.value,
+    transform: [{ translateY: contentGone.value * -12 }],
+  }));
 
   // The header lockup. While the splash is up, its own copy is gliding
   // into this spot, so this one waits and appears in the same frame the
   // splash's disappears. Opened later, it simply fades in.
   const [lockupVisible, setLockupVisible] = useState(!splashHandoff.isActive());
-  const lockupOpacity = useSharedValue(reduceMotion || splashHandoff.isActive() ? 1 : 0);
+  const lockupOpacity = useSharedValue(skipEntrance || splashHandoff.isActive() ? 1 : 0);
   useEffect(() => {
     splashHandoff.setLandingReady(true);
     const unsubscribe = splashHandoff.onFinish(() => setLockupVisible(true));
-    if (!reduceMotion) lockupOpacity.value = withTiming(1, { duration: 250 });
+    if (!skipEntrance) lockupOpacity.value = withTiming(1, { duration: 250 });
+    if (returning && !reduceMotion) {
+      contentGone.value = withTiming(0, { duration: 320, easing: EASE_OUT_QUINT });
+    }
     return () => {
       unsubscribe();
       splashHandoff.setLandingReady(false);
@@ -194,9 +209,17 @@ function LandingContent({ navigation }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const lockupStyle = useAnimatedStyle(() => ({ opacity: lockupOpacity.value }));
 
+  const leaving = useRef(false);
   const handleGetStarted = () => {
+    if (leaving.current) return;
+    leaving.current = true;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    navigation.replace('Signup');
+    if (reduceMotion) {
+      navigation.replace('Signup', { via: 'landing' });
+      return;
+    }
+    contentGone.value = withDelay(100, withTiming(1, { duration: 220, easing: EASE_OUT_QUINT }));
+    setTimeout(() => navigation.replace('Signup', { via: 'landing' }), 320);
   };
   const handleLogIn = () => {
     Haptics.selectionAsync();
@@ -219,8 +242,10 @@ function LandingContent({ navigation }) {
         </Animated.View>
       ) : null}
 
-      <View style={[styles.content, { paddingTop: contentTop, paddingBottom: Math.max(insets.bottom, 16) + 18 }]}>
-        <FadeUp delay={delayFor(T.eyebrow)} reduceMotion={reduceMotion}>
+      <Animated.View
+        style={[styles.content, { paddingTop: contentTop, paddingBottom: Math.max(insets.bottom, 16) + 18 }, contentStyle]}
+      >
+        <FadeUp delay={delayFor(T.eyebrow)} reduceMotion={skipEntrance}>
           <Text style={styles.eyebrow}>Ukay-Ukay · Ready-to-Wear</Text>
         </FadeUp>
 
@@ -230,14 +255,14 @@ function LandingContent({ navigation }) {
           accessibilityRole="header"
           accessibilityLabel="Pre-loved finds. Brand-new styles. One app."
         >
-          <RiseLine delay={delayFor(T.line1)} reduceMotion={reduceMotion}>Pre-loved finds.</RiseLine>
-          <RiseLine delay={delayFor(T.line2)} reduceMotion={reduceMotion}>Brand-new styles.</RiseLine>
-          <RiseLine delay={delayFor(T.line3)} reduceMotion={reduceMotion} textStyle={styles.headlineAccent}>
+          <RiseLine delay={delayFor(T.line1)} reduceMotion={skipEntrance}>Pre-loved finds.</RiseLine>
+          <RiseLine delay={delayFor(T.line2)} reduceMotion={skipEntrance}>Brand-new styles.</RiseLine>
+          <RiseLine delay={delayFor(T.line3)} reduceMotion={skipEntrance} textStyle={styles.headlineAccent}>
             One app.
           </RiseLine>
         </View>
 
-        <FadeUp delay={delayFor(T.sub)} reduceMotion={reduceMotion}>
+        <FadeUp delay={delayFor(T.sub)} reduceMotion={skipEntrance}>
           <Text style={styles.sub}>
             Shop local clothing stores, from hand-picked ukay to fresh ready-to-wear.
           </Text>
@@ -249,25 +274,25 @@ function LandingContent({ navigation }) {
             title="Ukay-Ukay"
             caption="One-of-a-kind finds"
             delay={delayFor(T.ukay)}
-            reduceMotion={reduceMotion}
+            reduceMotion={skipEntrance}
           />
           <CategoryCard
             kind="rtw"
             title="Ready-to-Wear"
             caption="New styles, every size"
             delay={delayFor(T.rtw)}
-            reduceMotion={reduceMotion}
+            reduceMotion={skipEntrance}
           />
         </View>
 
         <View style={styles.ctas}>
-          <FadeUp delay={delayFor(T.primary)} reduceMotion={reduceMotion}>
+          <FadeUp delay={delayFor(T.primary)} reduceMotion={skipEntrance}>
             <Button variant="primary" label="Get Started" fontSize={16} onPress={handleGetStarted} />
           </FadeUp>
-          <FadeUp delay={delayFor(T.secondary)} reduceMotion={reduceMotion}>
+          <FadeUp delay={delayFor(T.secondary)} reduceMotion={skipEntrance}>
             <Button variant="secondary" label="Log In" fontSize={16} onPress={handleLogIn} />
           </FadeUp>
-          <FadeUp delay={delayFor(T.staff)} reduceMotion={reduceMotion}>
+          <FadeUp delay={delayFor(T.staff)} reduceMotion={skipEntrance}>
             <Pressable
               onPress={handleStaff}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -281,12 +306,12 @@ function LandingContent({ navigation }) {
             </Pressable>
           </FadeUp>
         </View>
-      </View>
+      </Animated.View>
     </View>
   );
 }
 
-export default function LandingScreen({ navigation }) {
+export default function LandingScreen({ navigation, route }) {
   const { authChecked, signedIn, accountActive, adminLoading, role } = useAdmin();
 
   // True only while the answer is genuinely unknown. Once auth has been
@@ -326,7 +351,7 @@ export default function LandingScreen({ navigation }) {
   // whole path exists to prevent.
   if (resolving || shouldSkipLanding) return <ResolvingSession />;
 
-  return <LandingContent navigation={navigation} />;
+  return <LandingContent navigation={navigation} returning={route?.params?.returning === true} />;
 }
 
 const styles = StyleSheet.create({

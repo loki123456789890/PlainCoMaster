@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Colors, Spacing, Radius, Typography } from '../../constants/theme';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'outline';
+export type ButtonVariant = 'primary' | 'secondary' | 'danger' | 'outline' | 'success';
 
 interface ButtonProps {
   label: string;
@@ -49,6 +49,10 @@ const variantStyles: Record<ButtonVariant, ViewStyle> = {
   danger: {
     backgroundColor: Colors.light.danger,
   },
+  // Moss: a finished action ("Account created"), never a call to act.
+  success: {
+    backgroundColor: Colors.light.success,
+  },
   outline: {
     backgroundColor: 'transparent',
     borderColor: Colors.light.tint,
@@ -59,6 +63,7 @@ const textColors: Record<ButtonVariant, string> = {
   primary: '#fff',
   secondary: Colors.light.text,
   danger: '#fff',
+  success: '#fff',
   outline: Colors.light.tint,
 };
 
