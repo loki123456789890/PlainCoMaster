@@ -174,15 +174,15 @@ function ResolvingSession() {
 
 function LandingContent({ navigation, returning }) {
   const reduceMotion = useReducedMotion();
-  // Back from Sign Up: no entrance replay. The copy just fades back in
+  // Back from Sign Up or Log In: no entrance replay. The copy just fades back in
   // under the lockup, the reverse of how it left.
   const skipEntrance = reduceMotion || returning;
   const insets = useSafeAreaInsets();
   const [size, setSize] = useState(null);
   const [delayFor] = useState(makeDelayFor);
 
-  // Leaving for Sign Up, the copy fades up and away while the lockup stays
-  // put; Sign Up draws the same lockup on the same pixels and opens with
+  // Leaving for Sign Up or Log In, the copy fades up and away while the
+  // lockup stays put; both draw the same lockup on the same pixels and open with
   // no transition, so the header never moves — the approved preview.
   const contentGone = useSharedValue(returning && !reduceMotion ? 1 : 0);
   const contentStyle = useAnimatedStyle(() => ({
@@ -210,20 +210,23 @@ function LandingContent({ navigation, returning }) {
   const lockupStyle = useAnimatedStyle(() => ({ opacity: lockupOpacity.value }));
 
   const leaving = useRef(false);
-  const handleGetStarted = () => {
+  const leaveFor = (route) => {
     if (leaving.current) return;
     leaving.current = true;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (reduceMotion) {
-      navigation.replace('Signup', { via: 'landing' });
+      navigation.replace(route, { via: 'landing' });
       return;
     }
     contentGone.value = withDelay(100, withTiming(1, { duration: 220, easing: EASE_OUT_QUINT }));
-    setTimeout(() => navigation.replace('Signup', { via: 'landing' }), 320);
+    setTimeout(() => navigation.replace(route, { via: 'landing' }), 320);
+  };
+  const handleGetStarted = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    leaveFor('Signup');
   };
   const handleLogIn = () => {
     Haptics.selectionAsync();
-    navigation.replace('Login');
+    leaveFor('Login');
   };
   const handleStaff = () => {
     Haptics.selectionAsync();

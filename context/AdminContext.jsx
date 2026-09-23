@@ -134,11 +134,12 @@ export const AdminProvider = ({ children }) => {
     // arrived. They are the fast path; this is the one that covers a
     // session already in progress.
     //
-    // The two can race on a fresh sign-in. That is harmless — AppAlertHost
-    // shows one alert at a time, both messages say the same thing, and
-    // both paths sign out. Resist collapsing them into one: dropping the
-    // screens' check reintroduces the flash of Home, and dropping this one
-    // reopens mid-session revocation entirely.
+    // The two used to race on a fresh sign-in, and this one usually won —
+    // bouncing to Landing before Loginscreen could show its own notice in
+    // the form. Loginscreen now holds this path for the few hundred ms of
+    // its check (holdRevocationForSignIn below). Resist collapsing them into
+    // one: dropping the screens' check reintroduces the flash of Home, and
+    // dropping this one reopens mid-session revocation entirely.
     showAppAlert(
       'Account Deactivated',
       'This account has been deactivated, so you have been signed out. Please contact support if you believe this is a mistake.',
@@ -162,6 +163,25 @@ export const AdminProvider = ({ children }) => {
   // snapshot can arrive while the updateDoc promise is still pending.
   const acknowledgeSelfDeactivation = useCallback(() => {
     revocationHandled.current = true;
+  }, []);
+
+  // Called by Loginscreen just BEFORE it signs in; returns the release.
+  //
+  // While a sign-in is being checked, Loginscreen is the one that refuses a
+  // deactivated account — it signs out and says so in the form, where the
+  // person is looking. Without the hold, this listener's first snapshot
+  // usually won the race and reset to Landing mid-check, so the notice
+  // appeared on a different screen from the one they had just used.
+  //
+  // Same one-shot flag as acknowledgeSelfDeactivation, but only for the
+  // check: Loginscreen releases it once the account is let through, so a
+  // deactivation later in the session is still revoked. A refused sign-in
+  // signs out, which clears the flag anyway.
+  const holdRevocationForSignIn = useCallback(() => {
+    revocationHandled.current = true;
+    return () => {
+      revocationHandled.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -312,6 +332,7 @@ export const AdminProvider = ({ children }) => {
       authChecked,
       signedIn,
       acknowledgeSelfDeactivation,
+      holdRevocationForSignIn,
       loginAsAdmin,
       logoutAsAdmin,
     }}>
