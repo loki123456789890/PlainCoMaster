@@ -1,127 +1,157 @@
-import React, { useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  StatusBar,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, StatusBar } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedProps,
   withTiming,
+  withDelay,
   useReducedMotion,
-  Easing,
-  FadeIn,
-  FadeInDown,
 } from 'react-native-reanimated';
+import Svg, { Path, Circle } from 'react-native-svg';
 import { Colors } from '../constants/theme';
-import AnimatedPressable from '../components/ui/AnimatedPressable';
+import Button from '../components/ui/Button';
+import { StaticLockup, headerCenterY } from '../components/BrandLockup';
+import { splashHandoff } from '../utils/splashHandoff';
 import { auth } from '../firebaseConfig';
 import { useAdmin } from '../context/AdminContext';
 import { getHomeRouteForRole } from '../constants/roles';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import { EASE_OUT_QUINT } from '../constants/motion';
 
-// The hero photo + gradient here is much darker than the light Canvas
-// background Colors.light.highlight is contrast-tuned for elsewhere in the
-// app — reusing that token on this screen is what caused the logo/icon
-// legibility issue this pass fixes. Same hue as the brand gold, just a
-// lighter, scoped shade for this dark-photo context specifically.
-const heroGold = '#E6CD7F';
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
-// Solid stand-in for the gradient's own darkest stop (rgba(120, 55, 30, 1)),
-// shown behind the photo while it's still decoding. Users on slow mobile
-// data would otherwise see the light Canvas background through the
-// gradient's translucent top edge — dark enough to keep gold/white text
-// legible immediately, and on-brand instead of a flash of the wrong color.
-const photoPlaceholder = '#78371E';
+// When each piece arrives, in ms from the start of the launch splash —
+// the approved landing preview's timeline. The copy starts as the splash's
+// lockup finishes gliding into the header. Opened later (after a logout),
+// there is no splash, and the same order plays 1650 ms sooner.
+const T = {
+  eyebrow: 1750,
+  line1: 1820,
+  line2: 1900,
+  line3: 1980,
+  sub: 2150,
+  ukay: 2280,
+  rtw: 2380,
+  primary: 2620,
+  secondary: 2700,
+  staff: 2820,
+};
+const LANDING_ONLY_SHIFT = 1650;
 
-// Reuses the app's own tinted-pill convention (DESIGN.md: badge background =
-// role color at ~20% opacity, icon/text = the same color solid) for the
-// feature icon backdrops, instead of inventing a new translucent-chip style.
-const heroGoldTint = 'rgba(230, 205, 127, 0.18)';
+// Shared by the headline style and its rise, which starts one line down.
+const HEADLINE_LINE_HEIGHT = 38;
 
-// The photo cross-fades in on load, independent of the content above it —
-// on a slow mobile connection the logo, copy, and CTAs are already visible
-// and interactive well before the remote image finishes decoding. Once
-// visible it also drifts into a slow, one-time 5% zoom (~9s, no repeat) —
-// the same restrained "Ken Burns" treatment premium travel/hospitality apps
-// use for hero photography, so the image reads as considered rather than a
-// static crop. Skipped entirely under Reduce Motion.
-function HeroPhoto({ reduceMotion }) {
-  const opacity = useSharedValue(reduceMotion ? 1 : 0);
-  const zoom = useSharedValue(1);
-  const animatedStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
-    transform: [{ scale: zoom.value }],
+// Converts a timeline entry into a delay from now, on whichever clock
+// applies. Read once, when the content first renders.
+function makeDelayFor() {
+  const elapsed = splashHandoff.isActive() ? splashHandoff.elapsed() : null;
+  if (splashHandoff.isActive()) {
+    return (t) => Math.max(0, t - (elapsed ?? 0));
+  }
+  return (t) => Math.max(0, t - LANDING_ONLY_SHIFT);
+}
+
+// Fades up into place: the preview's 14 pt rise over 600 ms.
+function FadeUp({ delay, reduceMotion, style, children }) {
+  const progress = useSharedValue(reduceMotion ? 1 : 0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    progress.value = withDelay(delay, withTiming(1, { duration: 600, easing: EASE_OUT_QUINT }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const animated = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [{ translateY: (1 - progress.value) * 14 }],
   }));
-  const handleLoad = () => {
-    if (reduceMotion) {
-      opacity.value = 1;
-      return;
-    }
-    opacity.value = withTiming(1, { duration: 220, easing: EASE_OUT_QUART });
-    zoom.value = withTiming(1.05, { duration: 9000, easing: Easing.out(Easing.ease) });
-  };
+  return <Animated.View style={[style, animated]}>{children}</Animated.View>;
+}
 
+// A headline line rising out of its own clip, like type set on a line.
+function RiseLine({ delay, reduceMotion, children, textStyle }) {
+  const progress = useSharedValue(reduceMotion ? 1 : 0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    progress.value = withDelay(delay, withTiming(1, { duration: 700, easing: EASE_OUT_QUINT }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const animated = useAnimatedStyle(() => ({
+    transform: [{ translateY: (1 - progress.value) * HEADLINE_LINE_HEIGHT * 1.05 }],
+  }));
   return (
-    <Animated.Image
-      source={{ uri: 'https://images.unsplash.com/photo-1532453288672-3a27e9be9efd?q=80&w=764&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D' }}
-      resizeMode="cover"
-      onLoad={handleLoad}
-      style={[StyleSheet.absoluteFill, animatedStyle]}
-    />
+    <View style={styles.lineClip}>
+      <Animated.Text style={[styles.headline, textStyle, animated]}>{children}</Animated.Text>
+    </View>
   );
 }
 
-// Primary CTA gets its own wrapper (rather than the generic AnimatedPressable)
-// because the arrow icon nudges forward on press in addition to the button's
-// scale-down — a detail specific to this one button, tying the icon's literal
-// "forward" meaning to the tactile feedback of the app's single most
-// important action.
-function GetStartedButton({ onPress }) {
-  const reduceMotion = useReducedMotion();
-  const scale = useSharedValue(1);
-  const arrowShift = useSharedValue(0);
-  const buttonAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-  const arrowAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: arrowShift.value }],
-  }));
-
-  const handlePressIn = () => {
+// The card icons draw themselves: a stroke revealed along its length.
+function DrawnIcon({ delay, reduceMotion, kind }) {
+  const offset = useSharedValue(reduceMotion ? 0 : 120);
+  useEffect(() => {
     if (reduceMotion) return;
-    scale.value = withTiming(0.96, { duration: 100, easing: EASE_OUT_QUINT });
-    arrowShift.value = withTiming(3, { duration: 100, easing: EASE_OUT_QUINT });
+    offset.value = withDelay(delay, withTiming(0, { duration: 900, easing: EASE_OUT_QUINT }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const drawProps = useAnimatedProps(() => ({ strokeDashoffset: offset.value }));
+  const stroke = {
+    fill: 'none',
+    stroke: Colors.light.background,
+    strokeWidth: 2.2,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    strokeDasharray: [120, 120],
   };
-  const handlePressOut = () => {
-    if (reduceMotion) return;
-    scale.value = withTiming(1, { duration: 150, easing: EASE_OUT_QUART });
-    arrowShift.value = withTiming(0, { duration: 150, easing: EASE_OUT_QUART });
-  };
-
   return (
-    <Pressable
-      onPress={onPress}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
-      android_ripple={{ color: 'rgba(255,255,255,0.25)' }}
-      accessibilityRole="button"
-      accessibilityLabel="Get Started"
-      accessibilityHint="Creates a new PlainCo account"
+    <Svg width={44} height={44} viewBox="0 0 40 40">
+      {kind === 'ukay' ? (
+        <>
+          {/* A price tag: one-of-a-kind, priced by the piece. */}
+          <AnimatedPath d="M20 5 L30 14 V33 Q30 35 28 35 H12 Q10 35 10 33 V14 Z" {...stroke} animatedProps={drawProps} />
+          <AnimatedCircle cx={20} cy={14} r={2.6} {...stroke} animatedProps={drawProps} />
+        </>
+      ) : (
+        <>
+          {/* A hanger: off the rack, new. */}
+          <AnimatedPath
+            d="M20 15 V13 C20 11 23.5 10.5 23.5 8 C23.5 6 22 5 20 5 C18 5 16.6 6.2 16.5 7.6"
+            {...stroke}
+            animatedProps={drawProps}
+          />
+          <AnimatedPath d="M20 15 L5 28 H35 Z" {...stroke} animatedProps={drawProps} />
+        </>
+      )}
+    </Svg>
+  );
+}
+
+// One of the two category cards: Moss for ukay-ukay, Clay for
+// ready-to-wear — the same pairing the type badges use across the app.
+function CategoryCard({ kind, title, caption, delay, reduceMotion }) {
+  const progress = useSharedValue(reduceMotion ? 1 : 0);
+  useEffect(() => {
+    if (reduceMotion) return;
+    progress.value = withDelay(delay, withTiming(1, { duration: 750, easing: EASE_OUT_QUINT }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const animated = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [
+      { translateY: (1 - progress.value) * 36 },
+      { scale: 0.96 + progress.value * 0.04 },
+    ],
+  }));
+  return (
+    <Animated.View
+      style={[styles.card, kind === 'ukay' ? styles.cardUkay : styles.cardRtw, animated]}
+      accessible
+      accessibilityLabel={`${title}. ${caption}.`}
     >
-      <Animated.View style={[styles.primaryButton, buttonAnimatedStyle]}>
-        <Text style={styles.primaryButtonText}>Get Started</Text>
-        <Animated.View style={arrowAnimatedStyle}>
-          <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
-        </Animated.View>
-      </Animated.View>
-    </Pressable>
+      <View style={styles.cardRing} />
+      <DrawnIcon kind={kind} delay={delay + 300} reduceMotion={reduceMotion} />
+      <View>
+        <Text style={styles.cardTitle}>{title}</Text>
+        <Text style={styles.cardCaption}>{caption}</Text>
+      </View>
+    </Animated.View>
   );
 }
 
@@ -132,28 +162,131 @@ function GetStartedButton({ onPress }) {
 // screen during that gap is what the old behaviour did: someone who has
 // been signed in for weeks reopened the app and was shown "Get Started".
 //
-// So it holds. Deliberately styled as the hero photo's own placeholder
-// colour and wordmark — the same two things Landing shows first anyway
-// while its remote image decodes — so a signed-out visitor sees a
-// continuous load rather than a splash that swaps to a different screen.
-// The cost of the wait is paid by everyone; it is a few hundred
-// milliseconds and it buys not lying to signed-in users about who they are.
+// So it holds, on plain Canvas — the colour the launch splash sits on, so
+// whether the session resolves to Home or to Landing, nothing flashes.
 function ResolvingSession() {
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" />
-      <View style={[styles.container, styles.resolvingContainer]}>
-        <View style={styles.logoContainer}>
-          <Text style={styles.logoText}>PlainCo</Text>
-          <Text style={styles.logoSubtext}>Shop</Text>
+    <View style={styles.root}>
+      <StatusBar barStyle="dark-content" />
+    </View>
+  );
+}
+
+function LandingContent({ navigation }) {
+  const reduceMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
+  const [size, setSize] = useState(null);
+  const [delayFor] = useState(makeDelayFor);
+
+  // The header lockup. While the splash is up, its own copy is gliding
+  // into this spot, so this one waits and appears in the same frame the
+  // splash's disappears. Opened later, it simply fades in.
+  const [lockupVisible, setLockupVisible] = useState(!splashHandoff.isActive());
+  const lockupOpacity = useSharedValue(reduceMotion || splashHandoff.isActive() ? 1 : 0);
+  useEffect(() => {
+    splashHandoff.setLandingReady(true);
+    const unsubscribe = splashHandoff.onFinish(() => setLockupVisible(true));
+    if (!reduceMotion) lockupOpacity.value = withTiming(1, { duration: 250 });
+    return () => {
+      unsubscribe();
+      splashHandoff.setLandingReady(false);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const lockupStyle = useAnimatedStyle(() => ({ opacity: lockupOpacity.value }));
+
+  const handleGetStarted = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    navigation.replace('Signup');
+  };
+  const handleLogIn = () => {
+    Haptics.selectionAsync();
+    navigation.replace('Login');
+  };
+  const handleStaff = () => {
+    Haptics.selectionAsync();
+    navigation.navigate('AdminLogin');
+  };
+
+  const contentTop = headerCenterY(insets.top) + 58;
+
+  return (
+    <View style={styles.root} onLayout={(e) => !size && setSize(e.nativeEvent.layout)}>
+      <StatusBar barStyle="dark-content" />
+
+      {size && lockupVisible ? (
+        <Animated.View style={[StyleSheet.absoluteFill, lockupStyle]} pointerEvents="none">
+          <StaticLockup width={size.width} height={size.height} topInset={insets.top} />
+        </Animated.View>
+      ) : null}
+
+      <View style={[styles.content, { paddingTop: contentTop, paddingBottom: Math.max(insets.bottom, 16) + 18 }]}>
+        <FadeUp delay={delayFor(T.eyebrow)} reduceMotion={reduceMotion}>
+          <Text style={styles.eyebrow}>Ukay-Ukay · Ready-to-Wear</Text>
+        </FadeUp>
+
+        <View
+          style={styles.headlineBlock}
+          accessible
+          accessibilityRole="header"
+          accessibilityLabel="Pre-loved finds. Brand-new styles. One app."
+        >
+          <RiseLine delay={delayFor(T.line1)} reduceMotion={reduceMotion}>Pre-loved finds.</RiseLine>
+          <RiseLine delay={delayFor(T.line2)} reduceMotion={reduceMotion}>Brand-new styles.</RiseLine>
+          <RiseLine delay={delayFor(T.line3)} reduceMotion={reduceMotion} textStyle={styles.headlineAccent}>
+            One app.
+          </RiseLine>
+        </View>
+
+        <FadeUp delay={delayFor(T.sub)} reduceMotion={reduceMotion}>
+          <Text style={styles.sub}>
+            Shop local clothing stores, from hand-picked ukay to fresh ready-to-wear.
+          </Text>
+        </FadeUp>
+
+        <View style={styles.cards}>
+          <CategoryCard
+            kind="ukay"
+            title="Ukay-Ukay"
+            caption="One-of-a-kind finds"
+            delay={delayFor(T.ukay)}
+            reduceMotion={reduceMotion}
+          />
+          <CategoryCard
+            kind="rtw"
+            title="Ready-to-Wear"
+            caption="New styles, every size"
+            delay={delayFor(T.rtw)}
+            reduceMotion={reduceMotion}
+          />
+        </View>
+
+        <View style={styles.ctas}>
+          <FadeUp delay={delayFor(T.primary)} reduceMotion={reduceMotion}>
+            <Button variant="primary" label="Get Started" fontSize={16} onPress={handleGetStarted} />
+          </FadeUp>
+          <FadeUp delay={delayFor(T.secondary)} reduceMotion={reduceMotion}>
+            <Button variant="secondary" label="Log In" fontSize={16} onPress={handleLogIn} />
+          </FadeUp>
+          <FadeUp delay={delayFor(T.staff)} reduceMotion={reduceMotion}>
+            <Pressable
+              onPress={handleStaff}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityRole="link"
+              accessibilityLabel="Store staff? Sign in to the Staff Portal"
+              style={styles.staffRow}
+            >
+              <Text style={styles.staffText}>
+                Store staff? <Text style={styles.staffLink}>Sign in to the Staff Portal</Text>
+              </Text>
+            </Pressable>
+          </FadeUp>
         </View>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 export default function LandingScreen({ navigation }) {
-  const reduceMotion = useReducedMotion();
   const { authChecked, signedIn, accountActive, adminLoading, role } = useAdmin();
 
   // True only while the answer is genuinely unknown. Once auth has been
@@ -185,7 +318,6 @@ export default function LandingScreen({ navigation }) {
     if (!shouldSkipLanding) return;
     // reset, not navigate: Landing must not sit behind the destination
     // where a back gesture could return a signed-in user to "Get Started".
-    // Mirrors what Checkoutscreen and ProfileScreen already do.
     navigation.reset({ index: 0, routes: [{ name: getHomeRouteForRole(role) }] });
   }, [shouldSkipLanding, role, navigation]);
 
@@ -194,221 +326,60 @@ export default function LandingScreen({ navigation }) {
   // whole path exists to prevent.
   if (resolving || shouldSkipLanding) return <ResolvingSession />;
 
-  const handleGetStarted = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    navigation.replace('Signup');
-  };
-
-  const handleSignIn = () => {
-    // A lighter selection tap, not the same impact weight as Get Started —
-    // keeps the two CTAs feeling hierarchically distinct: one creates an
-    // account, the other just switches to an existing path.
-    Haptics.selectionAsync();
-    navigation.replace('Login');
-  };
-
-  return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" />
-      <View style={styles.container}>
-        <HeroPhoto reduceMotion={reduceMotion} />
-        <LinearGradient
-          colors={['rgba(196, 98, 62, 0.3)', 'rgba(120, 55, 30, 0.85)']}
-          style={styles.gradient}
-        >
-          {/* Logo — the first brand mark on the first screen: a clean fade,
-              no scale or bounce, so it reads as deliberate rather than showy. */}
-          <Animated.View
-            entering={reduceMotion ? undefined : FadeIn.duration(320).easing(EASE_OUT_QUART)}
-            style={styles.logoContainer}
-          >
-            <Text style={styles.logoText}>PlainCo</Text>
-            <Text style={styles.logoSubtext}>Shop</Text>
-          </Animated.View>
-
-          {/* Main Content */}
-          <View style={styles.content}>
-            <Animated.Text
-              entering={reduceMotion ? undefined : FadeIn.duration(300).delay(90).easing(EASE_OUT_QUART)}
-              style={styles.title}
-            >
-              Preloved Finds{'\n'}Ready-to-Wear{'\n'}Styles
-            </Animated.Text>
-            <Animated.Text
-              entering={reduceMotion ? undefined : FadeIn.duration(280).delay(150).easing(EASE_OUT_QUART)}
-              style={styles.subtitle}
-            >
-              Shop quality Ukay-Ukay and Ready-to-Wear clothing with great deals and fast delivery
-            </Animated.Text>
-
-            {/* Features — three parallel value props, so a small directional
-                stagger (not a whole-section reveal) is the legitimate case. */}
-            <View style={styles.features}>
-              {[
-                { icon: 'layers-outline', label: 'Preloved + New' },
-                { icon: 'shield-checkmark', label: 'No Card Info Stored' },
-                { icon: 'cash', label: 'Cash on Delivery' },
-              ].map((feature, index) => (
-                <Animated.View
-                  key={feature.icon}
-                  entering={
-                    reduceMotion
-                      ? undefined
-                      : FadeInDown.duration(240).delay(200 + index * 50).easing(EASE_OUT_QUART)
-                  }
-                  style={styles.featureItem}
-                >
-                  <View style={styles.featureIconWrap}>
-                    <Ionicons name={feature.icon} size={22} color={heroGold} />
-                  </View>
-                  <Text style={styles.featureText}>{feature.label}</Text>
-                </Animated.View>
-              ))}
-            </View>
-          </View>
-
-          {/* Buttons — fade in alongside the subtitle, not after the feature
-              stagger finishes, so the primary CTA is tappable immediately
-              rather than waiting behind secondary decoration. */}
-          <Animated.View
-            entering={reduceMotion ? undefined : FadeIn.duration(260).delay(150).easing(EASE_OUT_QUART)}
-            style={styles.buttonContainer}
-          >
-            <GetStartedButton onPress={handleGetStarted} />
-
-            <AnimatedPressable
-              style={styles.secondaryButton}
-              onPress={handleSignIn}
-              rippleColor="rgba(255,255,255,0.15)"
-              accessibilityRole="button"
-              accessibilityLabel="Sign In"
-              accessibilityHint="Opens the sign in screen for an existing account"
-            >
-              <Text style={styles.secondaryButtonText}>Already have account? Sign In</Text>
-            </AnimatedPressable>
-          </Animated.View>
-        </LinearGradient>
-      </View>
-    </SafeAreaView>
-  );
+  return <LandingContent navigation={navigation} />;
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: Colors.light.text,
+  root: { flex: 1, backgroundColor: Colors.light.background },
+  content: { flex: 1, paddingHorizontal: 24 },
+
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    color: Colors.light.tint,
   },
-  container: {
+  headlineBlock: { marginTop: 10, marginBottom: 12 },
+  lineClip: { overflow: 'hidden' },
+  // DESIGN.md's Display step: once per screen, 700, 28–32.
+  headline: {
+    fontSize: 32,
+    lineHeight: HEADLINE_LINE_HEIGHT,
+    fontWeight: '700',
+    letterSpacing: -0.6,
+    color: Colors.light.text,
+  },
+  headlineAccent: { color: Colors.light.tint },
+  sub: { fontSize: 14, lineHeight: 21, color: Colors.light.icon, marginBottom: 22, maxWidth: 320 },
+
+  // Shrinks before anything else on a short phone, so the buttons are
+  // never pushed off screen.
+  cards: { flexDirection: 'row', gap: 12, height: 248, minHeight: 150, flexShrink: 1 },
+  card: {
     flex: 1,
-    backgroundColor: photoPlaceholder,
-    // Clips the hero photo's slow zoom to the screen bounds — without this
-    // the image would grow slightly past the edges instead of cropping in.
+    borderRadius: 22,
+    padding: 16,
+    justifyContent: 'space-between',
     overflow: 'hidden',
   },
-  gradient: {
-    flex: 1,
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 40,
+  cardUkay: { backgroundColor: Colors.light.secondary },
+  cardRtw: { backgroundColor: Colors.light.tint },
+  cardRing: {
+    position: 'absolute',
+    right: -38,
+    top: -38,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 1.5,
+    borderColor: 'rgba(250,247,242,0.18)',
   },
-  // Nothing but the wordmark on the hero's own placeholder colour, which
-  // `container` already supplies. No spinner: this resolves in a few
-  // hundred milliseconds, and a spinner that appears and vanishes that
-  // fast reads as a glitch rather than as progress.
-  resolvingContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoContainer: {
-    alignItems: 'center',
-  },
-  logoText: {
-    fontSize: 42,
-    fontWeight: 'bold',
-    color: heroGold,
-    // Logo sits in the gradient's lightest, least-tinted region (the top,
-    // where the overlay is only 30% opaque) — a soft shadow keeps it
-    // readable regardless of what's directly behind it in the photo.
-    textShadowColor: 'rgba(0, 0, 0, 0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  logoSubtext: {
-    fontSize: 16,
-    color: '#FFFFFF',
-    marginTop: 5,
-    textShadowColor: 'rgba(0, 0, 0, 0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginBottom: 15,
-    lineHeight: 40,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#E0E0E0',
-    marginBottom: 30,
-    lineHeight: 20,
-  },
-  features: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  featureItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  featureIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: heroGoldTint,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  featureText: {
-    fontSize: 12,
-    color: '#FFFFFF',
-    marginTop: 8,
-  },
-  buttonContainer: {
-    marginBottom: 20,
-  },
-  primaryButton: {
-    backgroundColor: Colors.light.tint,
-    paddingVertical: 16,
-    borderRadius: 12,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  primaryButtonText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    marginRight: 8,
-  },
-  secondaryButton: {
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  secondaryButtonText: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    textAlign: 'center',
-  },
+  cardTitle: { fontSize: 16, lineHeight: 20, fontWeight: '600', color: Colors.light.background },
+  cardCaption: { fontSize: 12, color: Colors.light.background, opacity: 0.82, marginTop: 2 },
+
+  ctas: { marginTop: 'auto', paddingTop: 16, gap: 10 },
+  staffRow: { alignItems: 'center', marginTop: 4, minHeight: 32, justifyContent: 'center' },
+  staffText: { fontSize: 12.5, color: Colors.light.icon },
+  staffLink: { color: Colors.light.text, fontWeight: '500', textDecorationLine: 'underline' },
 });
