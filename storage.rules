@@ -89,5 +89,40 @@ service firebase.storage {
       // drawing) rather than something to fake here.
       allow delete: if isSeller();
     }
+
+    // Order chat photos: the seller's "this is the exact piece you're
+    // getting" and the buyer's "this is how it arrived". Filed under the
+    // order they are about, so the rule can ask the same question
+    // firestore.rules asks of the messages: is the caller the customer
+    // who placed this order, or the manager of the store that sells it?
+    //
+    // The limitation noted on /products applies here too, and matters more:
+    // a download URL serves the file to whoever holds it. What keeps these
+    // photos private is that their URLs are stored only in messages that
+    // the same two parties can read. That is weaker than this rule reads.
+    // It is enough for photos of clothes, and NOT for anything like an ID.
+    //
+    // No update or delete: a photo sent in a chat is part of the record,
+    // like the message that carries it.
+    function chatOrder(customerId, orderId) {
+      return firestore.get(/databases/(default)/documents/users/$(customerId)/orders/$(orderId));
+    }
+    function managesChatStore(customerId, orderId) {
+      return isSeller() &&
+        'storeId' in firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data &&
+        'storeId' in chatOrder(customerId, orderId).data &&
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.storeId ==
+          chatOrder(customerId, orderId).data.storeId;
+    }
+    function inChat(customerId, orderId) {
+      return request.auth != null &&
+        firestore.exists(/databases/(default)/documents/users/$(customerId)/orders/$(orderId)) &&
+        (request.auth.uid == customerId || managesChatStore(customerId, orderId));
+    }
+
+    match /chat/{customerId}/{orderId}/{imageId} {
+      allow read: if inChat(customerId, orderId);
+      allow create: if inChat(customerId, orderId) && isValidImage();
+    }
   }
 }

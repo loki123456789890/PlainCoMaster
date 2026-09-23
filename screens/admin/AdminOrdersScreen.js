@@ -45,6 +45,7 @@ import ProductImage from '../../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
 import { getPaymentLabel, getPaymentIcon, getPaymentStatusLabel } from '../../constants/payment';
+import { chatFields, hasUnread } from '../../utils/orderChat';
 
 const STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
 
@@ -253,6 +254,11 @@ export default function AdminOrdersScreen({ navigation }) {
             paymentRef: data.paymentRef || null,
             paymentSandbox: data.paymentSandbox === true,
             items,
+            // The order lives at users/{uid}/orders/{id}; the chat lives
+            // under it, so the path is the customer's id to trust — not
+            // the customerId field, which older orders may not carry.
+            chatCustomerId: docSnap.ref.parent.parent.id,
+            ...chatFields(data),
           };
         });
         setOrders(fetched);
@@ -309,6 +315,17 @@ export default function AdminOrdersScreen({ navigation }) {
     Haptics.selectionAsync();
     setSelectedOrder(order);
     setShowOrderModal(true);
+  };
+
+  const handleOpenChat = (order) => {
+    Haptics.selectionAsync();
+    setShowOrderModal(false);
+    navigation.navigate('OrderChat', {
+      customerId: order.chatCustomerId,
+      orderId: order.id,
+      side: 'store',
+      title: order.customerEmail,
+    });
   };
 
   const handleUpdateStatus = (order) => {
@@ -684,7 +701,7 @@ export default function AdminOrdersScreen({ navigation }) {
                   <AnimatedPressable
                     onPress={() => handleViewOrder(order)}
                     accessibilityRole="button"
-                    accessibilityLabel={`Order ${order.orderNumber}, ${getStatusLabel(order.status)}, ₱${Number(order.total).toFixed(2)}${needsAttention ? ', needs attention' : ''}`}
+                    accessibilityLabel={`Order ${order.orderNumber}, ${getStatusLabel(order.status)}, ₱${Number(order.total).toFixed(2)}${needsAttention ? ', needs attention' : ''}${hasUnread(order, 'store') ? ', new message from the buyer' : ''}`}
                     accessibilityHint="Opens order details"
                   >
                     <Card variant="flat" style={styles.orderCard}>
@@ -694,6 +711,12 @@ export default function AdminOrdersScreen({ navigation }) {
                           <Text style={styles.orderDate}>{formatRelativeTime(order.date)}</Text>
                         </View>
                         <View style={styles.orderHeaderRight}>
+                          {hasUnread(order, 'store') && (
+                            <View style={styles.messageBadge}>
+                              <Ionicons name="chatbubble" size={10} color={Colors.light.tint} />
+                              <Text style={styles.messageBadgeText}>New message</Text>
+                            </View>
+                          )}
                           {needsAttention && (
                             <View style={styles.attentionBadge}>
                               <Ionicons name="alert-circle" size={11} color={Colors.light.danger} />
@@ -874,15 +897,24 @@ export default function AdminOrdersScreen({ navigation }) {
                 </View>
 
                 <View style={styles.modalButtons}>
-                  <Button
-                    variant="primary"
-                    label={!isConnected ? 'No Internet Connection' : 'Update Status'}
-                    onPress={() => {
-                      setShowOrderModal(false);
-                      handleUpdateStatus(selectedOrder);
-                    }}
-                    disabled={!isConnected}
-                  />
+                  <View style={styles.modalButtonHalf}>
+                    <Button
+                      variant="secondary"
+                      label={hasUnread(selectedOrder, 'store') ? 'New Message' : 'Message Buyer'}
+                      onPress={() => handleOpenChat(selectedOrder)}
+                    />
+                  </View>
+                  <View style={styles.modalButtonHalf}>
+                    <Button
+                      variant="primary"
+                      label={!isConnected ? 'Offline' : 'Update Status'}
+                      onPress={() => {
+                        setShowOrderModal(false);
+                        handleUpdateStatus(selectedOrder);
+                      }}
+                      disabled={!isConnected}
+                    />
+                  </View>
                 </View>
               </ScrollView>
             )}
@@ -1076,6 +1108,18 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.danger + '15',
   },
   attentionBadgeText: { fontSize: 9, fontWeight: '700', color: Colors.light.danger, letterSpacing: 0.2 },
+  // Same shape as the Attention badge, in Clay: a message is something to
+  // act on, not something wrong.
+  messageBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+    backgroundColor: Colors.light.tint + '15',
+  },
+  messageBadgeText: { fontSize: 9, fontWeight: '700', color: Colors.light.tint, letterSpacing: 0.2 },
   orderCustomer: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   orderCustomerName: { fontSize: 14, color: Colors.light.text, flexShrink: 1 },
   orderPayment: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },

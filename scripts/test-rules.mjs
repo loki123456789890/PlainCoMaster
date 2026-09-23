@@ -1557,6 +1557,100 @@ await test('SUPPORT-5  the mail log follows the same routing', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Order chat: the customer and the order's own store, nobody else.
+// ---------------------------------------------------------------------------
+const chatPath = 'users/customer1/orders/o1/messages';
+const chatMessage = (sender, senderId, overrides = {}) => ({
+  senderId, sender, text: 'Is the jacket still clean?', createdAt: serverTimestamp(), ...overrides,
+});
+const seedChatMessage = () =>
+  testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), `${chatPath}/m1`), {
+      senderId: 'seller1', sender: 'store', text: 'Photo before it ships', createdAt: new Date(),
+    });
+  });
+
+await test('CHAT-1  the customer and the order\'s store manager can both send', async () => {
+  await assertSucceeds(setDoc(doc(asCustomer(), `${chatPath}/c1`), chatMessage('customer', 'customer1')));
+  await assertSucceeds(setDoc(doc(asSeller(), `${chatPath}/s1`), chatMessage('store', 'seller1')));
+  // A photo with no words is a message too.
+  await assertSucceeds(setDoc(doc(asSeller(), `${chatPath}/s2`), chatMessage('store', 'seller1', {
+    text: '', imageUrl: 'https://firebasestorage.googleapis.com/v0/b/x/o/chat%2Fa.jpg',
+  })));
+});
+
+await test('CHAT-2  nobody else can read or write the conversation', async () => {
+  await seedChatMessage();
+  await assertSucceeds(getDoc(doc(asCustomer(), `${chatPath}/m1`)));
+  await assertSucceeds(getDocs(collection(asSeller(), chatPath)));
+  for (const outsider of [asOtherCustomer, asOtherSeller, asUnassignedSeller, asAdmin, asGuest]) {
+    await assertFails(getDoc(doc(outsider(), `${chatPath}/m1`)));
+    await assertFails(getDocs(collection(outsider(), chatPath)));
+  }
+  await assertFails(setDoc(doc(asOtherSeller(), `${chatPath}/x`), chatMessage('store', 'seller2')));
+  await assertFails(setDoc(doc(asOtherCustomer(), `${chatPath}/x`), chatMessage('customer', 'customer2')));
+  await assertFails(setDoc(doc(asAdmin(), `${chatPath}/x`), chatMessage('store', 'admin1')));
+});
+
+await test('CHAT-3  nobody can speak as someone else, or as the other side', async () => {
+  await assertFails(setDoc(doc(asCustomer(), `${chatPath}/x`), chatMessage('store', 'customer1')));
+  await assertFails(setDoc(doc(asCustomer(), `${chatPath}/x`), chatMessage('customer', 'seller1')));
+  await assertFails(setDoc(doc(asSeller(), `${chatPath}/x`), chatMessage('customer', 'seller1')));
+});
+
+await test('CHAT-4  a message must be well-formed and stamped by the server', async () => {
+  const send = (overrides) => setDoc(doc(asCustomer(), `${chatPath}/x`), chatMessage('customer', 'customer1', overrides));
+  await assertFails(send({ text: '   ' }));
+  await assertFails(send({ text: 'x'.repeat(1001) }));
+  await assertFails(send({ createdAt: new Date('2020-01-01') }));
+  await assertFails(send({ imageUrl: '' }));
+  await assertFails(send({ extra: true }));
+  // An order that does not exist has no conversation to join.
+  await assertFails(setDoc(doc(asCustomer(), 'users/customer1/orders/nope/messages/x'),
+    chatMessage('customer', 'customer1')));
+});
+
+await test('CHAT-5  messages are permanent', async () => {
+  await seedChatMessage();
+  await assertFails(updateDoc(doc(asSeller(), `${chatPath}/m1`), { text: 'edited' }));
+  await assertFails(deleteDoc(doc(asSeller(), `${chatPath}/m1`)));
+  await assertFails(deleteDoc(doc(asCustomer(), `${chatPath}/m1`)));
+});
+
+await test('CHAT-6  a deactivated customer cannot send', async () => {
+  await assertFails(setDoc(
+    doc(asDeactivatedCustomer(), 'users/deactivatedCustomer/orders/delivered2/messages/x'),
+    chatMessage('customer', 'deactivatedCustomer')
+  ));
+});
+
+await test('CHAT-7  each side stamps its own unread bookkeeping, and only that', async () => {
+  const order = (db) => doc(db, 'users/customer1/orders/o1');
+  await assertSucceeds(updateDoc(order(asCustomer()), {
+    lastMessageAt: serverTimestamp(), lastMessageBy: 'customer',
+  }));
+  await assertSucceeds(updateDoc(order(asCustomer()), { customerReadAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(order(asSeller()), {
+    lastMessageAt: serverTimestamp(), lastMessageBy: 'store',
+  }));
+  await assertSucceeds(updateDoc(order(asSeller()), { storeReadAt: serverTimestamp() }));
+  // The other side's marker, the other side's name, a made-up clock.
+  await assertFails(updateDoc(order(asCustomer()), { storeReadAt: serverTimestamp() }));
+  await assertFails(updateDoc(order(asCustomer()), { lastMessageAt: serverTimestamp(), lastMessageBy: 'store' }));
+  await assertFails(updateDoc(order(asSeller()), { customerReadAt: serverTimestamp() }));
+  await assertFails(updateDoc(order(asCustomer()), { customerReadAt: new Date('2099-01-01') }));
+  await assertFails(updateDoc(order(asOtherSeller()), { storeReadAt: serverTimestamp() }));
+});
+
+await test('CHAT-8  the chat bookkeeping is not a back door into the order', async () => {
+  const order = (db) => doc(db, 'users/customer1/orders/o1');
+  await assertFails(updateDoc(order(asCustomer()), { customerReadAt: serverTimestamp(), status: 'delivered' }));
+  await assertFails(updateDoc(order(asCustomer()), { customerReadAt: serverTimestamp(), total: 1 }));
+  await assertFails(updateDoc(order(asSeller()), { storeReadAt: serverTimestamp(), total: 1 }));
+  await assertFails(updateDoc(order(asCustomer()), { status: 'cancelled' }));
+});
+
+// ---------------------------------------------------------------------------
 await testEnv.cleanup();
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);

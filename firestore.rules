@@ -65,6 +65,30 @@ service cloud.firestore {
     function isOwner(userId) {
       return request.auth != null && request.auth.uid == userId;
     }
+    // The order a chat message belongs to, for its storeId.
+    function chatOrder(userId, orderId) {
+      return get(/databases/$(database)/documents/users/$(userId)/orders/$(orderId));
+    }
+    // Order chat keeps three kinds of bookkeeping on the order itself, so
+    // the order lists both sides already load can show an unread dot
+    // without a query per row: when the last message was sent and by
+    // which side, and when each side last read the conversation.
+    //
+    // A side may touch only lastMessageAt/lastMessageBy and its OWN read
+    // marker, and every timestamp must be the server's clock — so the
+    // customer cannot mark the store's messages read, and neither side can
+    // backdate or future-date anything to hide or fake an unread message.
+    function chatMetaIsValid(side, readField) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.size() > 0 &&
+        changed.hasOnly(['lastMessageAt', 'lastMessageBy', readField]) &&
+        (
+          !changed.hasAny(['lastMessageAt', 'lastMessageBy']) ||
+          (request.resource.data.lastMessageAt == request.time &&
+           request.resource.data.lastMessageBy == side)
+        ) &&
+        (!(readField in changed) || request.resource.data[readField] == request.time);
+    }
     function isActiveOwner(userId) {
       return isOwner(userId) &&
         (!exists(/databases/$(database)/documents/users/$(userId)) ||
@@ -295,14 +319,59 @@ service cloud.firestore {
         // from before stores existed has no storeId and is frozen until
         // scripts/migrate-to-stores.mjs stamps it — see managesStore().
         //
-        allow update: if managesStore(resource.data.get('storeId', null)) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
-          request.resource.data.status in
-            ['pending', 'processing', 'shipped', 'delivered', 'cancelled'] &&
-          (
-            request.resource.data.status != 'cancelled' ||
-            resource.data.get('status', 'pending') in ['pending', 'processing']
-          );
+        allow update: if (
+            managesStore(resource.data.get('storeId', null)) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+            request.resource.data.status in
+              ['pending', 'processing', 'shipped', 'delivered', 'cancelled'] &&
+            (
+              request.resource.data.status != 'cancelled' ||
+              resource.data.get('status', 'pending') in ['pending', 'processing']
+            )
+          ) ||
+          // Order chat bookkeeping — see chatMetaIsValid(). Each side may
+          // stamp only its own read marker and "last message" as itself,
+          // and nothing else on the order, so the chat cannot become a
+          // back door to the status, the total or the address.
+          (isActiveOwner(userId) && chatMetaIsValid('customer', 'customerReadAt')) ||
+          (managesStore(resource.data.get('storeId', null)) && chatMetaIsValid('store', 'storeReadAt'));
+
+        // ORDER CHAT. One conversation per order, between the customer who
+        // placed it and the Store Manager of the store that sells it — the
+        // same two parties who can read the order itself, and nobody else.
+        // Not the Platform Admin, and not another store's manager: a chat
+        // carries the same private details (names, addresses, photos of
+        // what arrived) that the order does.
+        //
+        // Messages are permanent: no update, no delete, for anyone. A chat
+        // about a disputed order is evidence of what each side said, and an
+        // editable one would be evidence of nothing.
+        match /messages/{messageId} {
+          allow read: if isOwner(userId) ||
+            managesStore(chatOrder(userId, orderId).data.get('storeId', null));
+          allow create: if request.auth != null &&
+            request.resource.data.keys().hasOnly(['senderId', 'sender', 'text', 'imageUrl', 'createdAt']) &&
+            request.resource.data.keys().hasAll(['senderId', 'sender', 'text', 'createdAt']) &&
+            request.resource.data.senderId == request.auth.uid &&
+            request.resource.data.createdAt == request.time &&
+            request.resource.data.text is string &&
+            request.resource.data.text.size() <= 1000 &&
+            (
+              !('imageUrl' in request.resource.data) ||
+              (request.resource.data.imageUrl is string &&
+               request.resource.data.imageUrl.size() > 0 &&
+               request.resource.data.imageUrl.size() <= 2000)
+            ) &&
+            // Something to say: words, a photo, or both. Whitespace alone
+            // is not a message.
+            (request.resource.data.text.matches('.*\\S.*') || 'imageUrl' in request.resource.data) &&
+            exists(/databases/$(database)/documents/users/$(userId)/orders/$(orderId)) &&
+            (
+              (request.resource.data.sender == 'customer' && isActiveOwner(userId)) ||
+              (request.resource.data.sender == 'store' &&
+                managesStore(chatOrder(userId, orderId).data.get('storeId', null)))
+            );
+        }
       }
       match /cart/{itemId} {
         allow read, write: if isActiveOwner(userId);

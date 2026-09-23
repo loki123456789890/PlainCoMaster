@@ -9,7 +9,7 @@ import {
   connectAuthEmulator,
 } from "firebase/auth";
 import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
-import { getStorage } from "firebase/storage";
+import { getStorage, connectStorageEmulator } from "firebase/storage";
 import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -84,10 +84,11 @@ if (process.env.EXPO_PUBLIC_USE_FIREBASE_EMULATOR === '1') {
   connectAuthEmulator(auth, `http://${host}:9099`, { disableWarnings: true });
   connectFirestoreEmulator(db, host, 8080);
   connectFunctionsEmulator(functions, host, 5001);
+  connectStorageEmulator(storage, host, 9199);
   // Deliberately loud, and on every start. A session that thinks it is
   // talking to production while writing to an emulator wastes an
   // afternoon; a session told otherwise loses one line of console.
   console.warn(
-    `[PlainCo] Firebase EMULATORS at ${host} — auth:9099 firestore:8080 functions:5001. No production data is being read or written.`
+    `[PlainCo] Firebase EMULATORS at ${host} — auth:9099 firestore:8080 functions:5001 storage:9199. No production data is being read or written.`
   );
 }

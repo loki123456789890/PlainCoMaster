@@ -17,7 +17,7 @@
     "rules:deploy": "firebase deploy --only firestore:rules",
     "indexes:deploy": "firebase deploy --only firestore:indexes",
     "storage:deploy": "firebase deploy --only storage",
-    "emulators": "firebase emulators:start --only auth,firestore,functions",
+    "emulators": "firebase emulators:start --only auth,firestore,functions,storage",
     "start:emulator": "node scripts/start-with-emulators.mjs",
     "seed:emulator": "node scripts/seed-emulator.mjs"
   },

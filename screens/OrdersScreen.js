@@ -32,6 +32,7 @@ import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
 import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import { chatFields, hasUnread } from '../utils/orderChat';
 
 // "Pending" and "processing" share one visual status (color/icon/tab) —
 // an order is "processing" the moment it's placed, and CheckoutScreen
@@ -102,6 +103,7 @@ function OrderCard({ order, index, onPress }) {
   const statusLabel = order.status.charAt(0).toUpperCase() + order.status.slice(1);
   const itemsLabel = `${order.itemCount} item${order.itemCount === 1 ? '' : 's'}` +
     (order.storeName ? ` · ${order.storeName}` : '');
+  const unread = hasUnread(order, 'customer');
 
   return (
     <Animated.View
@@ -112,7 +114,7 @@ function OrderCard({ order, index, onPress }) {
         onPress={onPress}
         rippleColor={Colors.light.border}
         accessibilityRole="button"
-        accessibilityLabel={`${order.displayName}, ${itemsLabel}, ₱${Number(order.total).toFixed(2)}, status ${statusLabel}. Tap to view details.`}
+        accessibilityLabel={`${order.displayName}, ${itemsLabel}, ₱${Number(order.total).toFixed(2)}, status ${statusLabel}.${unread ? ' New message from the store.' : ''} Tap to view details.`}
       >
         <Card variant="flat" style={styles.orderCard}>
           {order.image ? (
@@ -127,6 +129,12 @@ function OrderCard({ order, index, onPress }) {
             <Text style={styles.orderDate}>{order.date}</Text>
             <Text style={styles.orderItems} numberOfLines={1}>{itemsLabel}</Text>
             <Text style={styles.orderTotal}>₱{Number(order.total).toFixed(2)}</Text>
+            {unread ? (
+              <View style={styles.unreadRow}>
+                <View style={styles.unreadDot} />
+                <Text style={styles.unreadText}>New message</Text>
+              </View>
+            ) : null}
           </View>
           <View style={styles.orderStatusContainer}>
             <View style={styles.statusRow}>
@@ -202,6 +210,10 @@ export default function OrdersScreen({ navigation }) {
           storeId: data.storeId || null,
           shippingAddress: data.shippingAddress || null,
           paymentMethod: data.paymentMethod || null,
+          // For the "New message" line here and the chat button on
+          // OrderDetails — as millis, since Timestamps don't survive
+          // navigation params.
+          ...chatFields(data),
         };
       });
       setOrders(fetchedOrders);
@@ -483,6 +495,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
+  unreadRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 6 },
+  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.light.tint },
+  unreadText: { fontSize: 12, fontWeight: '600', color: Colors.light.tint },
 
   // Loading skeleton — shaped like a real order row so there's no layout
   // shift once live orders swap in.

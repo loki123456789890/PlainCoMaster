@@ -19,7 +19,7 @@ import Animated, {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { Colors, Spacing, Radius } from '../constants/theme';
 import Card from '../components/ui/Card';
@@ -32,6 +32,7 @@ import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/re
 import { getPaymentLabel, getPaymentIcon, getPaymentStatus } from '../constants/payment';
 import { formatOrderNumber } from '../utils/orderNumber';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import { orderRef, chatFields, hasUnread } from '../utils/orderChat';
 
 // "Pending" and "processing" share one visual status — an order is
 // "processing" the moment it's placed, and CheckoutScreen always creates
@@ -222,6 +223,33 @@ export default function OrderDetailsScreen({ navigation, route }) {
     };
   }, [order?.id, order?.status, navigation]);
 
+  // The order passed in is a snapshot from the list; the chat fields are
+  // watched live so "New message" appears while this screen is open and
+  // clears on the way back from the chat.
+  const [chat, setChat] = useState(() => (order ? chatFields(order) : null));
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!order?.id || !uid) return undefined;
+    return onSnapshot(
+      orderRef(uid, order.id),
+      (snapshot) => {
+        if (snapshot.exists()) setChat(chatFields(snapshot.data()));
+      },
+      (error) => console.error('Could not watch order for messages:', error)
+    );
+  }, [order?.id]);
+  const unreadFromStore = hasUnread(chat, 'customer');
+
+  const handleOpenChat = () => {
+    Haptics.selectionAsync();
+    navigation.navigate('OrderChat', {
+      customerId: auth.currentUser?.uid,
+      orderId: order.id,
+      side: 'customer',
+      title: order.storeName || 'The store',
+    });
+  };
+
   const handleContactSupport = () => {
     navigation.navigate('Help');
   };
@@ -364,6 +392,30 @@ export default function OrderDetailsScreen({ navigation, route }) {
             </View>
           </Card>
         </Animated.View>
+
+        {/* Order chat — straight to the store that is packing this parcel.
+            Only orders that belong to a store have someone to talk to. */}
+        {order.storeId ? (
+          <AnimatedPressable
+            onPress={handleOpenChat}
+            accessibilityRole="button"
+            accessibilityLabel={`Message ${order.storeName || 'the store'}${unreadFromStore ? ', new message' : ''}`}
+          >
+            <Card variant="flat" style={styles.chatCard}>
+              <View style={[styles.paymentIconCircle, { backgroundColor: Colors.light.tint + '15' }]}>
+                <Ionicons name="chatbubbles-outline" size={18} color={Colors.light.tint} />
+              </View>
+              <View style={styles.paymentTextWrap}>
+                <Text style={styles.paymentLabel}>Message {order.storeName || 'the store'}</Text>
+                <Text style={styles.paymentTrustText}>
+                  {unreadFromStore ? 'You have a new message' : 'Ask about condition, sizing, or delivery'}
+                </Text>
+              </View>
+              {unreadFromStore ? <View style={styles.unreadDot} /> : null}
+              <Ionicons name="chevron-forward" size={18} color={Colors.light.icon} />
+            </Card>
+          </AnimatedPressable>
+        ) : null}
 
         {/* Items */}
         <Text style={[styles.sectionTitle, order.storeName && styles.sectionTitleWithSub]}>
@@ -654,6 +706,10 @@ const styles = StyleSheet.create({
   // Gold, the money colour, and the only place it earns its reservation
   // outside a price — this line is about the money not having moved.
   sandboxNote: { fontSize: 11, color: Colors.light.highlight, marginTop: 2 },
+
+  // Order chat
+  chatCard: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 24 },
+  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.light.tint },
 
   // Order Summary
   summaryCard: { marginBottom: 24 },

@@ -75,9 +75,16 @@ function generateImageName(mimeType) {
  * @param {(progress: number) => void} [options.onProgress]  0..1
  * @param {string} [options.mimeType]  the picker's own reported type, which
  *   is more trustworthy than the blob's — see the note at the fallback below
+ * @param {string} [options.folder]  where in the bucket it goes — must be a
+ *   path storage.rules has a match for, or the upload is refused
  * @returns {Promise<{success: boolean, url?: string, path?: string, error?: string}>}
  */
-export async function uploadProductImage(uri, { onProgress, mimeType: declaredType } = {}) {
+export function uploadProductImage(uri, options = {}) {
+  return uploadImage(uri, { ...options, folder: PRODUCT_IMAGE_PATH });
+}
+
+export async function uploadImage(uri, { onProgress, mimeType: declaredType, folder } = {}) {
+  if (!folder) return { success: false, error: 'no-folder' };
   if (!uri) return { success: false, error: 'no-uri' };
 
   try {
@@ -118,7 +125,7 @@ export async function uploadProductImage(uri, { onProgress, mimeType: declaredTy
     // what PICKER_OPTIONS forces the picker to produce.
     const mimeType = ACCEPTED_MIME.test(candidate) ? candidate : 'image/jpeg';
 
-    const path = `${PRODUCT_IMAGE_PATH}/${generateImageName(mimeType)}`;
+    const path = `${folder}/${generateImageName(mimeType)}`;
     const storageRef = ref(storage, path);
     const task = uploadBytesResumable(storageRef, blob, { contentType: mimeType });
 
@@ -166,6 +173,14 @@ const PICKER_OPTIONS = {
   aspect: [1, 1],
 };
 
+// Chat photos keep the re-encode but not the square crop: a photo of a
+// stain or a torn seam is framed by whoever took it, not by the catalog.
+export const CHAT_PICKER_OPTIONS = {
+  mediaTypes: ['images'],
+  quality: 0.7,
+  allowsEditing: true,
+};
+
 /**
  * Pick a product photo and upload it in one step.
  *
@@ -177,7 +192,16 @@ const PICKER_OPTIONS = {
  * @param {'library'|'camera'} [options.source]
  * @param {(progress: number) => void} [options.onProgress]  0..1
  */
-export async function pickAndUploadProductImage({ source = 'library', onProgress } = {}) {
+export function pickAndUploadProductImage(options = {}) {
+  return pickAndUploadImage({ ...options, folder: PRODUCT_IMAGE_PATH, pickerOptions: PICKER_OPTIONS });
+}
+
+export async function pickAndUploadImage({
+  source = 'library',
+  onProgress,
+  folder,
+  pickerOptions = PICKER_OPTIONS,
+} = {}) {
   try {
     const permission =
       source === 'camera'
@@ -193,8 +217,8 @@ export async function pickAndUploadProductImage({ source = 'library', onProgress
 
     const result =
       source === 'camera'
-        ? await ImagePicker.launchCameraAsync(PICKER_OPTIONS)
-        : await ImagePicker.launchImageLibraryAsync(PICKER_OPTIONS);
+        ? await ImagePicker.launchCameraAsync(pickerOptions)
+        : await ImagePicker.launchImageLibraryAsync(pickerOptions);
 
     if (result.canceled) return { success: false, cancelled: true };
 
@@ -213,7 +237,7 @@ export async function pickAndUploadProductImage({ source = 'library', onProgress
       return { success: false, error: 'unsupported-format' };
     }
 
-    return uploadProductImage(asset.uri, { onProgress, mimeType: assetType });
+    return uploadImage(asset.uri, { onProgress, mimeType: assetType, folder });
   } catch (error) {
     console.error('Error picking product image:', error?.code, error?.message);
     return { success: false, error: error?.code || 'picker-failed' };

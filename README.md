@@ -175,7 +175,7 @@ checkout is the one path where "try it and see" writes real orders and
 decrements real stock.
 
 ```bash
-npm run emulators        # terminal 1 — auth, firestore, functions
+npm run emulators        # terminal 1 — auth, firestore, functions, storage
 npm run seed:emulator    # terminal 2 — a customer, an address, two products
 npm run start:emulator -- --android
 ```
