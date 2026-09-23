@@ -561,21 +561,36 @@ export default function AdminUsersScreen({ navigation }) {
 
       {/* Header */}
       <View style={styles.header}>
+        {/* Log out has its own button, always. It used to share the back
+            button's slot and appear only when there was nothing to go back
+            to — but the usual way in (Login → Staff Portal) always leaves
+            a screen behind, so a Platform Admin never saw it. */}
         <View style={styles.headerActions}>
+          {canGoBack ? (
+            <AnimatedPressable
+              onPress={handleBackPress}
+              style={styles.backButton}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Go back"
+            >
+              <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+            </AnimatedPressable>
+          ) : (
+            <View style={styles.headerSpacer} />
+          )}
           <AnimatedPressable
-            onPress={handleBackPress}
+            onPress={() => {
+              Haptics.selectionAsync();
+              setLogoutVisible(true);
+            }}
             style={styles.backButton}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             accessibilityRole="button"
-            accessibilityLabel={canGoBack ? 'Go back' : 'Log out'}
+            accessibilityLabel="Log out"
           >
-            <Ionicons
-              name={canGoBack ? 'arrow-back' : 'log-out-outline'}
-              size={24}
-              color={canGoBack ? Colors.light.text : Colors.light.danger}
-            />
+            <Ionicons name="log-out-outline" size={22} color={Colors.light.danger} />
           </AnimatedPressable>
-          <View style={styles.headerSpacer} />
         </View>
         {/* The signed-in role is named in the header, not just implied by
             which screen you happen to be on. Before the split there was
