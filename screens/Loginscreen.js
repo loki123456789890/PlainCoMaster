@@ -250,7 +250,7 @@ export default function LoginScreen({ navigation }) {
       </FadeUp>
 
       <FadeUp delay={T.forgot} skip={skip} style={styles.forgotRow}>
-        <AuthLink onPress={() => navigation.navigate('ForgotPassword')} style={styles.forgot}>
+        <AuthLink onPress={() => navigation.navigate('ForgotPassword', { email: form.email.trim() })} style={styles.forgot}>
           Forgot password?
         </AuthLink>
       </FadeUp>

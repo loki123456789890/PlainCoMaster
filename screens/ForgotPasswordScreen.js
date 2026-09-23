@@ -1,319 +1,343 @@
 // screens/ForgotPasswordScreen.js
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  ScrollView,
-  Platform,
-  KeyboardAvoidingView,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { showAppAlert } from '../utils/appAlert';
+import Svg, { Rect, Path, Circle } from 'react-native-svg';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedProps,
   withTiming,
+  withDelay,
   withSequence,
   useReducedMotion,
-  Easing,
-  FadeIn,
-  FadeInDown,
 } from 'react-native-reanimated';
-import AnimatedPressable from '../components/ui/AnimatedPressable';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import {
+  AuthScaffold,
+  AuthAlert,
+  Field,
+  FadeUp,
+  RiseTitle,
+  Subtitle,
+  SuccessToast,
+  useShakes,
+  EMAIL_PATTERN,
+} from '../components/auth/AuthKit';
+import { EASE_OUT_QUINT } from '../constants/motion';
 
 // --- FIREBASE IMPORTS ---
 import { auth } from '../firebaseConfig';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { Colors } from '../constants/theme';
-import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
-export default function ForgotPasswordScreen({ navigation }) {
-  const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const { isConnected } = useNetworkStatus();
+const RESEND_COOLDOWN_S = 60;
+const T = { title: 80, sub: 170, email: 240, send: 310 };
+
+// Sends the reset email, treating "no such account" as sent.
+//
+// The confirmation is deliberately the same whether or not an account
+// exists, so this screen can't be used to find out which emails are
+// registered. Showing "no account found" would undo that protection.
+async function requestReset(email) {
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (error) {
+    if (error.code !== 'auth/user-not-found') throw error;
+  }
+}
+
+function alertForResetError(code) {
+  switch (code) {
+    case 'auth/network-request-failed':
+      return { kind: 'err', title: 'No internet connection.', body: 'Check your connection and try again.' };
+    case 'auth/too-many-requests':
+      return { kind: 'err', title: 'Too many requests.', body: 'Please wait a few minutes and try again.' };
+    default:
+      return { kind: 'err', title: "Couldn't send the link.", body: 'Something went wrong. Please try again.' };
+  }
+}
+
+// The envelope on the confirmation: the tile pops in, the flap draws
+// itself, and a Moss badge with a check lands on the corner.
+function SentEnvelope() {
   const reduceMotion = useReducedMotion();
-
-  const emailShakeX = useSharedValue(0);
-  const emailShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: emailShakeX.value }] }));
-
-  const triggerShake = (sharedValue) => {
+  const pop = useSharedValue(reduceMotion ? 1 : 0);
+  const flap = useSharedValue(reduceMotion ? 0 : 40);
+  const badge = useSharedValue(reduceMotion ? 8 : 0);
+  const check = useSharedValue(reduceMotion ? 1 : 0);
+  useEffect(() => {
     if (reduceMotion) return;
-    sharedValue.value = withSequence(
-      withTiming(-6, { duration: 45, easing: Easing.linear }),
-      withTiming(6, { duration: 45, easing: Easing.linear }),
-      withTiming(-4, { duration: 45, easing: Easing.linear }),
-      withTiming(4, { duration: 45, easing: Easing.linear }),
-      withTiming(0, { duration: 45, easing: Easing.linear })
+    pop.value = withTiming(1, { duration: 600, easing: EASE_OUT_QUINT });
+    flap.value = withDelay(350, withTiming(0, { duration: 600, easing: EASE_OUT_QUINT }));
+    badge.value = withDelay(
+      750,
+      withSequence(
+        withTiming(9.2, { duration: 315, easing: EASE_OUT_QUINT }),
+        withTiming(8, { duration: 135, easing: EASE_OUT_QUINT })
+      )
     );
-  };
+    check.value = withDelay(950, withTiming(1, { duration: 200 }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tileStyle = useAnimatedStyle(() => ({
+    opacity: pop.value,
+    transform: [{ scale: 0.7 + pop.value * 0.3 }],
+  }));
+  const flapProps = useAnimatedProps(() => ({ strokeDashoffset: flap.value }));
+  const badgeProps = useAnimatedProps(() => ({ r: badge.value }));
+  const checkProps = useAnimatedProps(() => ({ opacity: check.value }));
+
+  return (
+    <Animated.View style={[styles.envelope, tileStyle]} accessible={false}>
+      <Svg width={50} height={50} viewBox="0 0 50 50">
+        <Rect x={6} y={13} width={34} height={26} rx={5} fill="none" stroke={Colors.light.tint} strokeWidth={2} />
+        <AnimatedPath
+          d="M8 16l15 11 15-11"
+          fill="none"
+          stroke={Colors.light.tint}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray={[40, 40]}
+          animatedProps={flapProps}
+        />
+        <AnimatedCircle cx={39} cy={13} fill={Colors.light.success} animatedProps={badgeProps} />
+        <AnimatedPath
+          d="M35.5 13.2l2.4 2.4 4.4-4.6"
+          fill="none"
+          stroke="#fff"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          animatedProps={checkProps}
+        />
+      </Svg>
+    </Animated.View>
+  );
+}
+
+export default function ForgotPasswordScreen({ navigation, route }) {
+  const reduceMotion = useReducedMotion();
+  const { isConnected } = useNetworkStatus();
+
+  // Carries over whatever was typed on Log In, as the preview does.
+  const [email, setEmail] = useState(route?.params?.email || '');
+  const [fieldError, setFieldError] = useState('');
+  const [alert, setAlert] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [sentTo, setSentTo] = useState(null);
+  const [cooldown, setCooldown] = useState(0);
+  const [toast, setToast] = useState('');
+  const [shakes, shake] = useShakes();
+
+  const timers = useRef([]);
+  const later = (fn, ms) => timers.current.push(setTimeout(fn, ms));
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+
+  // Ticks the "Resend link in 42s" countdown.
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const id = setTimeout(() => setCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(id);
+  }, [cooldown]);
+
+  // The ask step fades up and away before the confirmation takes its place.
+  const askGone = useSharedValue(0);
+  const askStyle = useAnimatedStyle(() => ({
+    opacity: 1 - askGone.value,
+    transform: [{ translateY: askGone.value * -10 }],
+  }));
 
   const handleEmailChange = (text) => {
     setEmail(text);
-    if (error) setError('');
+    if (fieldError) setFieldError('');
+    if (alert) setAlert(null);
   };
 
-  // Instant feedback for the most common slip (empty or malformed email)
-  // before ever touching the network — mirrors Loginscreen.js/
-  // Signupscreen.js's validate().
-  const validate = () => {
+  const handleSend = async () => {
+    if (loading) return;
+    setAlert(null);
     const trimmed = email.trim();
-    let nextError = '';
-
-    if (!trimmed) {
-      nextError = 'Enter your email address.';
-    } else if (!EMAIL_PATTERN.test(trimmed)) {
-      nextError = 'Enter a valid email address.';
-    }
-
-    setError(nextError);
-
-    if (nextError) {
+    if (!EMAIL_PATTERN.test(trimmed)) {
+      setFieldError('Enter a valid email address.');
+      shake('email');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      triggerShake(emailShakeX);
-      return false;
+      return;
     }
-    return true;
-  };
-
-  const handlePasswordReset = async () => {
-    if (!validate()) return;
+    if (!isConnected) return;
 
     setLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
     try {
-      await sendPasswordResetEmail(auth, email.trim());
+      await requestReset(trimmed);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert(
-        "Email Sent",
-        "If an account exists for that email address, a password reset link has been sent. Please check your inbox and spam folder.",
-        [
-          {
-            text: "OK",
-            onPress: () => navigation.goBack()
-          }
-        ]
-      );
+      setLoading(false);
+      setCooldown(RESEND_COOLDOWN_S);
+      if (reduceMotion) {
+        setSentTo(trimmed);
+      } else {
+        askGone.value = withTiming(1, { duration: 300, easing: EASE_OUT_QUINT });
+        later(() => setSentTo(trimmed), 180);
+      }
     } catch (error) {
-      // auth/user-not-found is intentionally handled as a success, not a
-      // distinct error: the message above is deliberately vague about
-      // whether an account exists so this screen can't be used to
-      // enumerate registered emails. Showing "no account found" here would
-      // undo that protection.
-      if (error.code === 'auth/user-not-found') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        showAppAlert(
-          "Email Sent",
-          "If an account exists for that email address, a password reset link has been sent. Please check your inbox and spam folder.",
-          [
-            {
-              text: "OK",
-              onPress: () => navigation.goBack()
-            }
-          ]
-        );
+      console.error(error.code, error.message);
+      setLoading(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      if (error.code === 'auth/invalid-email') {
+        setFieldError('Enter a valid email address.');
+        shake('email');
         return;
       }
-
-      let errorMessage = "Something went wrong. Please try again.";
-
-      if (error.code === 'auth/network-request-failed') {
-        errorMessage = "No internet connection. Please check your connection and try again.";
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = "Please enter a valid email address.";
-      }
-
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showAppAlert("Reset Failed", errorMessage);
-      console.error(error.code, error.message);
-    } finally {
-      setLoading(false);
+      setAlert(alertForResetError(error.code));
     }
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <AnimatedPressable
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </AnimatedPressable>
-      </View>
+  const handleResend = async () => {
+    if (cooldown > 0 || !sentTo) return;
+    Haptics.selectionAsync();
+    setCooldown(RESEND_COOLDOWN_S);
+    try {
+      await requestReset(sentTo);
+      setToast('Reset link sent again.');
+    } catch (error) {
+      console.error(error.code, error.message);
+      setCooldown(0);
+      setToast(error.code === 'auth/network-request-failed' ? 'No internet connection. Try again.' : "Couldn't resend. Try again.");
+    }
+    later(() => setToast(''), 1800);
+  };
 
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — password reset will be unavailable until you&apos;re back online.
-          </Text>
+  const skip = reduceMotion;
+
+  return (
+    <AuthScaffold
+      navigation={navigation}
+      isConnected={isConnected}
+      offlineText="No internet connection — you can reset your password once you're back online."
+      overlay={<SuccessToast text={toast} />}
+    >
+      {!sentTo ? (
+        <Animated.View style={askStyle}>
+          <RiseTitle delay={T.title} skip={skip}>Reset your password</RiseTitle>
+          <FadeUp delay={T.sub} skip={skip}>
+            <Subtitle>
+              Enter the email you signed up with and we&apos;ll send you a link to set a new password.
+            </Subtitle>
+          </FadeUp>
+
+          <AuthAlert alert={alert} />
+
+          <FadeUp delay={T.email} skip={skip}>
+            <Field
+              label="Email address"
+              value={email}
+              onChangeText={handleEmailChange}
+              status={fieldError ? 'bad' : null}
+              message={fieldError}
+              shakeKey={shakes.email}
+              placeholder="you@email.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="username"
+              autoComplete="email"
+              autoFocus={!route?.params?.email}
+              returnKeyType="send"
+              onSubmitEditing={handleSend}
+            />
+          </FadeUp>
+
+          <FadeUp delay={T.send} skip={skip} style={styles.sendWrap}>
+            <Button
+              variant="primary"
+              label={!isConnected ? 'No Internet Connection' : 'Send Reset Link'}
+              fontSize={16}
+              onPress={handleSend}
+              disabled={!email.trim() || !isConnected}
+              loading={loading}
+            />
+          </FadeUp>
+        </Animated.View>
+      ) : (
+        <View style={styles.done} accessibilityLiveRegion="polite">
+          <SentEnvelope />
+          <FadeUp delay={250} skip={skip}>
+            <Text style={styles.doneTitle} accessibilityRole="header">
+              Check your email
+            </Text>
+          </FadeUp>
+          <FadeUp delay={350} skip={skip} style={styles.doneCopy}>
+            <Text style={styles.doneText}>
+              If an account exists for <Text style={styles.doneEmail}>{sentTo}</Text>, we&apos;ve sent a link to
+              reset your password.
+            </Text>
+            <Text style={styles.tip}>It can take a few minutes. Check your Spam or Promotions folder too.</Text>
+          </FadeUp>
+          <FadeUp delay={450} skip={skip} style={styles.actions}>
+            <Button variant="primary" label="Back to Log In" fontSize={16} onPress={() => navigation.goBack()} />
+            <Pressable
+              onPress={handleResend}
+              disabled={cooldown > 0}
+              style={styles.resend}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: cooldown > 0 }}
+            >
+              <Text style={[styles.resendText, cooldown > 0 && styles.resendWaiting]}>
+                {cooldown > 0 ? `Resend link in ${cooldown}s` : 'Resend link'}
+              </Text>
+            </Pressable>
+          </FadeUp>
         </View>
       )}
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* Content */}
-          <View style={styles.content}>
-            <Animated.View
-              entering={reduceMotion ? undefined : FadeIn.duration(280).easing(EASE_OUT_QUART)}
-              style={styles.iconCircle}
-            >
-              <Ionicons name="key-outline" size={36} color={Colors.light.tint} />
-            </Animated.View>
-
-            <Animated.Text
-              entering={reduceMotion ? undefined : FadeIn.duration(260).delay(40).easing(EASE_OUT_QUART)}
-              style={styles.title}
-            >
-              Forgot Password
-            </Animated.Text>
-            <Animated.Text
-              entering={reduceMotion ? undefined : FadeIn.duration(240).delay(80).easing(EASE_OUT_QUART)}
-              style={styles.subtitle}
-            >
-              Enter your email address and we&apos;ll send you a link to reset your password.
-            </Animated.Text>
-
-            {/* Form */}
-            <Animated.View
-              entering={reduceMotion ? undefined : FadeInDown.duration(280).delay(140).easing(EASE_OUT_QUART)}
-              style={styles.form}
-            >
-              <Animated.View style={emailShakeStyle}>
-                <Input
-                  label="Email Address"
-                  value={email}
-                  onChangeText={handleEmailChange}
-                  placeholder="Enter your email"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  textContentType="username"
-                  autoComplete="email"
-                  returnKeyType="done"
-                  onSubmitEditing={handlePasswordReset}
-                  error={error}
-                  accessibilityLabel="Email address"
-                  accessibilityHint="Enter the email address for your account to receive a password reset link"
-                />
-              </Animated.View>
-
-              <View style={styles.resetButtonWrap}>
-                <Button
-                  variant="primary"
-                  label={!isConnected ? 'No Internet Connection' : 'Send Reset Link'}
-                  onPress={handlePasswordReset}
-                  disabled={loading || !isConnected}
-                  loading={loading}
-                />
-              </View>
-
-              <View style={styles.trustRow}>
-                <Ionicons name="shield-checkmark-outline" size={13} color={Colors.light.icon} />
-                <Text style={styles.trustText}>Your information stays private and secure</Text>
-              </View>
-
-              <AnimatedPressable
-                style={styles.cancelButton}
-                onPress={() => {
-                  Haptics.selectionAsync();
-                  navigation.goBack();
-                }}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                accessibilityRole="button"
-                accessibilityLabel="Cancel"
-                accessibilityHint="Returns to the sign in screen"
-              >
-                <Text style={styles.cancelText}>Cancel</Text>
-              </AnimatedPressable>
-            </Animated.View>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+    </AuthScaffold>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.light.background },
-  header: { paddingHorizontal: 20, paddingVertical: 16 },
-  backButton: { width: 40, height: 40, justifyContent: 'center' },
-  offlineBanner: {
-    flexDirection: 'row',
+  sendWrap: { marginTop: 6 },
+
+  done: { alignItems: 'center', paddingTop: 18 },
+  envelope: {
+    width: 96,
+    height: 96,
+    borderRadius: 28,
+    backgroundColor: '#F3E3DA',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
-  },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-  keyboardView: { flex: 1 },
-  scrollContent: { flexGrow: 1 },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 48,
     justifyContent: 'center',
+    marginBottom: 22,
   },
-  iconCircle: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: Colors.light.tint + '20',
-    justifyContent: 'center',
-    alignItems: 'center',
-    alignSelf: 'center',
-    marginBottom: 28,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: Colors.light.text,
-    textAlign: 'center',
-    marginBottom: 14,
-  },
-  subtitle: {
-    fontSize: 16,
+  doneTitle: { fontSize: 26, lineHeight: 31, fontWeight: '700', letterSpacing: -0.5, color: Colors.light.text, textAlign: 'center' },
+  doneCopy: { alignItems: 'center' },
+  doneText: {
+    fontSize: 13.5,
+    lineHeight: 21,
     color: Colors.light.icon,
     textAlign: 'center',
-    lineHeight: 24,
-    marginBottom: 40,
-    paddingHorizontal: 8,
+    marginTop: 8,
+    maxWidth: 300,
   },
-  form: { marginTop: 0 },
-  resetButtonWrap: { marginTop: 8 },
-  trustRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 14,
+  doneEmail: { color: Colors.light.text, fontWeight: '600' },
+  tip: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: '#37412F',
+    backgroundColor: '#EEF0EA',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginTop: 12,
+    maxWidth: 320,
+    textAlign: 'center',
+    overflow: 'hidden',
   },
-  trustText: { fontSize: 12, color: Colors.light.icon },
-  cancelButton: { alignItems: 'center', marginTop: 20, paddingVertical: 14 },
-  cancelText: { fontSize: 16, color: Colors.light.tint, fontWeight: '500' },
+  actions: { alignSelf: 'stretch', gap: 10, marginTop: 28 },
+  resend: { alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 8 },
+  resendText: { fontSize: 13, fontWeight: '500', color: Colors.light.text, textDecorationLine: 'underline' },
+  resendWaiting: { color: '#A89F97', textDecorationLine: 'none' },
 });

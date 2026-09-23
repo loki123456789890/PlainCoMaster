@@ -139,7 +139,13 @@ export default function App() {
                     />
 
                     {/* New Forgot Password Screen */}
-                    <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+                    {/* Opened from Log In, over the same header lockup: a fade,
+                        not a slide, so the lockup doesn't move. */}
+                    <Stack.Screen
+                      name="ForgotPassword"
+                      component={ForgotPasswordScreen}
+                      options={{ animation: 'fade' }}
+                    />
 
                     {/* iPhone 16 Pro Max - 14 */}
                     <Stack.Screen name="Shop" component={ShopScreen} />

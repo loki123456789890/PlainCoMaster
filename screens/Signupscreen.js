@@ -165,6 +165,19 @@ export default function SignupScreen({ navigation }) {
     setAgreed((v) => !v);
   };
 
+  // "I Agree" in the policy sheet: the sheet slides away first, then the
+  // box ticks where the person can see it happen. Only ever ticks — someone
+  // who already agreed isn't un-agreed by agreeing again.
+  const agreeTimer = useRef(null);
+  useEffect(() => () => clearTimeout(agreeTimer.current), []);
+  const handleAgreeFromPolicy = () => {
+    setShowPrivacyModal(false);
+    agreeTimer.current = setTimeout(() => {
+      Haptics.selectionAsync();
+      setAgreed(true);
+    }, 320);
+  };
+
   const handleSignup = async () => {
     if (loading || done) return;
 
@@ -288,7 +301,11 @@ export default function SignupScreen({ navigation }) {
       overlay={
         <>
           <SuccessToast text={done ? 'Welcome to PlainCo! Taking you to Home…' : ''} />
-          <PrivacyPolicyModal visible={showPrivacyModal} onClose={() => setShowPrivacyModal(false)} />
+          <PrivacyPolicyModal
+            visible={showPrivacyModal}
+            onClose={() => setShowPrivacyModal(false)}
+            onAgree={handleAgreeFromPolicy}
+          />
         </>
       }
     >

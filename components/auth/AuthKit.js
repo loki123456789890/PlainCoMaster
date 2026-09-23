@@ -238,14 +238,18 @@ export function AuthAlert({ alert }) {
 const ERR_INK = '#7A1B12';
 const INFO_INK = '#37412F';
 
-// "Welcome to PlainCo!" — slides up from the bottom once it has worked.
+// "Welcome to PlainCo!" — slides up from the bottom once it has worked,
+// and back down when `text` is cleared (the last text stays on it while
+// it goes, rather than blanking mid-slide).
 export function SuccessToast({ text }) {
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const progress = useSharedValue(0);
+  const [shown, setShown] = useState(text);
   useEffect(() => {
-    if (!text) return;
-    progress.value = reduceMotion ? 1 : withTiming(1, { duration: 450, easing: EASE_OUT_QUINT });
+    if (text) setShown(text);
+    const to = text ? 1 : 0;
+    progress.value = reduceMotion ? to : withTiming(to, { duration: 450, easing: EASE_OUT_QUINT });
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
   const animated = useAnimatedStyle(() => ({
     opacity: progress.value,
@@ -260,7 +264,7 @@ export function SuccessToast({ text }) {
       <View style={styles.toastIcon}>
         <Ionicons name="checkmark" size={13} color="#fff" />
       </View>
-      <Text style={styles.toastText}>{text || ''}</Text>
+      <Text style={styles.toastText}>{shown || ''}</Text>
     </Animated.View>
   );
 }
