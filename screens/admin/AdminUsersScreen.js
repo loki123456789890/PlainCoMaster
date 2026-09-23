@@ -222,16 +222,10 @@ export default function AdminUsersScreen({ navigation }) {
 
   const handleRetry = () => setRetryToken((t) => t + 1);
 
-  // Reached from Profilescreen.js's staff-portal row via navigate(), which
-  // pushes on top of the customer stack — canGoBack() is true there, so a
-  // normal pop is correct. Reached from AdminLoginScreen via replace(), it
-  // isn't, and the same tap has to exit the portal instead — see
-  // confirmLogout below, copied from StoreManagerDashboardScreen's logout.
-  const handleBackPress = () => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
+  // This is the Platform Admin's home screen — AdminLoginScreen resets the
+  // stack to it — so there is no Back, only Log out, like the Store
+  // Manager dashboard. confirmLogout below is copied from that screen.
+  const handleOpenLogout = () => {
     Haptics.selectionAsync();
     setLogoutVisible(true);
   };
@@ -506,10 +500,6 @@ export default function AdminUsersScreen({ navigation }) {
     editFormData.role === ROLE_SELLER &&
     (!editFormData.storeId ||
       (editFormData.storeId === NEW_STORE && !editFormData.newStoreName.trim()));
-  // Decides both the header control's behavior and what it looks like —
-  // see handleBackPress above.
-  const canGoBack = navigation.canGoBack();
-
   return (
     <SafeAreaView style={styles.container}>
       <ConfirmDialog
@@ -561,29 +551,11 @@ export default function AdminUsersScreen({ navigation }) {
 
       {/* Header */}
       <View style={styles.header}>
-        {/* Log out has its own button, always. It used to share the back
-            button's slot and appear only when there was nothing to go back
-            to — but the usual way in (Login → Staff Portal) always leaves
-            a screen behind, so a Platform Admin never saw it. */}
+        {/* Log out, where Back would be on other screens — this is the
+            portal's home, so there is nothing to go back to. */}
         <View style={styles.headerActions}>
-          {canGoBack ? (
-            <AnimatedPressable
-              onPress={handleBackPress}
-              style={styles.backButton}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-            >
-              <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-            </AnimatedPressable>
-          ) : (
-            <View style={styles.headerSpacer} />
-          )}
           <AnimatedPressable
-            onPress={() => {
-              Haptics.selectionAsync();
-              setLogoutVisible(true);
-            }}
+            onPress={handleOpenLogout}
             style={styles.backButton}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             accessibilityRole="button"
@@ -591,6 +563,7 @@ export default function AdminUsersScreen({ navigation }) {
           >
             <Ionicons name="log-out-outline" size={22} color={Colors.light.danger} />
           </AnimatedPressable>
+          <View style={styles.headerSpacer} />
         </View>
         {/* The signed-in role is named in the header, not just implied by
             which screen you happen to be on. Before the split there was

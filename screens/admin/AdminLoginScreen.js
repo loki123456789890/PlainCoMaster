@@ -210,7 +210,13 @@ export default function AdminLoginScreen({ navigation }) {
       // Shared with LandingScreen, which needs the same answer when it
       // skips itself for a persisted staff session. Two copies of this
       // mapping would drift the first time a role or a route is renamed.
-      navigation.replace(getHomeRouteForRole(role));
+      //
+      // reset, not replace: the portal becomes the only screen. replace
+      // left the customer Login screen underneath, so Back — the header
+      // arrow, or Android's back gesture — took a signed-in staff member
+      // to a login form. Now Back leaves the app, like any home screen,
+      // and Log out is the way out of the portal.
+      navigation.reset({ index: 0, routes: [{ name: getHomeRouteForRole(role) }] });
     } catch (error) {
       setLoading(false);
       console.error('Staff login error:', error);
