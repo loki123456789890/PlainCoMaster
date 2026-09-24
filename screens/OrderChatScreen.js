@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  ScrollView,
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
@@ -22,7 +23,7 @@ import { auth } from '../firebaseConfig';
 import { Colors, Spacing, Radius } from '../constants/theme';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
-import Avatar from '../components/ui/Avatar';
+import StoreLogo from '../components/shop/StoreLogo';
 import { useStores } from '../context/StoreContext';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { showAppAlert } from '../utils/appAlert';
@@ -48,12 +49,184 @@ import {
 // than that has stopped being about the parcel.
 const MESSAGE_LIMIT = 200;
 
+// Just the time: the day chip above each day's first message says which
+// day it was.
 function formatMessageTime(date) {
   if (!date) return 'Sending…';
-  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatDay(date) {
   const today = new Date();
-  if (date.toDateString() === today.toDateString()) return time;
-  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return 'Today';
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+// A message not yet stamped by the server counts as today.
+const dayKey = (message) => (message?.createdAt || new Date()).toDateString();
+
+// The order's status in the pinned strip: Clay while it's moving, Moss
+// once delivered, Rust if cancelled. "Pending" reads "Placed" to a buyer,
+// as on their order page.
+const STATUS_PILL = {
+  pending: { customer: 'Placed', store: 'Pending', color: Colors.light.tint },
+  processing: { label: 'Processing', color: Colors.light.tint },
+  shipped: { label: 'Shipped', color: Colors.light.tint },
+  delivered: { label: 'Delivered', color: Colors.light.success },
+  cancelled: { label: 'Cancelled', color: Colors.light.danger },
+};
+
+// What each side can start a conversation with. "photo" opens the photo
+// picker; the rest put a message in the box to edit before sending.
+const STARTERS = {
+  store: [
+    { key: 'photo', icon: 'camera-outline', label: 'Send a photo of the item' },
+    {
+      key: 'address',
+      icon: 'home-outline',
+      label: 'Confirm delivery address',
+      text: (order) => {
+        const a = order?.shippingAddress;
+        return a?.address
+          ? `Hi! Just confirming your delivery address: ${a.address}, ${a.city}. Is that right?`
+          : 'Hi! Could you confirm your delivery address?';
+      },
+    },
+    {
+      key: 'ships',
+      icon: 'time-outline',
+      label: 'Let them know when it ships',
+      text: () => 'Hi! We’re getting your order ready. I’ll message you here as soon as it ships.',
+    },
+  ],
+  customer: [
+    {
+      key: 'photo',
+      icon: 'camera-outline',
+      label: 'Ask for a photo of the item',
+      text: () => 'Hi! Could you send a photo of the exact piece before it ships?',
+    },
+    {
+      key: 'size',
+      icon: 'resize-outline',
+      label: 'Ask about the fit',
+      text: () => 'Hi! Could you share the measurements for this item?',
+    },
+    {
+      key: 'ships',
+      icon: 'time-outline',
+      label: 'Ask when it ships',
+      text: () => 'Hi! When do you think my order will ship?',
+    },
+  ],
+};
+
+// The other person, in the header: the store's logo, or the buyer's
+// initial (user accounts are private, so there is no photo of them).
+function PersonAvatar({ side, store, title, size }) {
+  if (side === 'customer') return <StoreLogo uri={store?.logoUrl} size={size} radius={size * 0.32} />;
+  const initial = (title || '?').trim().charAt(0).toUpperCase() || '?';
+  return (
+    <View style={[styles.initial, { width: size, height: size, borderRadius: size / 2 }]}>
+      <Text style={[styles.initialText, { fontSize: size * 0.38 }]}>{initial}</Text>
+    </View>
+  );
+}
+
+// The order this conversation is about, pinned under the header on both
+// sides: the first item's photo and name, its options, the total and
+// where the order is. Tapping it goes back to the order.
+function OrderStrip({ order, side, onPress }) {
+  if (!order) return null;
+  const items = order.items || [];
+  const first = items[0] || {};
+  const name = items.length > 1 ? `${first.name || 'Item'} +${items.length - 1} more` : first.name || 'Order';
+  const specs = [first.size, first.color].filter(Boolean).join(' · ');
+  const pill = STATUS_PILL[order.status] || STATUS_PILL.pending;
+  const pillLabel = pill.label || pill[side];
+  const total = `₱${Number(order.total || 0).toFixed(2)}`;
+  const image = first.image || first.imageUrl;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={styles.strip}
+      accessibilityRole="button"
+      accessibilityLabel={`${name}, ${specs ? `${specs}, ` : ''}${total}, ${pillLabel}. Back to the order.`}
+    >
+      {image ? (
+        <Image source={{ uri: image }} style={styles.stripThumb} contentFit="cover" transition={150} />
+      ) : (
+        <View style={[styles.stripThumb, styles.stripThumbEmpty]}>
+          <Ionicons name="shirt-outline" size={18} color={Colors.light.icon} />
+        </View>
+      )}
+      <View style={styles.flex}>
+        <Text style={styles.stripName} numberOfLines={1}>{name}</Text>
+        <Text style={styles.stripSpecs} numberOfLines={1}>
+          {specs ? `${specs} · ` : ''}
+          <Text style={styles.stripPrice}>{total}</Text>
+        </Text>
+      </View>
+      <Text style={[styles.pill, { color: pill.color, backgroundColor: pill.color + '1F' }]}>{pillLabel}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// Before the first message: a nudge towards the one thing ukay buyers
+// most want, a photo of the real piece, and three ways to begin.
+function ChatStart({ side, order, onStarter }) {
+  const first = order?.items?.[0];
+  const image = first?.image || first?.imageUrl;
+  const store = side === 'store';
+  return (
+    <View style={styles.start}>
+      <View style={styles.polaroids} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <View style={[styles.polaroid, styles.polaroidA]}>
+          <View style={[styles.polaroidImg, styles.polaroidEmpty]}>
+            <Ionicons name="image-outline" size={26} color={Colors.light.secondary} />
+          </View>
+        </View>
+        <View style={[styles.polaroid, styles.polaroidB]}>
+          {image ? (
+            <Image source={{ uri: image }} style={styles.polaroidImg} contentFit="cover" />
+          ) : (
+            <View style={[styles.polaroidImg, styles.polaroidEmpty]}>
+              <Ionicons name="shirt-outline" size={26} color={Colors.light.secondary} />
+            </View>
+          )}
+        </View>
+        <View style={styles.cam}>
+          <Ionicons name="camera" size={17} color="#fff" />
+        </View>
+      </View>
+      <Text style={styles.startTitle}>{store ? 'Show them the real piece' : 'Ask about the real piece'}</Text>
+      <Text style={styles.startBody}>
+        {store
+          ? 'Every pre-loved item is one of a kind. A quick photo of this exact piece before it ships builds trust.'
+          : 'Ask for a photo, the measurements or when it ships. The store will reply here.'}
+      </Text>
+      <View style={styles.starters}>
+        {STARTERS[side].map((s, i) => (
+          <TouchableOpacity
+            key={s.key}
+            onPress={() => onStarter(s)}
+            activeOpacity={0.7}
+            style={[styles.starter, i === 0 && styles.starterPrimary]}
+            accessibilityRole="button"
+            accessibilityLabel={s.label}
+          >
+            <Ionicons name={s.icon} size={17} color={Colors.light.tint} />
+            <Text style={[styles.starterText, i === 0 && styles.starterTextPrimary]}>{s.label}</Text>
+            <Ionicons name="chevron-forward" size={15} color={Colors.light.icon} />
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 // Not the product vocabulary's wording: "permission to upload product
@@ -104,11 +277,12 @@ function reactionSummary(reactions) {
   return [...counts.entries()];
 }
 
-function MessageBubble({ message, mine, quote, whoLabel, onLongPress, onOpenImage, onOpenReactions }) {
+function MessageBubble({ message, mine, quote, whoLabel, onLongPress, onOpenImage, onOpenReactions, avatar }) {
   if (message.deleted) {
     return (
       <View style={[styles.bubbleRow, mine ? styles.bubbleRowMine : styles.bubbleRowTheirs]}>
         <View style={[styles.bubble, styles.bubbleUnsent]}>
+          <Ionicons name="arrow-undo-outline" size={14} color={Colors.light.icon} />
           <Text style={styles.unsentText}>
             {mine ? 'You unsent a message' : `${whoLabel(message.sender)} unsent a message`}
           </Text>
@@ -118,70 +292,92 @@ function MessageBubble({ message, mine, quote, whoLabel, onLongPress, onOpenImag
   }
 
   const reactions = reactionSummary(message.reactions);
+  const photoOnly = message.imageUrl && !message.text && !quote;
   return (
     <View style={[styles.bubbleRow, mine ? styles.bubbleRowMine : styles.bubbleRowTheirs]}>
-      <Pressable
-        onLongPress={onLongPress}
-        delayLongPress={300}
-        accessibilityRole="button"
-        accessibilityHint="Long press for reactions, reply, copy and more"
-        accessibilityLabel={
-          `${mine ? 'You' : whoLabel(message.sender)}: ` +
-          `${message.imageUrl ? 'photo. ' : ''}${message.text}${message.edited ? ', edited' : ''}`
-        }
-      >
-        {({ pressed }) => (
-          <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, pressed && styles.bubblePressed]}>
-            {quote ? (
-              <View style={styles.quote}>
-                <Text style={styles.quoteWho}>
-                  {whoLabel(quote.sender)}
-                </Text>
-                <Text style={[styles.quoteText, quote.muted && styles.quoteMuted]} numberOfLines={2}>
-                  {quote.hasImage && !quote.muted ? '📷 ' : ''}{quote.text}
-                </Text>
-              </View>
-            ) : null}
-            {message.imageUrl ? (
-              <Pressable
-                onPress={() => onOpenImage(message.imageUrl)}
-                onLongPress={onLongPress}
-                delayLongPress={300}
-                accessibilityRole="imagebutton"
-                accessibilityLabel="Photo. Tap to view full size."
-              >
-                <Image
-                  source={{ uri: message.imageUrl }}
-                  style={[styles.bubbleImage, message.text ? styles.bubbleImageWithText : null]}
-                  contentFit="cover"
-                  transition={150}
-                />
-              </Pressable>
-            ) : null}
-            {message.text ? <Text style={styles.bubbleText}>{message.text}</Text> : null}
-          </View>
-        )}
-      </Pressable>
-      {reactions.length > 0 ? (
-        // Tappable, as in Messenger: shows who reacted, and yours can be
-        // taken back from there.
-        <TouchableOpacity
-          onPress={onOpenReactions}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          style={[styles.reactionPill, mine ? styles.reactionPillMine : styles.reactionPillTheirs]}
+      {/* The other side's small avatar, beside the last bubble of a run;
+          the others keep its space so a run lines up. */}
+      {!mine ? <View style={styles.miniSlot}>{avatar}</View> : null}
+      <View style={mine ? styles.bubbleColMine : styles.bubbleColTheirs}>
+        <Pressable
+          onLongPress={onLongPress}
+          delayLongPress={300}
           accessibilityRole="button"
-          accessibilityLabel={`Reactions: ${reactions.map(([emoji]) => emoji).join(' ')}. Tap to see who reacted.`}
+          accessibilityHint="Long press for reactions, reply, copy and more"
+          accessibilityLabel={
+            `${mine ? 'You' : whoLabel(message.sender)}: ` +
+            `${message.imageUrl ? 'photo. ' : ''}${message.text}${message.edited ? ', edited' : ''}`
+          }
         >
-          {reactions.map(([emoji, count]) => (
-            <Text key={emoji} style={styles.reactionPillText}>
-              {emoji}{count > 1 ? ` ${count}` : ''}
-            </Text>
-          ))}
-        </TouchableOpacity>
-      ) : null}
-      <Text style={styles.bubbleTime}>
-        {formatMessageTime(message.createdAt)}{message.edited ? ' · Edited' : ''}
-      </Text>
+          {({ pressed }) => (
+            <View
+              style={[
+                styles.bubble,
+                mine ? styles.bubbleMine : styles.bubbleTheirs,
+                message.imageUrl && styles.bubblePhoto,
+                pressed && styles.bubblePressed,
+              ]}
+            >
+              {quote ? (
+                <View style={[styles.quote, mine && styles.quoteMine, message.imageUrl && styles.quoteInPhoto]}>
+                  <Text style={[styles.quoteWho, mine && styles.onClay]}>
+                    {whoLabel(quote.sender)}
+                  </Text>
+                  <Text
+                    style={[styles.quoteText, mine && styles.onClaySoft, quote.muted && styles.quoteMuted]}
+                    numberOfLines={2}
+                  >
+                    {quote.hasImage && !quote.muted ? '📷 ' : ''}{quote.text}
+                  </Text>
+                </View>
+              ) : null}
+              {message.imageUrl ? (
+                <Pressable
+                  onPress={() => onOpenImage(message.imageUrl)}
+                  onLongPress={onLongPress}
+                  delayLongPress={300}
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel="Photo. Tap to view full size."
+                >
+                  <Image
+                    source={{ uri: message.imageUrl }}
+                    style={[styles.bubbleImage, photoOnly && styles.bubbleImageAlone]}
+                    contentFit="cover"
+                    transition={150}
+                  />
+                </Pressable>
+              ) : null}
+              {message.text ? (
+                <Text
+                  style={[styles.bubbleText, mine && styles.onClay, message.imageUrl && styles.bubbleCaption]}
+                >
+                  {message.text}
+                </Text>
+              ) : null}
+            </View>
+          )}
+        </Pressable>
+        {reactions.length > 0 ? (
+          // Tappable, as in Messenger: shows who reacted, and yours can be
+          // taken back from there.
+          <TouchableOpacity
+            onPress={onOpenReactions}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            style={[styles.reactionPill, mine ? styles.reactionPillMine : styles.reactionPillTheirs]}
+            accessibilityRole="button"
+            accessibilityLabel={`Reactions: ${reactions.map(([emoji]) => emoji).join(' ')}. Tap to see who reacted.`}
+          >
+            {reactions.map(([emoji, count]) => (
+              <Text key={emoji} style={styles.reactionPillText}>
+                {emoji}{count > 1 ? ` ${count}` : ''}
+              </Text>
+            ))}
+          </TouchableOpacity>
+        ) : null}
+        <Text style={styles.bubbleTime}>
+          {formatMessageTime(message.createdAt)}{message.edited ? ' · Edited' : ''}
+        </Text>
+      </View>
     </View>
   );
 }
@@ -296,6 +492,10 @@ export default function OrderChatScreen({ navigation, route }) {
   // side has no picture of the buyer: user accounts are private to them.
   const { getStore } = useStores();
   const chatStore = side === 'customer' ? getStore(storeId) : null;
+  // The order document, for the pinned strip and the starters. Already
+  // watched below for the read marker.
+  const [order, setOrder] = useState(null);
+  const [inputFocused, setInputFocused] = useState(false);
   const { isConnected } = useNetworkStatus();
   const uid = auth.currentUser?.uid;
 
@@ -353,7 +553,9 @@ export default function OrderChatScreen({ navigation, route }) {
     const unsubscribeOrder = onSnapshot(
       orderRef(customerId, orderId),
       (snapshot) => {
-        if (!snapshot.exists() || markingRead.current) return;
+        if (!snapshot.exists()) return;
+        setOrder(snapshot.data());
+        if (markingRead.current) return;
         if (!hasUnread(chatFields(snapshot.data()), side)) return;
         markingRead.current = true;
         markRead(customerId, orderId, side)
@@ -558,10 +760,22 @@ export default function OrderChatScreen({ navigation, route }) {
   const hasWords = draft.trim().length > 0;
   const canSend = !busy && isConnected && (hasWords || (editing && editing.imageUrl));
 
-  const emptySubtitle =
-    side === 'store'
-      ? 'Send the buyer a photo of the exact piece before it ships, or ask about their delivery.'
-      : 'Ask about the condition, sizing, or delivery. The store will reply here.';
+  const handleStarter = (starter) => {
+    Haptics.selectionAsync();
+    if (starter.key === 'photo' && side === 'store') {
+      handleAddPhoto();
+      return;
+    }
+    setDraft(starter.text(order));
+    inputRef.current?.focus();
+  };
+
+  // The other side's mini avatar, for the last bubble of each of their runs.
+  const mini = (
+    <View style={styles.mini}>
+      <PersonAvatar side={side} store={chatStore} title={title} size={26} />
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -575,14 +789,13 @@ export default function OrderChatScreen({ navigation, route }) {
         >
           <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
         </TouchableOpacity>
-        <View style={styles.headerText}>
-          <View style={styles.headerTitleRow}>
-            {chatStore ? <Avatar uri={chatStore.logoUrl} size={24} icon="storefront-outline" /> : null}
-            <Text style={styles.headerTitle} numberOfLines={1}>{title || 'Messages'}</Text>
-          </View>
-          <Text style={styles.headerSubtitle}>Order {formatOrderNumber(orderId)}</Text>
+        <PersonAvatar side={side} store={chatStore} title={title} size={38} />
+        <View style={styles.headerText} accessible accessibilityRole="header">
+          <Text style={styles.headerTitle} numberOfLines={1}>{title || 'Messages'}</Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            {side === 'customer' ? 'Seller' : 'Buyer'} · Order {formatOrderNumber(orderId)}
+          </Text>
         </View>
-        <View style={styles.backButton} />
       </View>
 
       {!isConnected && (
@@ -591,6 +804,8 @@ export default function OrderChatScreen({ navigation, route }) {
           <Text style={styles.offlineBannerText}>No internet connection — messages can’t be sent.</Text>
         </View>
       )}
+
+      <OrderStrip order={order} side={side} onPress={() => navigation.goBack()} />
 
       <KeyboardAvoidingView
         style={styles.flex}
@@ -617,9 +832,9 @@ export default function OrderChatScreen({ navigation, route }) {
             </View>
           </View>
         ) : messages.length === 0 ? (
-          <View style={styles.center}>
-            <EmptyState icon="chatbubbles-outline" title="No messages yet" subtitle={emptySubtitle} />
-          </View>
+          <ScrollView contentContainerStyle={styles.startScroll} keyboardShouldPersistTaps="handled">
+            <ChatStart side={side} order={order} onStarter={handleStarter} />
+          </ScrollView>
         ) : (
           // Inverted, newest first in the data: the list stays pinned to
           // the latest message as new ones arrive and the keyboard opens.
@@ -629,17 +844,31 @@ export default function OrderChatScreen({ navigation, route }) {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
-            renderItem={({ item }) => (
-              <MessageBubble
-                message={item}
-                mine={item.sender === side}
-                quote={resolveQuote(item.replyTo, byId)}
-                whoLabel={whoLabel}
-                onLongPress={() => openActions(item)}
-                onOpenImage={setViewerUrl}
-                onOpenReactions={() => setReactionsFor(item)}
-              />
-            )}
+            // Newest first, so index - 1 is the next message down the
+            // screen and index + 1 the one above.
+            renderItem={({ item, index }) => {
+              const older = messages[index + 1];
+              const newer = messages[index - 1];
+              const newDay = !older || dayKey(older) !== dayKey(item);
+              const lastOfRun = !newer || newer.sender !== item.sender || dayKey(newer) !== dayKey(item);
+              return (
+                <View>
+                  {newDay ? (
+                    <Text style={styles.day}>{formatDay(item.createdAt || new Date())}</Text>
+                  ) : null}
+                  <MessageBubble
+                    message={item}
+                    mine={item.sender === side}
+                    quote={resolveQuote(item.replyTo, byId)}
+                    whoLabel={whoLabel}
+                    avatar={lastOfRun ? mini : null}
+                    onLongPress={() => openActions(item)}
+                    onOpenImage={setViewerUrl}
+                    onOpenReactions={() => setReactionsFor(item)}
+                  />
+                </View>
+              );
+            }}
           />
         )}
 
@@ -690,22 +919,24 @@ export default function OrderChatScreen({ navigation, route }) {
             <TouchableOpacity
               onPress={handleAddPhoto}
               disabled={busy || !isConnected}
-              style={styles.composerIcon}
+              style={[styles.composerIcon, (busy || !isConnected) && styles.composerIconOff]}
               accessibilityRole="button"
               accessibilityLabel="Send a photo"
             >
               <Ionicons
                 name="image-outline"
-                size={24}
-                color={busy || !isConnected ? Colors.light.border : Colors.light.icon}
+                size={22}
+                color={busy || !isConnected ? Colors.light.icon : Colors.light.tint}
               />
             </TouchableOpacity>
           ) : null}
           <TextInput
             ref={inputRef}
-            style={styles.input}
+            style={[styles.input, inputFocused && styles.inputFocused]}
             value={draft}
             onChangeText={setDraft}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             placeholder={editing ? 'Edit your message' : 'Write a message'}
             placeholderTextColor={Colors.light.icon}
             multiline
@@ -726,7 +957,11 @@ export default function OrderChatScreen({ navigation, route }) {
             {sending ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Ionicons name={editing ? 'checkmark' : 'send'} size={18} color="#fff" />
+              <Ionicons
+                name={editing ? 'checkmark' : 'send'}
+                size={18}
+                color={canSend ? '#fff' : Colors.light.icon}
+              />
             )}
           </TouchableOpacity>
         </View>
@@ -777,17 +1012,124 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 10,
     borderBottomWidth: 1,
     borderBottomColor: Colors.light.border,
   },
-  backButton: { width: 40, height: 40, justifyContent: 'center' },
-  headerText: { flex: 1, alignItems: 'center' },
-  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
+  backButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  headerText: { flex: 1, minWidth: 0 },
+  headerTitle: { fontSize: 15, fontWeight: '600', color: Colors.light.text },
   headerSubtitle: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
+  initial: {
+    backgroundColor: Colors.light.secondary + '24',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  initialText: { fontWeight: '600', color: Colors.light.secondary },
+
+  // Pinned order strip
+  strip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 2,
+    padding: 8,
+    paddingRight: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: '#fff',
+  },
+  stripThumb: { width: 40, height: 40, borderRadius: 10, backgroundColor: Colors.light.border },
+  stripThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  stripName: { fontSize: 13, fontWeight: '600', color: Colors.light.text },
+  stripSpecs: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
+  stripPrice: { color: Colors.light.highlight, fontWeight: '600' },
+  pill: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.pill,
+    overflow: 'hidden',
+  },
+
+  day: {
+    alignSelf: 'center',
+    fontSize: 11,
+    color: Colors.light.icon,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+    overflow: 'hidden',
+    marginTop: 8,
+    marginBottom: 10,
+  },
+
+  // Before the first message
+  startScroll: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 26, paddingVertical: 20 },
+  start: { alignItems: 'center' },
+  polaroids: { width: 150, height: 118, marginBottom: 22 },
+  polaroid: {
+    position: 'absolute',
+    width: 88,
+    height: 104,
+    padding: 7,
+    paddingBottom: 22,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: '#fff',
+  },
+  polaroidA: { left: 6, top: 10, transform: [{ rotate: '-9deg' }] },
+  polaroidB: { right: 6, top: 0, transform: [{ rotate: '7deg' }] },
+  polaroidImg: { flex: 1, borderRadius: 6, overflow: 'hidden' },
+  polaroidEmpty: { backgroundColor: Colors.light.secondary + '20', alignItems: 'center', justifyContent: 'center' },
+  cam: {
+    position: 'absolute',
+    right: -2,
+    bottom: -4,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.light.tint,
+    borderWidth: 3,
+    borderColor: Colors.light.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  startTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text, textAlign: 'center' },
+  startBody: {
+    fontSize: 13,
+    color: Colors.light.icon,
+    lineHeight: 20,
+    textAlign: 'center',
+    marginTop: 6,
+    maxWidth: 280,
+  },
+  starters: { alignSelf: 'stretch', gap: 8, marginTop: 22 },
+  starter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 46,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: '#fff',
+  },
+  starterPrimary: { borderColor: Colors.light.tint, backgroundColor: Colors.light.tint + '12' },
+  starterText: { flex: 1, fontSize: 13, fontWeight: '500', color: Colors.light.text },
+  starterTextPrimary: { color: Colors.light.tint, fontWeight: '600' },
 
   offlineBanner: {
     flexDirection: 'row',
@@ -803,31 +1145,44 @@ const styles = StyleSheet.create({
   retryWrap: { width: 200, marginTop: Spacing.sm },
   listContent: { paddingHorizontal: 16, paddingVertical: 12 },
 
-  bubbleRow: { marginVertical: 4, maxWidth: '80%' },
-  bubbleRowMine: { alignSelf: 'flex-end', alignItems: 'flex-end' },
-  bubbleRowTheirs: { alignSelf: 'flex-start', alignItems: 'flex-start' },
-  // Flat, like every other surface: the other side's bubble is a bordered
-  // card, and "mine" is a quiet Clay tint rather than a filled Clay block,
-  // which the design system keeps for the one primary action on a screen.
-  bubble: { borderRadius: Radius.lg, paddingHorizontal: 12, paddingVertical: 8 },
-  bubbleMine: { backgroundColor: Colors.light.tint + '1F', borderBottomRightRadius: Radius.sm },
+  bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginVertical: 3, maxWidth: '86%' },
+  bubbleRowMine: { alignSelf: 'flex-end', justifyContent: 'flex-end', maxWidth: '80%' },
+  bubbleRowTheirs: { alignSelf: 'flex-start' },
+  bubbleColMine: { alignItems: 'flex-end', flexShrink: 1 },
+  bubbleColTheirs: { alignItems: 'flex-start', flexShrink: 1 },
+  // Sits level with the bubble, above its time line.
+  miniSlot: { width: 26, marginBottom: 20 },
+  mini: { width: 26, height: 26 },
+  // Yours in solid Clay and theirs a white bordered card, so who said
+  // what reads at a glance, as in the approved preview.
+  bubble: { borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9 },
+  bubbleMine: { backgroundColor: Colors.light.tint, borderBottomRightRadius: 6 },
   bubbleTheirs: {
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: Colors.light.border,
-    borderBottomLeftRadius: Radius.sm,
+    borderBottomLeftRadius: 6,
   },
+  // A photo sits in the bubble with a thin frame around it.
+  bubblePhoto: { padding: 4 },
   bubblePressed: { opacity: 0.7 },
   bubbleUnsent: {
-    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 7,
+    borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: Colors.light.border,
     backgroundColor: 'transparent',
   },
-  unsentText: { fontSize: 14, fontStyle: 'italic', color: Colors.light.icon },
-  bubbleText: { fontSize: 15, lineHeight: 21, color: Colors.light.text },
-  bubbleImage: { width: 200, height: 200, borderRadius: Radius.md, backgroundColor: Colors.light.border },
-  bubbleImageWithText: { marginBottom: 6 },
+  unsentText: { fontSize: 13, fontStyle: 'italic', color: Colors.light.icon },
+  bubbleText: { fontSize: 14.5, lineHeight: 21, color: Colors.light.text },
+  bubbleCaption: { paddingHorizontal: 9, paddingTop: 7, paddingBottom: 4 },
+  onClay: { color: '#fff' },
+  onClaySoft: { color: 'rgba(255,255,255,0.85)' },
+  bubbleImage: { width: 200, height: 200, borderRadius: 14, backgroundColor: Colors.light.border },
+  bubbleImageAlone: { borderRadius: 14 },
   bubbleTime: { fontSize: 11, color: Colors.light.icon, marginTop: 3, marginHorizontal: 4 },
 
   // The quoted message inside a reply: a Clay rule down the left, like
@@ -840,6 +1195,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     marginBottom: 6,
   },
+  quoteMine: { borderLeftColor: 'rgba(255,255,255,0.7)' },
+  quoteInPhoto: { marginHorizontal: 8, marginTop: 6 },
   quoteWho: { fontSize: 12, fontWeight: '600', color: Colors.light.tint },
   quoteText: { fontSize: 13, color: Colors.light.icon, lineHeight: 18 },
   quoteMuted: { fontStyle: 'italic' },
@@ -892,7 +1249,15 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.light.border,
     backgroundColor: Colors.light.background,
   },
-  composerIcon: { width: 40, height: 44, justifyContent: 'center', alignItems: 'center' },
+  composerIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: Colors.light.tint + '14',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  composerIconOff: { backgroundColor: Colors.light.border },
   input: {
     flex: 1,
     minHeight: 44,
@@ -901,12 +1266,13 @@ const styles = StyleSheet.create({
     paddingTop: 11,
     paddingBottom: 11,
     borderRadius: 22,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: Colors.light.border,
     backgroundColor: '#fff',
-    fontSize: 15,
+    fontSize: 14.5,
     color: Colors.light.text,
   },
+  inputFocused: { borderColor: Colors.light.tint },
   sendButton: {
     width: 44,
     height: 44,
