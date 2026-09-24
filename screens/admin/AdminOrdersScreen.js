@@ -10,6 +10,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Platform } fr
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { showAppAlert } from '../../utils/appAlert';
 import Animated, {
   useSharedValue,
@@ -101,13 +102,13 @@ const nextStatusOf = (status) => {
 };
 
 // Each status's pill (ink on tint) and its colour in the summary bar.
-// Five distinct hues rather than the customer screens' collapsed Gold: a
-// manager triaging a queue needs "nothing started" and "being worked" and
-// "on its way" apart at a glance. None of them is Clay, which stays for
-// actions and selection only (DESIGN.md's One Accent Rule).
+// Distinct hues so a manager triaging a queue tells "nothing started",
+// "being worked" and "on its way" apart at a glance. Processing, the one
+// being worked on, is Clay, as it is on the buyer's side (the approved
+// orders-and-chat preview); it replaced a blue that wasn't in the palette.
 const STATUS = {
   pending: { label: 'Pending', ink: '#8E640C', bg: '#F6ECD2', bar: '#C9A227' },
-  processing: { label: 'Processing', ink: '#3D5A73', bg: '#E2EAF1', bar: '#7FA0BA' },
+  processing: { label: 'Processing', ink: '#A94F2E', bg: '#F7E7DF', bar: Colors.light.tint },
   shipped: { label: 'Shipped', ink: '#6A4C7A', bg: '#EDE5F1', bar: '#A887B8' },
   delivered: { label: 'Delivered', ink: '#465A3B', bg: '#E3E9DC', bar: '#9DB38A' },
   cancelled: { label: 'Cancelled', ink: '#A33A2A', bg: '#F6E0DA', bar: '#D0705E' },
@@ -601,6 +602,22 @@ export default function AdminOrdersScreen({ navigation, route }) {
     setConfirmingCancel(false);
   };
 
+  // The number a buyer quotes, copied to paste into an email or a note.
+  const [copiedId, setCopiedId] = useState(null);
+  const copiedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
+  const handleCopyNumber = async (order) => {
+    try {
+      await Clipboard.setStringAsync(`#${order.orderNumber}`);
+      Haptics.selectionAsync();
+      setCopiedId(order.id);
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopiedId(null), 1600);
+    } catch (error) {
+      console.error('Could not copy order number:', error);
+    }
+  };
+
   const handleOpenChat = (order) => {
     Haptics.selectionAsync();
     setOpenId(null);
@@ -784,12 +801,10 @@ export default function AdminOrdersScreen({ navigation, route }) {
 
   const noResultsFromFilter = Boolean(searchQuery) || activeTab !== 'all';
 
+  // The one action, pinned under the sheet. Messaging the buyer moved up
+  // into the customer row, so this is the sheet's only filled button.
   const renderSheetActions = (order) => {
     const next = nextStatusOf(order.status);
-    const chatLabel = hasUnread(order, 'store') ? 'New message' : 'Message buyer';
-    const chatButton = (
-      <Button variant="secondary" label={chatLabel} fontSize={15} onPress={() => handleOpenChat(order)} fullWidth />
-    );
 
     if (order.status === 'delivered' || order.status === 'cancelled') {
       const cancelled = order.status === 'cancelled';
@@ -805,7 +820,6 @@ export default function AdminOrdersScreen({ navigation, route }) {
               {cancelled ? 'This order was cancelled.' : 'This order is complete. No further changes.'}
             </Text>
           </View>
-          {chatButton}
         </>
       );
     }
@@ -852,7 +866,7 @@ export default function AdminOrdersScreen({ navigation, route }) {
           disabled={!isConnected}
           fullWidth
         />
-        {chatButton}
+        <Text style={styles.actHint}>The buyer&apos;s order page updates right away.</Text>
         {canCancelFrom(order.status) && (
           <Pressable
             onPress={() => {
@@ -1051,20 +1065,64 @@ export default function AdminOrdersScreen({ navigation, route }) {
       </ScrollView>
 
       {/* Status sheet */}
-      <Sheet visible={Boolean(openOrder)} onClose={closeSheet} locked={updating}>
+      <Sheet
+        visible={Boolean(openOrder)}
+        onClose={closeSheet}
+        locked={updating}
+        footer={sheetOrder ? <View style={styles.actions}>{renderSheetActions(sheetOrder)}</View> : null}
+      >
         {sheetOrder && (
           <View style={styles.sheet}>
-            <View style={styles.sheetHead}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.oid, { fontSize: 17 }]}>
+            <View>
+              <View style={styles.sheetHead}>
+                <Text style={[styles.oid, styles.sheetOid]}>
                   <Text style={styles.oidHash}>#</Text>
                   {sheetOrder.orderNumber}
                 </Text>
-                <Text style={styles.sheetSub} numberOfLines={1}>
-                  {formatRelativeTime(sheetOrder.date, now)} · {sheetOrder.customerEmail}
+                <Pressable
+                  onPress={() => handleCopyNumber(sheetOrder)}
+                  hitSlop={10}
+                  style={styles.copyBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel={copiedId === sheetOrder.id ? 'Order number copied' : 'Copy order number'}
+                >
+                  <Ionicons
+                    name={copiedId === sheetOrder.id ? 'checkmark' : 'copy-outline'}
+                    size={15}
+                    color={copiedId === sheetOrder.id ? Colors.light.success : Colors.light.icon}
+                  />
+                </Pressable>
+                <View style={{ flex: 1 }} />
+                <StatusPill status={sheetOrder.status} />
+              </View>
+              <Text style={styles.sheetSub} numberOfLines={1}>
+                Placed {formatRelativeTime(sheetOrder.date, now).toLowerCase()}
+                {sheetOrder.date ? ` · ${formatDateTime(sheetOrder.date)}` : ''}
+              </Text>
+            </View>
+
+            {/* The buyer, and the way into the order's chat. */}
+            <View style={styles.custRow}>
+              <View style={[styles.custAvatar, { backgroundColor: avatarTone(sheetOrder.customerEmail) }]}>
+                <Text style={styles.avatarText}>{sheetOrder.customerEmail.charAt(0).toUpperCase()}</Text>
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.custEmail} numberOfLines={1}>
+                  {sheetOrder.customerEmail}
+                </Text>
+                <Text style={styles.custMeta}>
+                  Customer · {sheetOrder.items.length} {sheetOrder.items.length === 1 ? 'item' : 'items'}
                 </Text>
               </View>
-              <StatusPill status={sheetOrder.status} />
+              <Pressable
+                onPress={() => handleOpenChat(sheetOrder)}
+                style={({ pressed }) => [styles.chatBtn, pressed && { opacity: 0.7 }]}
+                accessibilityRole="button"
+                accessibilityLabel={hasUnread(sheetOrder, 'store') ? 'Message buyer, new message' : 'Message buyer'}
+              >
+                <Ionicons name="chatbubble-outline" size={19} color={Colors.light.tint} />
+                {hasUnread(sheetOrder, 'store') ? <View style={styles.chatBtnDot} /> : null}
+              </Pressable>
             </View>
 
             <View style={styles.sheetSum}>
@@ -1090,9 +1148,12 @@ export default function AdminOrdersScreen({ navigation, route }) {
               ))}
               <View style={styles.sumRow}>
                 <Text style={styles.sumKey}>Payment</Text>
-                <Text style={styles.sumVal}>
-                  {getPaymentLabel(sheetOrder.paymentMethod)} · {getPaymentStatusLabel(sheetOrder)}
-                </Text>
+                <View style={styles.sumValRow}>
+                  <Text style={styles.sumVal}>
+                    {getPaymentLabel(sheetOrder.paymentMethod)} · {getPaymentStatusLabel(sheetOrder)}
+                  </Text>
+                  {sheetOrder.paymentSandbox ? <Text style={styles.sbxTag}>SANDBOX</Text> : null}
+                </View>
               </View>
               {/* The Store Manager is the person most likely to act on
                   this screen as if money had arrived, so the order's
@@ -1101,15 +1162,16 @@ export default function AdminOrdersScreen({ navigation, route }) {
               {getPaymentNote(sheetOrder) ? (
                 <Text style={styles.payNote}>{getPaymentNote(sheetOrder)}</Text>
               ) : null}
-              <View style={styles.sumRow}>
+              <View style={[styles.sumRow, styles.sumTotalRow]}>
                 <Text style={styles.sumKey}>Total</Text>
                 <Text style={styles.sumTotalVal}>{peso(sheetOrder.total)}</Text>
               </View>
             </View>
 
-            <Steps order={sheetOrder} />
-
-            <View style={styles.actions}>{renderSheetActions(sheetOrder)}</View>
+            <View>
+              <Text style={styles.progressLabel}>PROGRESS</Text>
+              <Steps order={sheetOrder} />
+            </View>
           </View>
         )}
       </Sheet>
@@ -1284,8 +1346,54 @@ const styles = StyleSheet.create({
 
   // Sheet
   sheet: { gap: 16 },
-  sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sheetOid: { fontSize: 19 },
+  copyBtn: { width: 28, height: 28, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   sheetSub: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
+  custRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: '#FFFDF9',
+  },
+  custAvatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  custEmail: { fontSize: 13.5, fontWeight: '600', color: Colors.light.text },
+  custMeta: { fontSize: 11.5, color: Colors.light.icon, marginTop: 1 },
+  // Clay-tinted, not filled: the sheet's one filled button is the status
+  // move pinned below.
+  chatBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FBF1EC',
+    borderWidth: 1,
+    borderColor: '#F7E7DF',
+  },
+  chatBtnDot: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: Colors.light.tint,
+    borderWidth: 2,
+    borderColor: Colors.light.background,
+  },
+  progressLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    color: Colors.light.icon,
+    marginBottom: 10,
+  },
+  actHint: { fontSize: 11.5, color: Colors.light.icon, textAlign: 'center', marginTop: -2 },
   sheetSum: {
     backgroundColor: '#FFFDF9',
     borderWidth: 1,
@@ -1312,7 +1420,29 @@ const styles = StyleSheet.create({
   },
   sumKey: { fontSize: 12.5, color: Colors.light.icon },
   sumVal: { flexShrink: 1, fontSize: 12.5, fontWeight: '500', color: Colors.light.text, textAlign: 'right' },
-  sumTotalVal: { fontSize: 15, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
+  sumValRow: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sbxTag: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    color: Colors.light.icon,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#DCD2C3',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  sumTotalRow: {
+    marginHorizontal: -14,
+    marginBottom: -12,
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+    backgroundColor: Colors.light.background,
+    borderBottomLeftRadius: 15,
+    borderBottomRightRadius: 15,
+  },
+  sumTotalVal: { fontSize: 19, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
   payNote: { fontSize: 11.5, color: Colors.light.highlight, textAlign: 'right', marginTop: -4 },
 
   step: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingBottom: 14 },

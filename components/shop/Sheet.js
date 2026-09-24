@@ -4,7 +4,8 @@
 // bar, as in the approved previews. It stays mounted through its closing
 // slide. `locked` stops the backdrop and Android back from closing it (while
 // something is being sent, say). `dark` draws it on ink, for the Staff
-// Portal.
+// Portal. `footer` stays pinned under the scrolling content, where the
+// thumb reaches it (the order sheet's "Mark as shipped").
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Pressable, Modal, KeyboardAvoidingView, ScrollView, useWindowDimensions } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS, useReducedMotion } from 'react-native-reanimated';
@@ -12,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/theme';
 import { EASE_OUT_QUINT } from '../../constants/motion';
 
-export default function Sheet({ visible, onClose, locked, dark, children }) {
+export default function Sheet({ visible, onClose, locked, dark, footer, children }) {
   const reduceMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -51,10 +52,13 @@ export default function Sheet({ visible, onClose, locked, dark, children }) {
           <ScrollView
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 12 }}
+            contentContainerStyle={{ paddingBottom: footer ? 16 : Math.max(insets.bottom, 16) + 12 }}
           >
             {children}
           </ScrollView>
+          {footer ? (
+            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>{footer}</View>
+          ) : null}
         </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
@@ -74,5 +78,12 @@ const styles = StyleSheet.create({
   },
   sheetDark: { backgroundColor: '#241F1C', borderTopWidth: 1, borderColor: '#3A332E', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 22 },
   grabDark: { backgroundColor: '#4A423B', marginBottom: 16 },
+  footer: {
+    marginHorizontal: -20,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+  },
   grab: { width: 40, height: 5, borderRadius: 3, backgroundColor: '#D8CFC4', alignSelf: 'center', marginBottom: 14 },
 });
