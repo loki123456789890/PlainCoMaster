@@ -51,7 +51,7 @@ const FAQ_CATEGORIES = [
       {
         id: 'o3',
         question: 'What payment methods do you accept?',
-        answer: 'At checkout you can select GCash, Maya, Card, or Cash on Delivery (COD). GCash, Maya, and Card currently run in sandbox mode — the payment step is a simulation for testing, no real money moves, and no live gateway is connected. Cash on Delivery is the only method that settles real money today: you pay in person when your order arrives.',
+        answer: "At checkout you can select GCash, Maya, Card, or Cash on Delivery (COD). GCash, Maya, and Card are paid through PayMongo, a licensed Philippine payment gateway: you finish paying on PayMongo's secure page, and your order is placed once PayMongo confirms the payment. PayMongo is currently in test mode, so no real money is charged. With Cash on Delivery you pay in person when your order arrives.",
       },
       {
         id: 'o4',
@@ -132,7 +132,7 @@ const FAQ_CATEGORIES = [
       {
         id: 'a3',
         question: 'Is my payment information secure?',
-        answer: 'We never ask for or store card numbers, CVV, or e-wallet credentials in the app — there is no screen anywhere that collects them. GCash, Maya, and Card run in sandbox mode: the payment step is simulated for testing and nothing is ever charged. Cash on Delivery remains the way to pay real money, in person, when your order arrives.',
+        answer: "Yes. PlainCo never sees or stores your card number, CVV, or e-wallet login — you enter those on PayMongo's own secure page, not in the app. PlainCo only receives PayMongo's confirmation that the payment went through, and it checks that confirmation with PayMongo before placing your order. PayMongo is currently in test mode, so no real money is charged.",
       },
       {
         id: 'a4',

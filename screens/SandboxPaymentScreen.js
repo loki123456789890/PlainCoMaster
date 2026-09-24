@@ -168,9 +168,9 @@ export default function SandboxPaymentScreen({ navigation, route }) {
     // state. Everything the order needs is therefore sent explicitly
     // below, and merge is kept only so unrelated params survive.
     timer.current = setTimeout(() => {
-      navigation.navigate({
-        name: 'Checkout',
-        params: {
+      navigation.navigate(
+        'Checkout',
+        {
           // Returned alongside the result because checkout does not
           // reliably come back holding the lines it was opened with —
           // it can remount with only what this navigate carries. Sending
@@ -184,8 +184,8 @@ export default function SandboxPaymentScreen({ navigation, route }) {
           // made.
           sandboxResult: { outcome: selected, paymentMethod, at: Date.now() },
         },
-        merge: true,
-      });
+        { merge: true }
+      );
     }, waitFor);
   };
 

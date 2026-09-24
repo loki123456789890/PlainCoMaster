@@ -128,11 +128,11 @@ export default function OnlinePaymentScreen({ navigation, route }) {
       // Back to Checkout with the lines and method, for the same remount
       // reason SandboxPaymentScreen spells out, and `at` so a second
       // identical outcome still registers there.
-      navigation.navigate({
-        name: 'Checkout',
-        params: { orderItems, onlineResult: { outcome, paymentMethod, at: Date.now() } },
-        merge: true,
-      });
+      navigation.navigate(
+        'Checkout',
+        { orderItems, onlineResult: { outcome, paymentMethod, at: Date.now() } },
+        { merge: true }
+      );
     },
     [navigation, orderItems, paymentMethod]
   );

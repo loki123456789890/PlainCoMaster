@@ -410,41 +410,44 @@ deployment:
       Tests: checkout 22 → 39 (PAY-1…17, with a fake PayMongo, so no
       account is needed), rules 130 → 133.
 
-- [ ] **Go live with PayMongo.** In this order:
-      1. PayMongo dashboard → Developers: copy the test secret key.
-         `firebase functions:secrets:set PAYMONGO_SECRET_KEY`.
-      2. `firebase functions:secrets:set PAYMONGO_WEBHOOK_SECRET` with a
-         placeholder for now. `placeOrder`, `resolveCheckout`,
+- [x] **Go live with PayMongo** (test mode), done 2026-09-24. For the
+      record, and for switching to live keys later:
+      1. `firebase functions:secrets:set PAYMONGO_SECRET_KEY` (sk_test_…).
+      2. `firebase functions:secrets:set PAYMONGO_WEBHOOK_SECRET`. A
+         placeholder first: `placeOrder`, `resolveCheckout`,
          `expireUnpaidCheckouts` and `paymongoWebhook` bind these
          secrets, so **`firebase deploy --only functions` refuses until
          both exist.**
-      3. `npm run indexes:deploy` (new `checkouts` status + expiresAt
-         index; the scheduler's query fails without it), then
-         `npm run rules:deploy`, then deploy functions.
-      4. PayMongo → Webhooks: add
+      3. `npm run indexes:deploy`, `npm run rules:deploy`, then deploy
+         functions. The store migration had already been applied to
+         production; its dry run found nothing left to assign.
+      4. PayMongo → Webhooks:
          `https://asia-southeast1-plainco-c3edc.cloudfunctions.net/paymongoWebhook`
-         for `checkout_session.payment.paid`. Put the whsk_… secret it
-         shows into `PAYMONGO_WEBHOOK_SECRET` and redeploy the functions.
-      5. Ship an app build that has `expo-web-browser` (a new native
-         module: Expo Go has it, a dev or store build must be rebuilt).
-      6. Firestore console: create `config/payments` = `{ gateway: 'paymongo' }`.
-         Nothing a customer sees changes until this step, and setting it
-         back to `'sandbox'` undoes it.
-      7. Pay once with each of GCash, Maya and a test card, and back out
-         once. Check the webhook deliveries in PayMongo's dashboard.
+         for `checkout_session.payment.paid`, its whsk_… secret put into
+         `PAYMONGO_WEBHOOK_SECRET` (the CLI offers to redeploy the
+         webhook when the secret changes).
+      5. Firestore console: `config/payments` = `{ gateway: 'paymongo' }`.
+         Setting it back to `'sandbox'` undoes the switch.
+
+      Runs in Expo Go with plain `npx expo start`: `expo-web-browser` is
+      in Expo Go, so no rebuild was needed. A dev or store build would
+      have to include it.
+
+      Checked on the live app: PayMongo's page opens for GCash, and
+      backing out returns to Checkout with "Payment not completed".
+- [ ] **Before the defense:** complete one payment on the live app (not
+      just a cancel), and confirm the order shows Paid with the same
+      `pay_…` reference PayMongo's dashboard shows. Also check the
+      webhook delivery log in PayMongo's dashboard for a 200.
+- [ ] **Switching to real money** means live keys (PayMongo business
+      verification), both secrets set again with the live values, a
+      webhook registered in live mode, and the FAQ's "test mode" line
+      removed from HelpScreen.
 - [ ] **Not yet built for PayMongo:** refunds. A checkout marked
       `needsReview: 'refund-owed'` (paid after its hold was released) or
       `'amount-mismatch'` is only logged and flagged, so someone has to
       refund it from the PayMongo dashboard. There is no admin screen
       listing these yet.
-- [ ] **HelpScreen's FAQ still says "sandbox"** for the online methods.
-      That is correct until step 6 above; rewrite the two answers when
-      production switches. (Checkout's note under the methods already
-      follows the setting.)
-- [ ] **Not driven in the running app yet.** The server paths are
-      covered by tests, and the Android bundle compiles, but
-      OnlinePaymentScreen has not been opened against a real PayMongo
-      test session. Do that during step 7.
 
 ### Two bugs the sandbox flow only showed when the app was actually run ✅
 
@@ -577,12 +580,15 @@ one comes after the boundary it depends on is solid.
       and the cancellation stock restore is per-store as a result. Rules
       suite 83 → 99. Orders, support, reviews and logs are still
       any-manager; they follow from the order split below.
-- [ ] Before this branch ships (after the UAT), in this order:
+- [x] Before this branch ships (after the UAT), in this order:
       `npm run indexes:deploy` and wait for the indexes to finish
       building; run the migration against production; deploy functions
       and rules; then ship the app. Rules before the migration freezes
       the live catalogue; the app before the indexes shows managers a
-      failed-query error instead of their orders.
+      failed-query error instead of their orders. *(Done 2026-09-24,
+      with the PayMongo go-live: indexes, then the migration (already
+      applied — its dry run found nothing to assign), then rules and
+      functions. The app runs from this branch in Expo Go.)*
 - [x] Order splitting in `placeOrder`: one checkout writes one order per
       store, in the same transaction. The riskiest step — two managers
       sharing one status field means neither owns it — so it lands after
