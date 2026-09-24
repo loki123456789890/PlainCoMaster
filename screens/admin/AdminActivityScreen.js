@@ -19,6 +19,7 @@ import Reveal from '../../components/shop/Reveal';
 import { TopBar, OfflineNotice, BigEmpty } from '../../components/shop/TabScreen';
 import StoreChip from '../../components/admin/StoreChip';
 import { EASE_OUT_QUINT } from '../../constants/motion';
+import { ROLES } from '../../constants/roles';
 
 const INK = Colors.light.text;
 const MUTED = Colors.light.icon;
@@ -126,12 +127,34 @@ const fullTime = (date) =>
 // The summaries are free text written by utils/activityLog.js's callers.
 // Two shapes carry structure worth drawing, so they're split here:
 //   "Order #X — status Pending → Processing, 2 item(s) returned to stock"
-//   "Ana Cruz — role Customer → Store Manager" (AdminUsersScreen)
+//   "Ana Cruz — role Customer → Store Manager at Ukay ni Lola" (AdminUsersScreen)
+//   "Ana Cruz — now runs Ukay ni Lola" (a manager moved between stores)
+//   "Ana Cruz — account deactivated" (or activated)
 //   "Edited "Jacket" — changed price, stock"
 // Anything else is shown as written.
+const ROLE_AT_STORE = new RegExp(`^(${ROLES.map((r) => r.label).join('|')}) at (.+)$`);
+
 function parseSummary(summary) {
   const status = summary.match(/^(.*?)\s+—\s+(?:status|role)\s+(.+?)\s+→\s+(.+?)(?:,\s*(.+))?$/);
-  if (status) return { head: status[1], from: status[2], to: status[3], extra: status[4] || '' };
+  if (status) {
+    // A promotion to Store Manager names the store after the new role; it
+    // gets its own line rather than riding inside the "to" pill.
+    const atStore = status[3].match(ROLE_AT_STORE);
+    return {
+      head: status[1],
+      from: status[2],
+      to: atStore ? atStore[1] : status[3],
+      store: atStore ? atStore[2] : '',
+      extra: status[4] || '',
+    };
+  }
+  const moved = summary.match(/^(.*?)\s+—\s+now runs\s+(.+)$/);
+  if (moved) return { head: moved[1], store: moved[2] };
+  const account = summary.match(/^(.*?)\s+—\s+account\s+(activated|deactivated)$/);
+  if (account) {
+    const on = account[2] === 'activated';
+    return { head: account[1], from: on ? 'Deactivated' : 'Active', to: on ? 'Active' : 'Deactivated' };
+  }
   const changed = summary.match(/^(.*?)\s+—\s+changed\s+(.+)$/);
   if (changed) return { head: changed[1], extra: `Changed: ${changed[2]}` };
   return { head: summary };
@@ -194,6 +217,15 @@ function Entry({ entry, type, isYou, open, onToggle, delay }) {
               <Text style={[styles.pill, styles.pillFrom]}>{parsed.from}</Text>
               <Text style={{ color: CLAY }}>→</Text>
               <Text style={[styles.pill, styles.pillTo]}>{parsed.to}</Text>
+            </View>
+          ) : null}
+          {parsed.store ? (
+            <View style={styles.storeLine}>
+              <Ionicons name="storefront-outline" size={12} color={MUTED} />
+              <Text style={styles.storeLineText} numberOfLines={1}>
+                {parsed.from ? 'at ' : 'Now runs '}
+                <Text style={styles.b}>{parsed.store}</Text>
+              </Text>
             </View>
           ) : null}
           {parsed.extra ? <Text style={styles.evExtra}>{parsed.extra}</Text> : null}
@@ -571,6 +603,8 @@ const styles = StyleSheet.create({
   pillFrom: { backgroundColor: '#F3EEE6', color: '#A89F97', textDecorationLine: 'line-through' },
   pillTo: { backgroundColor: '#F6E6DE', color: '#A94F2F' },
   evExtra: { fontSize: 12, color: MUTED },
+  storeLine: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  storeLineText: { flexShrink: 1, fontSize: 12, color: MUTED },
   who: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   av: { width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   avText: { fontSize: 9.5, fontWeight: '600', color: '#fff' },
