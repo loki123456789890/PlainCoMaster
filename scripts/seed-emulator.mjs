@@ -159,7 +159,22 @@ for (const p of PRODUCTS) {
   });
 }
 
+// `npm run seed:emulator -- --paymongo` switches online payments from the
+// sandbox to real PayMongo test mode (functions/.secret.local must hold
+// PAYMONGO_SECRET_KEY). Without the flag the switch is removed, so a plain
+// re-seed always puts the emulator back on the sandbox.
+const usePaymongo = process.argv.includes('--paymongo');
+if (usePaymongo) {
+  await writeDoc('config/payments', { gateway: 'paymongo' });
+} else {
+  await fetch(`${FIRESTORE}/v1/projects/${PROJECT}/databases/(default)/documents/config/payments`, {
+    method: 'DELETE',
+    headers: { Authorization: 'Bearer owner' },
+  });
+}
+
 console.log(`\nSeeded the emulators.\n`);
+console.log(`  payments   ${usePaymongo ? 'PayMongo test mode' : 'sandbox'}`);
 console.log(`  customer   ${EMAIL} / ${PASSWORD}  (uid ${uid})`);
 console.log(`  manager    ${MANAGER_EMAIL} / ${PASSWORD}  (runs "Sandbox Ukay")`);
 console.log(`  manager    ${OTHER_MANAGER_EMAIL} / ${PASSWORD}  (runs "Sandbox RTW")`);

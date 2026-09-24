@@ -1,2 +1,6 @@
 node_modules/
 *.log
+
+# Local secret values for the Functions emulator (PayMongo test key).
+# Never commit: see paymongo.js.
+.secret.local
