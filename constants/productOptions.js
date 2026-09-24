@@ -26,7 +26,7 @@ export const DEFAULT_SIZES = ['S', 'M', 'L', 'XL', 'XXL'];
 // might list — a loafer has no chest measurement. `measurementType` picks
 // which group of fields applies to a given product, and this config is the
 // single source of truth for that mapping. Shared by AdminAddProductScreen,
-// AdminEditProductScreen, and SizeGuideModal so the field set/order/labels
+// AdminEditProductScreen, and SizeGuideSheet so the field set/order/labels
 // can't drift between the form that writes it and the modal that reads it.
 export const MEASUREMENT_TYPES = {
   tops: {
@@ -105,7 +105,7 @@ export const MEASUREMENT_TYPE_OPTIONS = Object.keys(MEASUREMENT_TYPES).map((key)
 }));
 
 // Flat key -> label map covering every field key across every type, for
-// SizeGuideModal, which renders whatever keys are actually present on a
+// SizeGuideSheet, which renders whatever keys are actually present on a
 // product's `measurements` map without knowing (or caring) about
 // measurementType. Keys shared across types (e.g. `waist` in bottoms and
 // onepiece) always carry the same label, so a plain merge can't collide.
@@ -119,7 +119,7 @@ export const MEASUREMENT_FIELD_LABELS = Object.values(MEASUREMENT_TYPES).reduce(
   {}
 );
 
-// Stable column order for SizeGuideModal — first-seen order across the
+// Stable column order for SizeGuideSheet — first-seen order across the
 // MEASUREMENT_TYPES definitions above, so legacy products (tops-shaped)
 // render in the same chest/length/shoulder/sleeve order they always have.
 export const MEASUREMENT_FIELD_ORDER = Object.keys(MEASUREMENT_FIELD_LABELS);

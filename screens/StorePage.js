@@ -20,7 +20,6 @@ import Animated, {
   FadeInDown,
 } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,6 +37,7 @@ import EmptyState from '../components/ui/EmptyState';
 import SkeletonBlock from '../components/ui/Skeleton';
 import ProductCard from '../components/shop/ProductCard';
 import Reveal from '../components/shop/Reveal';
+import StoreLogo from '../components/shop/StoreLogo';
 import { EASE_OUT_QUINT } from '../constants/motion';
 
 const TYPE_WORDS = {
@@ -79,17 +79,6 @@ function IconButton({ icon, label, onPress, badge, dark }) {
         </View>
       ) : null}
     </Pressable>
-  );
-}
-
-function StoreLogo({ uri, size, radius, style }) {
-  if (uri) {
-    return <Image source={{ uri }} style={[{ width: size, height: size, borderRadius: radius }, style]} contentFit="cover" transition={150} />;
-  }
-  return (
-    <View style={[{ width: size, height: size, borderRadius: radius }, styles.logoEmpty, style]}>
-      <Ionicons name="storefront-outline" size={size * 0.45} color={Colors.light.tint} />
-    </View>
   );
 }
 
@@ -447,7 +436,6 @@ const styles = StyleSheet.create({
     borderColor: '#FFFFFF',
     backgroundColor: '#FFFFFF',
   },
-  logoEmpty: { backgroundColor: '#F3E3DA', alignItems: 'center', justifyContent: 'center' },
   idName: { marginTop: 10, marginBottom: 2, fontSize: 21, fontWeight: '600', letterSpacing: -0.4, lineHeight: 26, color: Colors.light.text },
   meta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   metaText: { fontSize: 12, color: Colors.light.icon },

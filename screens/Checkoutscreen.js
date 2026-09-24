@@ -3,9 +3,9 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   Pressable,
-  ScrollView,
+  ActivityIndicator,
+  AccessibilityInfo,
 } from 'react-native';
 import { showAppAlert } from '../utils/appAlert';
 import Animated, {
@@ -14,11 +14,12 @@ import Animated, {
   withTiming,
   withSequence,
   useReducedMotion,
+  useAnimatedRef,
   Easing,
   FadeIn,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { db, auth, functions } from '../firebaseConfig';
@@ -26,11 +27,9 @@ import { doc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { PAYMENT_METHODS, isPayOnDelivery, requiresOnlinePayment } from '../constants/payment';
-import { Colors, Spacing, Radius, Shadow } from '../constants/theme';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import AnimatedPressable from '../components/ui/AnimatedPressable';
+import { Colors } from '../constants/theme';
 import SkeletonBlock from '../components/ui/Skeleton';
+import { TopBar, OfflineNotice } from '../components/shop/TabScreen';
 import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
@@ -49,6 +48,16 @@ const parsePrice = (price) => {
 // pairs with the existing validation Alert instead of replacing it, so a
 // screen-reader user still gets the authoritative message while a sighted
 // user also sees *where*.
+// How each method is shown in the list: a colored letter or icon tile and
+// a line under its name. The ids, labels and order are still
+// constants/payment.js's.
+const METHOD_LOOK = {
+  gcash: { tile: '#1E6FEB', letter: 'G', name: 'GCash', line: 'Pay with your GCash wallet' },
+  maya: { tile: '#1A1A1A', letter: 'M', name: 'Maya', line: 'Pay with your Maya wallet' },
+  card: { tile: Colors.light.secondary, icon: 'card-outline', name: 'Credit / debit card', line: 'Visa, Mastercard' },
+  cod: { tile: Colors.light.tint, icon: 'cube-outline', name: 'Cash on Delivery', line: 'Pay the rider when it arrives' },
+};
+
 function ValidationRing({ opacity }) {
   const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return <Animated.View pointerEvents="none" style={[styles.validationRing, animatedStyle]} />;
@@ -79,6 +88,20 @@ export default function CheckoutScreen({ navigation, route }) {
   const [submitting, setSubmitting] = useState(false);
   const { isConnected } = useNetworkStatus();
   const reduceMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
+  const scrollRef = useAnimatedRef();
+  const [stuck, setStuck] = useState(false);
+  // Set when no payment method was chosen at Place order; the footer says
+  // so and the options are outlined until one is picked.
+  const [needPayment, setNeedPayment] = useState(false);
+  // An item that sold out (or ran short) between opening checkout and
+  // placing the order, shown as a notice at the top of the page.
+  const [stockProblem, setStockProblem] = useState(null);
+  const paymentY = useRef(0);
+  // Opened from the cart (lines carry a cart productId) or from a
+  // product's Buy Now (a raw product with no productId).
+  const fromCart = orderItems.length > 0 && orderItems.every((item) => item.productId);
+  const itemCount = orderItems.reduce((sum, item) => sum + (item.quantity || 1), 0);
 
   // Shake + flash-highlight targets for the two required-but-missing
   // selections (address, payment method) — triggered from handlePlaceOrder
@@ -177,6 +200,7 @@ export default function CheckoutScreen({ navigation, route }) {
   }, [total]);
 
   const handleSelectPayment = (id) => {
+    setNeedPayment(false);
     if (id === selectedPayment) return;
     Haptics.selectionAsync();
     setSelectedPayment(id);
@@ -216,13 +240,20 @@ export default function CheckoutScreen({ navigation, route }) {
       return;
     }
 
+    // No dialog for this one: the footer says what's missing, the options
+    // are outlined, and the page scrolls to them. The message is announced
+    // for screen readers, which the dialog used to be for.
     if (!selectedPayment) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      setNeedPayment(true);
       triggerShake(paymentShakeX);
       flashHighlight(paymentHighlight);
-      showAppAlert('Payment Method Required', 'Please select a payment method.');
+      scrollRef.current?.scrollTo({ y: Math.max(0, paymentY.current - 120), animated: true });
+      AccessibilityInfo.announceForAccessibility('Choose a payment method to continue.');
       return;
     }
+
+    setStockProblem(null);
 
     // Everything above is a reason not to charge anyone. Only past it does
     // an online method divert through the sandbox — there is no point
@@ -388,23 +419,33 @@ export default function CheckoutScreen({ navigation, route }) {
         return;
       }
 
+      // Stock problems show at the top of the page, as in the preview,
+      // rather than as a dialog: the customer's next step is to change
+      // what they're buying, and the notice stays in view while they do.
       if (reason === 'unavailable') {
-        showAppAlert(
-          "Item(s) No Longer Available",
-          'Some items in your cart are no longer being sold. Please remove them ' +
-            'and try again — everything else can still be checked out.'
-        );
+        setStockProblem({
+          title: 'Some items are no longer being sold.',
+          body: 'Remove them and try again. Everything else can still be checked out.',
+        });
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
         return;
       }
 
       if (reason === 'insufficient-stock') {
-        const detail = (error.details?.items || [])
-          .map((i) => `• ${i.name} — only ${i.available} left (${i.requested} requested)`)
-          .join('\n');
-        showAppAlert(
-          'Not Enough Stock',
-          `The following item(s) don't have enough stock:\n\n${detail}\n\nPlease update your cart and try again.`
-        );
+        const short = error.details?.items || [];
+        const first = short[0];
+        const title =
+          short.length === 1 && first
+            ? first.available > 0
+              ? `Only ${first.available} of ${first.name} left.`
+              : `Sorry, ${first.name} just sold out.`
+            : 'Some items just ran out.';
+        const body =
+          short.length > 1
+            ? short.map((i) => `${i.name}: ${i.available > 0 ? `only ${i.available} left` : 'sold out'}`).join('\n')
+            : 'Someone else checked out first.';
+        setStockProblem({ title, body });
+        scrollRef.current?.scrollTo({ y: 0, animated: true });
         return;
       }
 
@@ -462,321 +503,415 @@ export default function CheckoutScreen({ navigation, route }) {
     }
   };
 
-  // The online branch used to say "Secure checkout — your details stay
-  // private", which was true only because nothing was collected at all.
-  // Now that a payment step genuinely runs, saying nothing about its being
-  // simulated would be the first place this app overstated itself.
-  const trustText = isPayOnDelivery(selectedPayment)
-    ? 'Pay when your order arrives — no online payment needed'
-    : 'Sandbox payment — simulated, and no card details are collected';
+  // The online methods run a simulated payment, and the page says so;
+  // nothing is collected and no money moves. COD says what to have ready.
+  const methodNote = isPayOnDelivery(selectedPayment)
+    ? 'Pay in cash when your order arrives. Please prepare the exact amount if you can.'
+    : 'Online payments are in test mode (sandbox). No money is charged and no card details are collected.';
+
+  const footerMessage = !isConnected
+    ? "You're offline. Reconnect to place your order."
+    : !selectedPayment
+    ? 'Choose a payment method to continue.'
+    : null;
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Checkout</Text>
-        <View style={{ width: 24 }} />
-      </View>
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <TopBar title="Checkout" onBack={() => navigation.goBack()} stuck={stuck} />
 
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — some details may be outdated.
-          </Text>
+      <Animated.ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onScroll={(e) => setStuck(e.nativeEvent.contentOffset.y > 4)}
+        contentContainerStyle={{ paddingBottom: 24 }}
+      >
+        {/* Where this step sits */}
+        <View style={styles.steps} accessible accessibilityLabel={`Step 2 of 3, review and pay`}>
+          <View style={styles.step}>
+            <View style={[styles.stepDot, styles.stepDotDone]}>
+              <Ionicons name="checkmark" size={11} color="#fff" />
+            </View>
+            <Text style={styles.stepText}>{fromCart ? 'Cart' : 'Item'}</Text>
+          </View>
+          <View style={styles.stepRule} />
+          <View style={styles.step}>
+            <View style={[styles.stepDot, styles.stepDotNow]}>
+              <Text style={styles.stepNum}>2</Text>
+            </View>
+            <Text style={[styles.stepText, styles.stepTextNow]}>Review & pay</Text>
+          </View>
+          <View style={styles.stepRule} />
+          <View style={styles.step}>
+            <View style={styles.stepDot}>
+              <Text style={[styles.stepNum, { color: Colors.light.icon }]}>3</Text>
+            </View>
+            <Text style={styles.stepText}>Done</Text>
+          </View>
         </View>
-      )}
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Item List */}
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Items</Text>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            accessibilityRole="button"
-            accessibilityLabel="Edit items in cart"
+        {!isConnected ? (
+          <View style={styles.noticeWrap}>
+            <OfflineNotice>Network connection lost. Please check your connection and try again.</OfflineNotice>
+          </View>
+        ) : null}
+
+        {stockProblem ? (
+          <Animated.View
+            style={styles.alert}
+            entering={reduceMotion ? undefined : FadeIn.duration(350).easing(EASE_OUT_QUART)}
+            accessibilityRole="alert"
           >
-            <Text style={styles.editLink}>Edit</Text>
-          </TouchableOpacity>
-        </View>
-        {orderItems.map((item, index) => (
-          <View key={index} style={styles.itemRow}>
-            {(item.image || item.imageUrl) ? (
-              <ProductImage uri={item.image || item.imageUrl} style={styles.itemImage} />
-            ) : null}
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
-              <Text style={styles.itemMeta}>
-                {item.selectedSize || item.size} · {item.selectedColor || item.color} · Qty {item.quantity || 1}
+            <Ionicons name="alert-circle-outline" size={18} color={ERR_INK} style={{ marginTop: 1 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.alertTitle}>{stockProblem.title}</Text>
+              <Text style={styles.alertText}>
+                {stockProblem.body} {"You haven't been charged. "}
+                <Text style={styles.alertLink} onPress={() => navigation.goBack()} accessibilityRole="link">
+                  {fromCart ? 'Update your cart' : 'Choose another size'}
+                </Text>
               </Text>
             </View>
-            <Text style={styles.itemPrice}>
-              ₱{(parsePrice(item.price) * (item.quantity || 1)).toFixed(2)}
-            </Text>
-          </View>
-        ))}
+          </Animated.View>
+        ) : null}
 
-        {/* Delivery Address */}
-        <Text style={styles.sectionTitle}>Delivery Address</Text>
+        {/* Deliver to */}
         <Animated.View style={addressShakeStyle}>
           <View style={styles.highlightWrap}>
-            {loadingAddress ? (
-              <View style={[styles.addressCardRow, styles.skeletonCard]}>
-                <SkeletonBlock style={styles.skeletonIcon} />
-                <View style={{ flex: 1, marginLeft: 12 }}>
+            <View style={styles.card}>
+              <View style={styles.cardHead}>
+                <View style={styles.cardTitleRow}>
+                  <Ionicons name="location-outline" size={17} color={Colors.light.tint} />
+                  <Text style={styles.cardTitle}>Deliver to</Text>
+                </View>
+                {shippingAddress ? (
+                  <Pressable onPress={handleAddressPress} hitSlop={10} accessibilityRole="button" accessibilityLabel="Change delivery address">
+                    <Text style={styles.cardLink}>Change</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              {loadingAddress ? (
+                <View>
                   <SkeletonBlock style={styles.skeletonLine} />
                   <SkeletonBlock style={[styles.skeletonLine, styles.skeletonLineShort]} />
                 </View>
-              </View>
-            ) : shippingAddress ? (
-              <AnimatedPressable
-                onPress={handleAddressPress}
-                accessibilityRole="button"
-                accessibilityLabel={`Delivery address: ${shippingAddress.fullName}, ${shippingAddress.address}. Tap to change.`}
-              >
+              ) : shippingAddress ? (
                 <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220).easing(EASE_OUT_QUART)}>
-                  <Card style={styles.addressCardRow}>
-                    <Ionicons name="location-outline" size={20} color={Colors.light.tint} />
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.addressName}>
-                        {shippingAddress.fullName} · {shippingAddress.phone}
-                      </Text>
-                      <Text style={styles.addressDetail}>
-                        {shippingAddress.address}, {shippingAddress.city}, {shippingAddress.province} {shippingAddress.zipCode}
-                      </Text>
-                    </View>
-                    <Text style={styles.changeText}>Change</Text>
-                  </Card>
+                  <Text style={styles.addressName}>
+                    {shippingAddress.fullName} · {shippingAddress.phone}
+                  </Text>
+                  <Text style={styles.addressText}>
+                    {shippingAddress.address}
+                    {'\n'}
+                    {shippingAddress.city}, {shippingAddress.province} {shippingAddress.zipCode}
+                  </Text>
                 </Animated.View>
-              </AnimatedPressable>
-            ) : (
-              <AnimatedPressable
-                onPress={handleAddressPress}
-                accessibilityRole="button"
-                accessibilityLabel="Add a delivery address"
-              >
-                <Card style={styles.addAddressCard}>
-                  <Ionicons name="add-circle-outline" size={20} color={Colors.light.tint} />
+              ) : (
+                <Pressable
+                  onPress={handleAddressPress}
+                  style={({ pressed }) => [styles.addAddress, pressed && { opacity: 0.7 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add a delivery address"
+                >
+                  <Ionicons name="add-circle-outline" size={18} color={Colors.light.tint} />
                   <Text style={styles.addAddressText}>Add a delivery address</Text>
-                </Card>
-              </AnimatedPressable>
-            )}
+                </Pressable>
+              )}
+            </View>
             <ValidationRing opacity={addressHighlight} />
           </View>
         </Animated.View>
 
-        {/* Order Summary */}
-        <Text style={styles.sectionTitle}>Order Summary</Text>
-        <Card>
-          <View style={styles.row}>
-            <Text style={styles.label}>Subtotal</Text>
-            <Text style={styles.value}>₱{subtotal.toFixed(2)}</Text>
+        {/* Items */}
+        <View style={styles.card}>
+          <View style={styles.cardHead}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="bag-handle-outline" size={17} color={Colors.light.tint} />
+              <Text style={styles.cardTitle}>
+                Items <Text style={styles.cardTitleMuted}>({itemCount})</Text>
+              </Text>
+            </View>
+            <Pressable onPress={() => navigation.goBack()} hitSlop={10} accessibilityRole="button" accessibilityLabel="Edit items">
+              <Text style={styles.cardLink}>Edit</Text>
+            </Pressable>
           </View>
-          <View style={styles.row}>
-            <Text style={styles.label}>Shipping</Text>
-            <Text style={styles.valueMoss}>Free</Text>
-          </View>
-          <View style={[styles.row, styles.totalRowInline]}>
-            <Text style={styles.totalLabelInline}>Total</Text>
-            <Text style={styles.totalValueInline}>₱{total.toFixed(2)}</Text>
-          </View>
-        </Card>
+          {orderItems.map((item, index) => (
+            <View key={index} style={[styles.line, index > 0 && styles.lineNext]}>
+              {item.image || item.imageUrl ? (
+                <ProductImage uri={item.image || item.imageUrl} style={styles.lineImage} />
+              ) : (
+                <View style={styles.lineImage} />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.lineName} numberOfLines={2}>
+                  {item.name}
+                </Text>
+                <Text style={styles.lineMeta}>
+                  {[item.selectedColor || item.color, item.selectedSize || item.size].filter(Boolean).join(' · ')} · Qty{' '}
+                  {item.quantity || 1}
+                </Text>
+              </View>
+              <Text style={styles.linePrice}>₱{(parsePrice(item.price) * (item.quantity || 1)).toFixed(2)}</Text>
+            </View>
+          ))}
+        </View>
 
-        {/* Payment Method */}
-        <Text style={styles.sectionTitle}>Payment Method</Text>
-        <Animated.View style={paymentShakeStyle}>
+        {/* Payment method */}
+        <Animated.View style={paymentShakeStyle} onLayout={(e) => (paymentY.current = e.nativeEvent.layout.y)}>
           <View style={styles.highlightWrap}>
-            <View style={styles.paymentRow}>
-              {PAYMENT_METHODS.map((option) => {
-                const isSelected = selectedPayment === option.id;
-                return (
-                  <AnimatedPressable
-                    key={option.id}
-                    style={[styles.paymentOption, isSelected && styles.paymentOptionActive]}
-                    onPress={() => handleSelectPayment(option.id)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Pay with ${option.label}`}
-                    accessibilityState={{ selected: isSelected }}
-                  >
-                    <Ionicons
-                      name={option.icon}
-                      size={22}
-                      color={isSelected ? '#fff' : Colors.light.tint}
-                    />
-                    <Text style={[styles.paymentOptionText, isSelected && styles.paymentOptionTextActive]} numberOfLines={1}>
-                      {option.label}
-                    </Text>
-                  </AnimatedPressable>
-                );
-              })}
+            <View style={styles.card}>
+              <View style={styles.cardHead}>
+                <View style={styles.cardTitleRow}>
+                  <Ionicons name="card-outline" size={17} color={Colors.light.tint} />
+                  <Text style={styles.cardTitle}>Payment method</Text>
+                </View>
+              </View>
+              <View style={{ gap: 8 }} accessibilityRole="radiogroup">
+                {PAYMENT_METHODS.map((option) => {
+                  const on = selectedPayment === option.id;
+                  const look = METHOD_LOOK[option.id] || { tile: Colors.light.icon, icon: option.icon, name: option.label, line: '' };
+                  return (
+                    <Pressable
+                      key={option.id}
+                      onPress={() => handleSelectPayment(option.id)}
+                      style={({ pressed }) => [
+                        styles.option,
+                        needPayment && styles.optionNeed,
+                        on && styles.optionOn,
+                        pressed && { transform: [{ scale: 0.99 }] },
+                      ]}
+                      accessibilityRole="radio"
+                      accessibilityLabel={`${look.name}. ${look.line}`}
+                      accessibilityState={{ checked: on }}
+                    >
+                      <View style={[styles.optionTile, { backgroundColor: look.tile }]}>
+                        {look.letter ? (
+                          <Text style={styles.optionLetter}>{look.letter}</Text>
+                        ) : (
+                          <Ionicons name={look.icon} size={18} color="#fff" />
+                        )}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.optionName}>{look.name}</Text>
+                        {look.line ? <Text style={styles.optionLine}>{look.line}</Text> : null}
+                      </View>
+                      <View style={[styles.radio, on && styles.radioOn]}>
+                        {on ? <View style={styles.radioDot} /> : null}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <View style={styles.note}>
+                <Ionicons name="shield-outline" size={15} color={NOTE_INK} style={{ marginTop: 1 }} />
+                <Text style={styles.noteText}>{methodNote}</Text>
+              </View>
             </View>
             <ValidationRing opacity={paymentHighlight} />
           </View>
         </Animated.View>
-      </ScrollView>
 
-      <View style={styles.footer}>
+        {/* Order summary */}
+        <View style={styles.card}>
+          <View style={styles.cardHead}>
+            <View style={styles.cardTitleRow}>
+              <Ionicons name="receipt-outline" size={17} color={Colors.light.tint} />
+              <Text style={styles.cardTitle}>Order summary</Text>
+            </View>
+          </View>
+          <View style={styles.sumRow}>
+            <Text style={styles.sumLabel}>Subtotal</Text>
+            <Text style={styles.sumValue}>₱{subtotal.toFixed(2)}</Text>
+          </View>
+          <View style={styles.sumRow}>
+            <Text style={styles.sumLabel}>Shipping</Text>
+            <Text style={styles.sumFree}>Free</Text>
+          </View>
+          <View style={styles.sumTotal}>
+            <Text style={styles.sumTotalLabel}>Total</Text>
+            <Text style={styles.sumTotalValue}>₱{total.toFixed(2)}</Text>
+          </View>
+        </View>
+      </Animated.ScrollView>
+
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]}>
+        {footerMessage ? (
+          <Text style={styles.footerMessage} accessibilityLiveRegion="polite">
+            {footerMessage}
+          </Text>
+        ) : null}
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Total</Text>
-          <Animated.Text
-            style={[styles.totalPrice, totalAnimatedStyle]}
-            accessibilityLiveRegion="polite"
-          >
+          <Animated.Text style={[styles.totalPrice, totalAnimatedStyle]} accessibilityLiveRegion="polite">
             ₱{total.toFixed(2)}
           </Animated.Text>
         </View>
-        <View style={styles.trustRow}>
-          <Ionicons name="shield-checkmark-outline" size={13} color={Colors.light.icon} />
-          <Text style={styles.trustText}>{trustText}</Text>
-        </View>
-        <Button
-          variant="primary"
-          label={!isConnected ? 'No Internet Connection' : 'Place Order'}
+        <Pressable
           onPress={handlePlaceOrder}
           disabled={submitting || !isConnected}
-          loading={submitting}
-        />
+          style={({ pressed }) => [
+            styles.place,
+            !isConnected && styles.placeOff,
+            pressed && !submitting && { transform: [{ scale: 0.97 }] },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Place order"
+          accessibilityState={{ disabled: submitting || !isConnected, busy: submitting }}
+        >
+          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.placeText}>Place order</Text>}
+        </Pressable>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
+const INK = Colors.light.text;
+const CARD_LINE = '#EEE7DD';
+const PRICE = '#8C6D0C';
+const ERR = '#B42318';
+const ERR_INK = '#7A1B12';
+const NOTE_INK = '#6B5A2E';
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  headerTitle: { fontSize: 20, fontWeight: 'bold', color: Colors.light.text },
-  backButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'flex-start' },
-  content: { flex: 1, paddingHorizontal: 20, paddingVertical: 20 },
-  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: Colors.light.text, marginBottom: 15, marginTop: 10 },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 15,
-    marginTop: 10,
-  },
-  editLink: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
-  itemRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
-  itemImage: { width: 50, height: 50, borderRadius: 8, backgroundColor: Colors.light.border },
-  itemName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-  itemMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
-  itemPrice: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
 
-  // Validation shake/highlight wrap — a plain relative-position View so the
-  // ValidationRing overlay can sit above whichever child (skeleton, address
-  // card, or "add address" card) currently renders inside it.
+  steps: { flexDirection: 'row', alignItems: 'center', gap: 6, marginHorizontal: 20, marginTop: 4, marginBottom: 16 },
+  step: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  stepDot: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#EDE5DA', alignItems: 'center', justifyContent: 'center' },
+  stepDotDone: { backgroundColor: Colors.light.secondary },
+  stepDotNow: { backgroundColor: Colors.light.tint },
+  stepNum: { fontSize: 10, fontWeight: '600', color: '#fff' },
+  stepText: { fontSize: 11, color: Colors.light.icon },
+  stepTextNow: { color: INK, fontWeight: '600' },
+  stepRule: { flex: 1, height: 1.5, backgroundColor: '#E4DCD1' },
+
+  noticeWrap: { marginHorizontal: 16, marginBottom: 12 },
+  alert: {
+    flexDirection: 'row',
+    gap: 10,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: '#FBEDEB',
+    borderWidth: 1,
+    borderColor: '#F1CFCB',
+  },
+  alertTitle: { fontSize: 12.5, fontWeight: '600', color: ERR_INK },
+  alertText: { fontSize: 12.5, lineHeight: 18, color: ERR_INK },
+  alertLink: { fontWeight: '600', textDecorationLine: 'underline' },
+
+  card: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardTitle: { fontSize: 14, fontWeight: '600', color: INK },
+  cardTitleMuted: { fontWeight: '400', color: Colors.light.icon },
+  cardLink: { fontSize: 12.5, fontWeight: '600', color: Colors.light.tint },
+
+  // The flash-and-shake target for a missing address or payment method.
   highlightWrap: { position: 'relative' },
   validationRing: {
     position: 'absolute',
-    top: -4,
-    left: -4,
-    right: -4,
-    bottom: -4,
-    borderRadius: Radius.lg + 4,
+    top: -3,
+    left: 13,
+    right: 13,
+    bottom: 9,
+    borderRadius: 23,
     borderWidth: 2,
     borderColor: Colors.light.danger,
   },
 
-  addressCardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  skeletonCard: { ...Shadow.card },
-  skeletonIcon: { width: 20, height: 20, borderRadius: 4 },
   skeletonLine: { height: 12, borderRadius: 4, marginTop: 6 },
   skeletonLineShort: { width: '60%' },
-  addressName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 4 },
-  addressDetail: { fontSize: 12, color: Colors.light.icon, lineHeight: 18 },
-  changeText: { fontSize: 13, color: Colors.light.tint, fontWeight: '600', marginLeft: 10 },
-  addAddressCard: {
+  addressName: { fontSize: 13.5, fontWeight: '600', color: INK },
+  addressText: { fontSize: 12.5, lineHeight: 19, color: Colors.light.icon, marginTop: 2 },
+  addAddress: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    borderColor: Colors.light.tint,
+    paddingVertical: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
     borderStyle: 'dashed',
-    marginBottom: 10,
-  },
-  addAddressText: { fontSize: 14, color: Colors.light.tint, fontWeight: '600' },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 10 },
-  label: { fontSize: 14, color: Colors.light.icon },
-  value: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-  valueMoss: { fontSize: 14, fontWeight: 'bold', color: Colors.light.secondary },
-  totalRowInline: { borderTopWidth: 1, borderTopColor: Colors.light.border, marginTop: 10 },
-  totalLabelInline: { fontSize: 16, fontWeight: 'bold', color: Colors.light.text },
-  totalValueInline: { fontSize: 16, fontWeight: 'bold', color: Colors.light.highlight },
-
-  paymentRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 10 },
-  paymentOption: {
-    flexBasis: '47%',
-    flexGrow: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 14,
-    paddingHorizontal: 8,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
-  },
-  paymentOptionActive: {
-    backgroundColor: Colors.light.tint,
     borderColor: Colors.light.tint,
   },
-  paymentOptionText: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
-  paymentOptionTextActive: { color: '#fff' },
+  addAddressText: { fontSize: 13.5, fontWeight: '600', color: Colors.light.tint },
 
-  // Footer — deliberately mirrors Cartscreen.js's footer (same total pulse,
-  // trust row and Button treatment) so the Cart -> Checkout handoff reads
-  // as one continuous flow, not two differently-built screens.
-  footer: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 20,
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
-  },
-  offlineBanner: {
+  line: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  lineNext: { marginTop: 12 },
+  lineImage: { width: 58, height: 66, borderRadius: 12, backgroundColor: Colors.light.border },
+  lineName: { fontSize: 13.5, fontWeight: '500', color: INK },
+  lineMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
+  linePrice: { fontSize: 14, fontWeight: '600', color: PRICE },
+
+  option: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
+    gap: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E4DCD1',
   },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-  totalRow: {
+  optionNeed: { borderColor: '#F1CFCB' },
+  optionOn: { borderColor: Colors.light.tint, backgroundColor: '#FDF6F2' },
+  optionTile: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  optionLetter: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  optionName: { fontSize: 13.5, fontWeight: '600', color: INK },
+  optionLine: { fontSize: 11.5, color: Colors.light.icon, marginTop: 1 },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#CFC6BC', alignItems: 'center', justifyContent: 'center' },
+  radioOn: { borderColor: Colors.light.tint },
+  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.light.tint },
+  note: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#F6EFE3',
+  },
+  noteText: { flex: 1, fontSize: 11.5, lineHeight: 17, color: NOTE_INK },
+
+  sumRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  sumLabel: { fontSize: 13, color: Colors.light.icon },
+  sumValue: { fontSize: 13, fontWeight: '500', color: INK },
+  sumFree: { fontSize: 13, fontWeight: '600', color: Colors.light.secondary },
+  sumTotal: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
+    alignItems: 'baseline',
+    borderTopWidth: 1,
+    borderTopColor: '#D8CFC4',
+    borderStyle: 'dashed',
+    paddingTop: 10,
   },
-  totalLabel: { fontSize: 16, fontWeight: '600', color: Colors.light.text },
-  totalPrice: { fontSize: 22, fontWeight: 'bold', color: Colors.light.highlight },
-  trustRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
-  trustText: { fontSize: 12, color: Colors.light.icon, flex: 1 },
+  sumTotalLabel: { fontSize: 14, fontWeight: '600', color: INK },
+  sumTotalValue: { fontSize: 19, fontWeight: '600', color: PRICE },
+
+  footer: {
+    paddingTop: 12,
+    paddingHorizontal: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E4DCD1',
+    backgroundColor: 'rgba(250,247,242,0.97)',
+  },
+  footerMessage: { fontSize: 11.5, color: ERR, textAlign: 'center', marginBottom: 8 },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginHorizontal: 4, marginBottom: 10 },
+  totalLabel: { fontSize: 13, color: Colors.light.icon },
+  totalPrice: { fontSize: 20, fontWeight: '600', color: PRICE },
+  place: { height: 54, borderRadius: 16, backgroundColor: Colors.light.tint, alignItems: 'center', justifyContent: 'center' },
+  placeOff: { backgroundColor: '#E3C3B6' },
+  placeText: { fontSize: 15.5, fontWeight: '600', color: '#fff' },
 });

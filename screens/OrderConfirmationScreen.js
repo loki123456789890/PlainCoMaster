@@ -18,361 +18,206 @@
 // is also why no date is shown — "just now" is the only honest answer at
 // this instant, and OrdersScreen shows the real one once the server
 // stamps it.
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+//
+// In the approved product-details/checkout preview's design: a moss tile
+// whose tick draws itself in, the order number(s), status, payment and
+// total on one card, and two ways on. What was bought and where it goes
+// are one tap away in My Orders.
+import React, { useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useAnimatedProps,
+  withDelay,
   withTiming,
-  withSequence,
   useReducedMotion,
-  FadeIn,
-  FadeInDown,
 } from 'react-native-reanimated';
+import Svg, { Path } from 'react-native-svg';
 
-import { Colors, Spacing, Radius } from '../constants/theme';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
-import { getPaymentLabel, getPaymentIcon, isPayOnDelivery, getPaymentStatusLabel } from '../constants/payment';
+import { Colors } from '../constants/theme';
+import { EASE_OUT_QUINT } from '../constants/motion';
+import { getPaymentLabel, isPayOnDelivery } from '../constants/payment';
 import { formatOrderNumber } from '../utils/orderNumber';
-import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
-import EmptyState from '../components/ui/EmptyState';
-import ProductImage from '../components/ui/ProductImage';
+import Reveal from '../components/shop/Reveal';
+import { BigEmpty } from '../components/shop/TabScreen';
 
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const INK = Colors.light.text;
+const MOSS = Colors.light.secondary;
+const PRICE = '#8C6D0C';
 
-// The one moment on this screen that earns motion: a single settle on the
-// success mark. Not a celebration — PRODUCT.md rules out flash-sale
-// grammar, and a COD order is a promise to pay a rider later, not a
-// completed transaction to throw confetti at.
-function SuccessMark({ reduceMotion }) {
-  const scale = useSharedValue(reduceMotion ? 1 : 0.8);
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
-
-  React.useEffect(() => {
+// The one moment on this screen that earns motion: the tile settles in
+// and its tick draws. Not a celebration — a COD order is a promise to pay
+// a rider later, not a completed transaction to throw confetti at.
+function SuccessTile({ reduceMotion }) {
+  const pop = useSharedValue(reduceMotion ? 1 : 0);
+  const draw = useSharedValue(reduceMotion ? 1 : 0);
+  useEffect(() => {
     if (reduceMotion) return;
-    scale.value = withSequence(
-      withTiming(1.08, { duration: 220, easing: EASE_OUT_QUINT }),
-      withTiming(1, { duration: 180, easing: EASE_OUT_QUART })
-    );
-  }, [reduceMotion, scale]);
-
+    pop.value = withDelay(150, withTiming(1, { duration: 600, easing: EASE_OUT_QUINT }));
+    draw.value = withDelay(450, withTiming(1, { duration: 500, easing: EASE_OUT_QUINT }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const tile = useAnimatedStyle(() => ({ opacity: pop.value, transform: [{ scale: 0.5 + pop.value * 0.5 }] }));
+  const tick = useAnimatedProps(() => ({ strokeDashoffset: 40 * (1 - draw.value) }));
   return (
-    <Animated.View style={[styles.successCircle, animatedStyle]}>
-      <Ionicons name="checkmark" size={34} color="#fff" />
+    <Animated.View style={[styles.tile, tile]}>
+      <Svg width={46} height={46} viewBox="0 0 24 24">
+        <AnimatedPath
+          d="M5 12.5l4.5 4.5L19 7.5"
+          stroke={MOSS}
+          strokeWidth={2.4}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+          strokeDasharray={40}
+          animatedProps={tick}
+        />
+      </Svg>
     </Animated.View>
+  );
+}
+
+function Row({ label, children }) {
+  return (
+    <View style={styles.row}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      {children}
+    </View>
   );
 }
 
 export default function OrderConfirmationScreen({ navigation, route }) {
   const order = route.params?.order;
   const reduceMotion = useReducedMotion();
+  const insets = useSafeAreaInsets();
 
   // Reachable only by placing an order, so an absent param means a stale
-  // deep link or a malformed nav call rather than a state a customer can
-  // get into by using the app. Same treatment OrderDetailsScreen gives the
-  // same situation.
+  // deep link or a malformed nav call.
   if (!order) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centerContainer}>
-          <EmptyState
-            icon="receipt-outline"
-            title="Nothing to show here"
-            subtitle="This confirmation is no longer available. Your orders are all listed under My Orders."
-          />
-          <View style={styles.emptyActionWrap}>
-            <Button variant="primary" label="View My Orders" onPress={() => navigation.navigate('Orders')} />
-          </View>
-        </View>
-      </SafeAreaView>
+      <View style={[styles.container, { paddingTop: insets.top + 40 }]}>
+        <BigEmpty
+          icon="receipt-outline"
+          title="Nothing to show here"
+          text="This confirmation is no longer available. Your orders are all listed under My Orders."
+          actionLabel="View My Orders"
+          onAction={() => navigation.navigate('Orders')}
+        />
+      </View>
     );
   }
 
   // One checkout can produce several orders — one per store in the cart,
-  // each with its own number, status and parcel (see placeOrder). The
-  // fallback shape covers a result from before the split, which carried a
-  // single orderId at the top level.
-  const placedOrders = Array.isArray(order.orders) && order.orders.length > 0
-    ? order.orders
-    : [{ orderId: order.orderId, items: order.items || [] }];
-  const splitAcrossStores = placedOrders.length > 1;
-  const itemCount = placedOrders.reduce((sum, placed) => sum + (placed.items || []).length, 0);
+  // each with its own number (see placeOrder). The fallback shape covers a
+  // result from before the split, which carried a single orderId.
+  const placedOrders =
+    Array.isArray(order.orders) && order.orders.length > 0
+      ? order.orders
+      : [{ orderId: order.orderId, items: order.items || [] }];
+  const split = placedOrders.length > 1;
   const payOnDelivery = isPayOnDelivery(order.paymentMethod);
-  const address = order.shippingAddress;
+  const storeName = placedOrders[0]?.storeName;
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
-      >
-        <Animated.View
-          style={styles.hero}
-          entering={reduceMotion ? undefined : FadeIn.duration(240).easing(EASE_OUT_QUART)}
-        >
-          <SuccessMark reduceMotion={reduceMotion} />
-          <Text style={styles.heroTitle}>{splitAcrossStores ? 'Orders placed' : 'Order placed'}</Text>
-          <Text style={styles.heroSubtitle}>
-            {splitAcrossStores
-              ? `Your cart came from ${placedOrders.length} stores, so it ships as ${placedOrders.length} orders.`
-              : "Thanks — we're getting it ready for you."}
-          </Text>
-        </Animated.View>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top + 40, paddingBottom: Math.max(insets.bottom, 16) + 24 }]}
+      showsVerticalScrollIndicator={false}
+    >
+      <SuccessTile reduceMotion={reduceMotion} />
+      <Reveal delay={350}>
+        <Text style={styles.title} accessibilityRole="header">
+          {split ? 'Orders placed!' : 'Order placed!'}
+        </Text>
+      </Reveal>
+      <Reveal delay={430}>
+        <Text style={styles.text}>
+          {split
+            ? `Your cart came from ${placedOrders.length} stores, so it ships as ${placedOrders.length} orders. We'll show updates in My Orders as each is prepared and shipped.`
+            : `${storeName || 'The store'} has your order. We'll show updates in My Orders as it's prepared and shipped.`}
+        </Text>
+      </Reveal>
 
-        {/* The order number leads, because it is the reason this screen
-            exists. Selectable so it can be copied into a support message
-            rather than transcribed by hand. */}
-        <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(240).delay(60).easing(EASE_OUT_QUART)}>
-          <Card variant="flat" style={styles.orderNumberCard}>
-            <Text style={styles.orderNumberLabel}>
-              {splitAcrossStores ? 'Your order numbers' : 'Your order number'}
-            </Text>
-            {/* Each number is named by the store that will know it by
-                that number — support for one store's parcel is asked of
-                that store. */}
-            {placedOrders.map((placed) => (
-              <View key={placed.orderId} style={styles.orderNumberRow}>
-                <Text style={styles.orderNumberValue} selectable>
-                  {formatOrderNumber(placed.orderId)}
-                </Text>
-                {placed.storeName ? (
-                  <Text style={styles.orderNumberStore}>from {placed.storeName}</Text>
-                ) : null}
-              </View>
-            ))}
-            <Text style={styles.orderNumberHint}>
-              {splitAcrossStores
-                ? 'Keep these if you need to ask about an order.'
-                : 'Keep this if you need to ask us about the order.'}
-            </Text>
-          </Card>
-        </Animated.View>
-
-        {/* What happens next, stated plainly rather than as a progress
-            graphic — OrderDetailsScreen already owns the timeline, and
-            duplicating it here would imply this order has moved when it
-            has not. */}
-        <Animated.View entering={reduceMotion ? undefined : FadeInDown.duration(240).delay(100).easing(EASE_OUT_QUART)}>
-          <Card variant="flat" style={styles.nextCard}>
-            <Text style={styles.sectionTitle}>What happens next</Text>
-            <View style={styles.nextRow}>
-              <Ionicons name="cube-outline" size={16} color={Colors.light.icon} />
-              <Text style={styles.nextText}>We pack your order and hand it to a courier.</Text>
-            </View>
-            <View style={styles.nextRow}>
-              <Ionicons name="car-outline" size={16} color={Colors.light.icon} />
-              <Text style={styles.nextText}>
-                Metro Manila usually takes 1–3 days, provincial 3–7.
-              </Text>
-            </View>
-            <View style={styles.nextRow}>
-              <Ionicons
-                name={payOnDelivery ? 'cash-outline' : 'checkmark-circle-outline'}
-                size={16}
-                color={payOnDelivery ? Colors.light.secondary : Colors.light.icon}
-              />
-              <Text style={styles.nextText}>
-                {payOnDelivery
-                  ? 'You pay the rider when it arrives — nothing is charged now.'
-                  : 'You can follow the order status under My Orders.'}
-              </Text>
-            </View>
-          </Card>
-        </Animated.View>
-
-        {/* Items, grouped by the store shipping them. With one store the
-            heading is just the count, as it always was. */}
+      {/* The order number leads, because it is the reason this screen
+          exists. Selectable so it can be copied into a support message. */}
+      <Reveal delay={510} style={styles.card}>
         {placedOrders.map((placed) => (
-          <View key={placed.orderId}>
-            <Text style={styles.sectionHeading}>
-              {splitAcrossStores && placed.storeName
-                ? `${placed.storeName} · ${formatOrderNumber(placed.orderId)}`
-                : `${itemCount} ${itemCount === 1 ? 'item' : 'items'}`}
+          <Row key={placed.orderId} label={split && placed.storeName ? placed.storeName : 'Order no.'}>
+            <Text style={styles.rowValue} selectable>
+              {formatOrderNumber(placed.orderId)}
             </Text>
-            {(placed.items || []).map((item, index) => (
-              <View key={`${item.productId || 'item'}-${index}`} style={styles.itemRow}>
-                {item.image ? (
-                  <ProductImage uri={item.image} style={styles.itemImage} />
-                ) : (
-                  <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
-                    <Ionicons name="shirt-outline" size={20} color={Colors.light.icon} />
-                  </View>
-                )}
-                <View style={styles.itemDetails}>
-                  <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
-                  <Text style={styles.itemMeta}>
-                    {[item.size, item.color].filter(Boolean).join(' · ')}
-                    {item.size || item.color ? ' · ' : ''}Qty {item.quantity || 1}
-                  </Text>
-                </View>
-                <Text style={styles.itemPrice}>
-                  ₱{(Number(item.price) * (item.quantity || 1)).toFixed(2)}
-                </Text>
-              </View>
-            ))}
-          </View>
+          </Row>
         ))}
+        <Row label="Status">
+          <Text style={styles.pill}>Processing</Text>
+        </Row>
+        <Row label="Payment">
+          <Text style={styles.rowValue}>
+            {getPaymentLabel(order.paymentMethod)}
+            {order.paymentSandbox ? ' (test)' : ''}
+          </Text>
+        </Row>
+        <Row label={payOnDelivery ? 'To pay on delivery' : 'Total'}>
+          <Text style={[styles.rowValue, { color: PRICE }]}>₱{Number(order.total || 0).toFixed(2)}</Text>
+        </Row>
+      </Reveal>
 
-        {/* Summary. Gold on the total only — DESIGN.md reserves it for
-            money, and using it on every row would spend the emphasis. */}
-        <Card variant="flat" style={styles.summaryCard}>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Subtotal</Text>
-            <Text style={styles.summaryValue}>₱{Number(order.subtotal || 0).toFixed(2)}</Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Shipping</Text>
-            <Text style={styles.summaryValueMoss}>
-              {Number(order.shipping || 0) === 0 ? 'Free' : `₱${Number(order.shipping).toFixed(2)}`}
-            </Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>
-              {payOnDelivery ? 'To pay on delivery' : 'Total'}
-            </Text>
-            <Text style={styles.totalValue}>₱{Number(order.total || 0).toFixed(2)}</Text>
-          </View>
-        </Card>
-
-        {/* Delivery address */}
-        {address ? (
-          <>
-            <Text style={styles.sectionHeading}>Delivering to</Text>
-            <Card variant="flat" style={styles.addressCard}>
-              <Text style={styles.addressName}>{address.fullName}</Text>
-              <Text style={styles.addressLine}>{address.phone}</Text>
-              <Text style={styles.addressLine}>
-                {[address.address, address.city, address.province, address.zipCode]
-                  .filter(Boolean)
-                  .join(', ')}
-              </Text>
-            </Card>
-          </>
-        ) : null}
-
-        {/* Payment */}
-        <Text style={styles.sectionHeading}>Payment</Text>
-        <Card variant="flat" style={styles.paymentCard}>
-          <Ionicons name={getPaymentIcon(order.paymentMethod)} size={18} color={Colors.light.tint} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.paymentLabel}>
-              {getPaymentLabel(order.paymentMethod)} · {getPaymentStatusLabel(order)}
-            </Text>
-            {order.paymentSandbox ? (
-              <Text style={styles.sandboxNote}>
-                Sandbox payment{order.paymentRef ? ` · ${order.paymentRef}` : ''} — simulated, no real money moved
-              </Text>
-            ) : null}
-          </View>
-        </Card>
-
-        <View style={styles.actions}>
-          <Button
-            variant="primary"
-            label="View My Orders"
-            fullWidth
-            onPress={() => navigation.navigate('Orders')}
-          />
-          <View style={styles.secondaryActionWrap}>
-            <Button
-              variant="secondary"
-              label="Continue Shopping"
-              fullWidth
-              onPress={() => navigation.navigate('Shop')}
-            />
-          </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+      <Reveal delay={590} style={styles.full}>
+        <Pressable
+          onPress={() => navigation.navigate('Orders')}
+          style={({ pressed }) => [styles.button, styles.primary, pressed && { transform: [{ scale: 0.97 }] }]}
+          accessibilityRole="button"
+        >
+          <Text style={[styles.buttonText, { color: '#fff' }]}>View My Orders</Text>
+        </Pressable>
+      </Reveal>
+      <Reveal delay={650} style={styles.full}>
+        <Pressable
+          onPress={() => navigation.navigate('Shop')}
+          style={({ pressed }) => [styles.button, styles.secondary, pressed && { transform: [{ scale: 0.97 }] }]}
+          accessibilityRole="button"
+        >
+          <Text style={styles.buttonText}>Continue shopping</Text>
+        </Pressable>
+      </Reveal>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  content: { padding: Spacing.md, paddingBottom: Spacing.xxl },
-  centerContainer: { flex: 1, justifyContent: 'center', paddingHorizontal: Spacing.lg },
-  emptyActionWrap: { marginTop: Spacing.md },
-
-  hero: { alignItems: 'center', paddingVertical: Spacing.lg },
-  // Moss, which DESIGN.md doubles as the success color. Deliberately not
-  // Clay: Clay is for actions, and nothing here is being asked of anyone.
-  successCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.light.secondary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: Spacing.md,
+  content: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28 },
+  tile: { width: 96, height: 96, borderRadius: 30, backgroundColor: '#EEF0EA', alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  title: { fontSize: 24, fontWeight: '600', letterSpacing: -0.5, color: INK, textAlign: 'center', marginBottom: 6 },
+  text: { fontSize: 13.5, lineHeight: 21, color: Colors.light.icon, textAlign: 'center', marginBottom: 20 },
+  card: {
+    alignSelf: 'stretch',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#EEE7DD',
+    borderRadius: 18,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    marginBottom: 22,
   },
-  heroTitle: { fontSize: 24, fontWeight: '700', color: Colors.light.text },
-  heroSubtitle: { fontSize: 15, color: Colors.light.icon, marginTop: Spacing.xs },
-
-  orderNumberCard: { alignItems: 'center', marginBottom: Spacing.md },
-  orderNumberLabel: { fontSize: 12, color: Colors.light.icon },
-  orderNumberValue: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: Colors.light.text,
-    letterSpacing: 1,
-    marginVertical: Spacing.xs,
-  },
-  orderNumberHint: { fontSize: 12, color: Colors.light.icon, textAlign: 'center' },
-  orderNumberRow: { alignItems: 'center', marginBottom: Spacing.xs },
-  orderNumberStore: { fontSize: 13, color: Colors.light.icon, marginTop: -2 },
-
-  nextCard: { marginBottom: Spacing.md, gap: Spacing.sm },
-  sectionTitle: { fontSize: 15, fontWeight: '600', color: Colors.light.text },
-  nextRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.sm },
-  nextText: { flex: 1, fontSize: 13, color: Colors.light.icon, lineHeight: 19 },
-
-  sectionHeading: {
-    fontSize: 15,
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingVertical: 5 },
+  rowLabel: { flexShrink: 1, fontSize: 13, color: Colors.light.icon },
+  rowValue: { fontSize: 13, fontWeight: '600', color: INK },
+  pill: {
+    fontSize: 11,
     fontWeight: '600',
-    color: Colors.light.text,
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.sm,
+    color: '#6B5A2E',
+    backgroundColor: '#F6EFE3',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
   },
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: Spacing.md,
-    gap: Spacing.sm,
-  },
-  itemImage: { width: 54, height: 54, borderRadius: Radius.md, backgroundColor: Colors.light.border },
-  itemImagePlaceholder: { alignItems: 'center', justifyContent: 'center' },
-  itemDetails: { flex: 1 },
-  itemName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-  itemMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
-  itemPrice: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-
-  summaryCard: { marginBottom: Spacing.md },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: Spacing.xs },
-  summaryLabel: { fontSize: 13, color: Colors.light.icon },
-  summaryValue: { fontSize: 13, color: Colors.light.text },
-  summaryValueMoss: { fontSize: 13, fontWeight: '600', color: Colors.light.secondary },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
-    marginTop: Spacing.sm,
-    paddingTop: Spacing.sm,
-  },
-  totalLabel: { fontSize: 15, fontWeight: '600', color: Colors.light.text },
-  totalValue: { fontSize: 19, fontWeight: '700', color: Colors.light.highlight },
-
-  addressCard: { marginBottom: Spacing.md },
-  addressName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-  addressLine: { fontSize: 13, color: Colors.light.icon, marginTop: 2, lineHeight: 19 },
-
-  paymentCard: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.lg },
-  paymentLabel: { fontSize: 14, color: Colors.light.text },
-  sandboxNote: { fontSize: 11, color: Colors.light.highlight, marginTop: 2 },
-
-  actions: { marginTop: Spacing.sm },
-  secondaryActionWrap: { marginTop: Spacing.sm },
+  full: { alignSelf: 'stretch', marginBottom: 10 },
+  button: { height: 54, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  primary: { backgroundColor: Colors.light.tint },
+  secondary: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#E4DCD1' },
+  buttonText: { fontSize: 15.5, fontWeight: '600', color: INK },
 });
