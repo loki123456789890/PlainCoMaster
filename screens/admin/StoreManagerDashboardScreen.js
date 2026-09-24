@@ -313,7 +313,17 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       logoutAsAdmin();
       // Reset the nav stack so "back" can't return to admin screens
       // after the session is gone.
-      navigation.reset({ index: 0, routes: [{ name: 'AdminLogin', params: { loggedOut: true } }] });
+      // The store's name and the time ride along for the logged-out
+      // screen's "your store is still open" card.
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: 'AdminLogin',
+            params: { loggedOut: true, storeName: store?.name || null, loggedOutAt: Date.now() },
+          },
+        ],
+      });
     } catch (error) {
       console.error('Error signing out:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

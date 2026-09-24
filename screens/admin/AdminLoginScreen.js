@@ -432,7 +432,12 @@ export default function AdminLoginScreen({ navigation, route }) {
           Not staff? <AuthLink onPress={() => goToCustomerLogin()}>Back to customer log in</AuthLink>
         </Text>
       </FadeUp>
-      <StaffLoggedOut visible={loggedOut} onSignIn={() => setLoggedOut(false)} />
+      <StaffLoggedOut
+        visible={loggedOut}
+        onSignIn={() => setLoggedOut(false)}
+        storeName={route?.params?.storeName}
+        loggedOutAt={route?.params?.loggedOutAt}
+      />
       <StaffAccountSheet
         visible={helpOpen}
         onClose={() => setHelpOpen(false)}
