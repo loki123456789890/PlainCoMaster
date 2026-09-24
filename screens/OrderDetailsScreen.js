@@ -1,4 +1,11 @@
-import React, { useEffect, useState } from 'react';
+// screens/OrderDetailsScreen.js
+//
+// Order details, from the approved orders-and-chat preview: the order as a
+// clothing tag (status, a four-step tracker, the order number with a copy
+// button and the date placed), then the seller with a Message button, the
+// items, where it's going, how it was paid, the receipt and a way to
+// support.
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -11,14 +18,16 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   withSequence,
+  withRepeat,
+  cancelAnimation,
   useReducedMotion,
-  Easing,
   FadeIn,
   FadeInDown,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { Colors, Spacing, Radius } from '../constants/theme';
@@ -28,155 +37,121 @@ import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import StarRating from '../components/ui/StarRating';
 import ProductImage from '../components/ui/ProductImage';
+import StoreLogo from '../components/shop/StoreLogo';
+import { useStores } from '../context/StoreContext';
 import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
 import { getPaymentLabel, getPaymentIcon, getPaymentStatus, getPaymentNote } from '../constants/payment';
 import { formatOrderNumber } from '../utils/orderNumber';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 import { orderRef, chatFields, hasUnread } from '../utils/orderChat';
 
-// "Pending" and "processing" share one visual status — an order is
-// "processing" the moment it's placed, and CheckoutScreen always creates
-// orders with status: 'pending'. Mirrors OrdersScreen's TABS grouping and
-// AdminOrdersScreen's status vocabulary (including 'cancelled', which
-// AdminOrdersScreen can set but this screen previously had no case for —
-// it fell through to the same neutral gray as an unrecognized status).
-const getStatusColor = (status) => {
-  switch ((status || '').toLowerCase()) {
-    case 'delivered': return Colors.light.success;
-    case 'processing':
-    case 'pending': return Colors.light.highlight;
-    case 'shipped': return Colors.light.tint;
-    case 'cancelled': return Colors.light.danger;
-    default: return Colors.light.icon;
-  }
-};
-
-const getStatusIcon = (status) => {
-  switch ((status || '').toLowerCase()) {
-    case 'delivered': return 'checkmark-circle-outline';
-    case 'processing':
-    case 'pending': return 'time-outline';
-    case 'shipped': return 'car-outline';
-    case 'cancelled': return 'close-circle-outline';
-    default: return 'ellipse-outline';
-  }
-};
-
-const getStatusReassurance = (status) => {
-  switch ((status || '').toLowerCase()) {
-    case 'delivered': return 'Delivered — we hope you love it.';
-    case 'shipped': return "It's on its way to you.";
-    case 'processing':
-    case 'pending': return "We're getting your order ready.";
-    case 'cancelled': return 'This order was cancelled.';
-    default: return 'Tracking this order for you.';
-  }
-};
-
-// Three-stage journey shown as a timeline — mirrors OrdersScreen's own
-// "Processing / Shipped / Delivered" tab labels so the two screens describe
-// an order's lifecycle with the same three words. Cancelled orders skip the
-// timeline entirely (see CancelledNote below); a cancelled order was never
-// going to reach "Delivered", so a progress bar frozen mid-way would read
-// as "still coming" instead of "stopped".
-const TIMELINE_STEPS = [
+// The same four steps the Store Manager moves an order through
+// (AdminOrdersScreen's STATUS_SEQUENCE), so the two sides never disagree
+// on how far along it is. The first reads "Placed" here: to a buyer,
+// "Pending" sounds like something is stuck. Cancelled orders skip the
+// tracker; a bar frozen mid-way would read as "still coming".
+const STEPS = [
+  { key: 'pending', label: 'Placed' },
   { key: 'processing', label: 'Processing' },
   { key: 'shipped', label: 'Shipped' },
   { key: 'delivered', label: 'Delivered' },
 ];
 
-const getTimelineStepIndex = (status) => {
-  switch ((status || '').toLowerCase()) {
-    case 'shipped': return 1;
-    case 'delivered': return 2;
-    default: return 0;
+const stepIndex = (status) => Math.max(0, STEPS.findIndex((s) => s.key === status));
+
+// The tag's colour: Clay while the order is moving, Moss (success) once
+// it arrives, Rust if it was cancelled.
+const tagColor = (status) => {
+  if (status === 'delivered') return Colors.light.success;
+  if (status === 'cancelled') return Colors.light.danger;
+  return Colors.light.tint;
+};
+
+const headline = (status) => {
+  switch (status) {
+    case 'pending': return 'Order placed';
+    case 'processing': return 'Being prepared';
+    case 'shipped': return 'On its way';
+    case 'delivered': return 'Delivered';
+    case 'cancelled': return 'Cancelled';
+    default: return 'Order placed';
   }
 };
 
+const reassurance = (status, storeName) => {
+  const store = storeName || 'The store';
+  switch (status) {
+    case 'pending': return `${store} has your order.`;
+    case 'processing': return `${store} is getting your order ready.`;
+    case 'shipped': return "It's on its way to you.";
+    case 'delivered': return 'Delivered. We hope you love it.';
+    case 'cancelled': return 'This order was cancelled.';
+    default: return 'Tracking this order for you.';
+  }
+};
 
-// Horizontal Processing -> Shipped -> Delivered progress. Reached steps
-// fill with the order's status color; the current step gets a soft ring;
-// upcoming steps stay outlined in Line. Connector fill uses opacity, not an
-// animated width, so nothing here animates a layout-driving property.
-function StatusTimeline({ currentIndex, statusColor, reduceMotion }) {
+// "Sep 22, 2026" -> "Sep 22", for the tracker's small date line.
+const shortDate = (date) => (date ? String(date).split(',')[0] : '');
+
+const peso = (n) => `₱${Number(n || 0).toFixed(2)}`;
+
+// A dashed rule. RN draws a dashed border on one side only on iOS; a
+// fully bordered box clipped to its top edge dashes on both platforms.
+function DashedRule({ color, style }) {
   return (
-    <Animated.View
-      style={styles.timelineWrap}
-      entering={reduceMotion ? undefined : FadeIn.duration(220).delay(80).easing(EASE_OUT_QUART)}
-    >
-      <View style={styles.timelineRow}>
-        {TIMELINE_STEPS.map((step, index) => {
-          const isComplete = index < currentIndex;
-          const isCurrent = index === currentIndex;
-          const isReached = index <= currentIndex;
-          return (
-            <React.Fragment key={step.key}>
-              {index > 0 && (
-                <View style={styles.timelineConnector}>
-                  <View
-                    style={[
-                      styles.timelineConnectorFill,
-                      { backgroundColor: statusColor, opacity: isReached ? 1 : 0 },
-                    ]}
-                  />
-                </View>
-              )}
-              <View
-                style={[
-                  styles.timelineCircle,
-                  isReached && { backgroundColor: statusColor, borderColor: statusColor },
-                  isCurrent && !isComplete && styles.timelineCircleCurrent,
-                ]}
-              >
-                {isComplete ? (
-                  <Ionicons name="checkmark" size={13} color="#fff" />
-                ) : isCurrent ? (
-                  <View style={styles.timelineDot} />
-                ) : null}
-              </View>
-            </React.Fragment>
-          );
-        })}
-      </View>
-      <View style={styles.timelineLabelsRow}>
-        {TIMELINE_STEPS.map((step, index) => (
-          <Text
-            key={step.key}
-            style={[styles.timelineLabel, index <= currentIndex && styles.timelineLabelActive]}
-          >
-            {step.label}
-          </Text>
-        ))}
-      </View>
-    </Animated.View>
+    <View style={[styles.dashClip, style]}>
+      <View style={[styles.dashBox, { borderColor: color }]} />
+    </View>
   );
+}
+
+// The current step's dot breathes, unless Reduce Motion is on.
+function NowDot({ color, reduceMotion }) {
+  const scale = useSharedValue(1);
+  useEffect(() => {
+    if (reduceMotion) return undefined;
+    scale.value = withRepeat(withTiming(0.6, { duration: 900 }), -1, true);
+    return () => cancelAnimation(scale);
+  }, [reduceMotion, scale]);
+  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  return <Animated.View style={[styles.nowInner, { backgroundColor: color }, style]} />;
+}
+
+// Four white dots joined by a line, on the tag: ticked when done, a ring
+// and a breathing dot for the current step, faint for what's to come.
+function Tracker({ index, color, placedDate, reduceMotion }) {
+  return (
+    <View style={styles.track}>
+      {STEPS.map((step, i) => {
+        const done = i < index;
+        const now = i === index;
+        const sub = i === 0 ? shortDate(placedDate) : now ? 'Now' : '';
+        return (
+          <View key={step.key} style={[styles.trackStep, !done && !now && styles.trackTodo]}>
+            {i > 0 && <View style={[styles.trackLine, i <= index && styles.trackLineOn]} />}
+            <View style={[styles.trackDot, (done || now) && styles.trackDotOn, now && styles.trackDotNow]}>
+              {done ? <Ionicons name="checkmark" size={13} color={color} /> : null}
+              {now ? <NowDot color={color} reduceMotion={reduceMotion} /> : null}
+            </View>
+            <Text style={styles.trackLabel}>{step.label}</Text>
+            {sub ? <Text style={styles.trackSub}>{sub}</Text> : null}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function SectionTitle({ children }) {
+  return <Text style={styles.sectionTitle}>{children}</Text>;
 }
 
 export default function OrderDetailsScreen({ navigation, route }) {
   const { order } = route.params || {};
   const items = order?.items || [];
   const reduceMotion = useReducedMotion();
-
-  const statusColor = getStatusColor(order?.status);
-  const isCancelled = (order?.status || '').toLowerCase() === 'cancelled';
-
-  // A quiet "arrived" pulse on the status icon for delivered orders only —
-  // same withSequence scale settle Checkoutscreen.js gives its footer total
-  // when it changes, reused here as the one moment on this screen that
-  // earns a little extra emphasis. Skipped under Reduce Motion.
-  const heroIconScale = useSharedValue(1);
-  const heroIconAnimatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: heroIconScale.value }],
-  }));
-  useEffect(() => {
-    if (reduceMotion || !order) return;
-    if ((order.status || '').toLowerCase() === 'delivered') {
-      heroIconScale.value = withSequence(
-        withTiming(1.12, { duration: 140, easing: EASE_OUT_QUINT }),
-        withTiming(1, { duration: 220, easing: EASE_OUT_QUART })
-      );
-    }
-  }, [order?.status]);
+  const { getStore } = useStores();
+  const store = order?.storeId ? getStore(order.storeId) : null;
 
   // Reviews this customer has already written against this order, keyed by
   // product id, so each line can offer "Write a review" or "Edit your
@@ -223,22 +198,56 @@ export default function OrderDetailsScreen({ navigation, route }) {
     };
   }, [order?.id, order?.status, navigation]);
 
-  // The order passed in is a snapshot from the list; the chat fields are
-  // watched live so "New message" appears while this screen is open and
-  // clears on the way back from the chat.
+  // The order passed in is a snapshot from the list. The order document is
+  // watched live, so the unread badge appears while this screen is open
+  // (and clears on the way back from the chat), and the tag moves on when
+  // the store marks the order shipped.
   const [chat, setChat] = useState(() => (order ? chatFields(order) : null));
+  const [liveStatus, setLiveStatus] = useState(null);
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!order?.id || !uid) return undefined;
     return onSnapshot(
       orderRef(uid, order.id),
       (snapshot) => {
-        if (snapshot.exists()) setChat(chatFields(snapshot.data()));
+        if (!snapshot.exists()) return;
+        const data = snapshot.data();
+        setChat(chatFields(data));
+        if (data.status) setLiveStatus(data.status);
       },
       (error) => console.error('Could not watch order for messages:', error)
     );
   }, [order?.id]);
   const unreadFromStore = hasUnread(chat, 'customer');
+
+  const status = (liveStatus || order?.status || 'pending').toLowerCase();
+
+  // A quiet "arrived" pulse on the tag's headline when the order is
+  // delivered. Skipped under Reduce Motion.
+  const headScale = useSharedValue(1);
+  const headStyle = useAnimatedStyle(() => ({ transform: [{ scale: headScale.value }] }));
+  useEffect(() => {
+    if (reduceMotion || status !== 'delivered') return;
+    headScale.value = withSequence(
+      withTiming(1.06, { duration: 140, easing: EASE_OUT_QUINT }),
+      withTiming(1, { duration: 220, easing: EASE_OUT_QUART })
+    );
+  }, [status, reduceMotion, headScale]);
+
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(copiedTimer.current), []);
+  const handleCopy = async () => {
+    try {
+      await Clipboard.setStringAsync(formatOrderNumber(order.id));
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setCopied(true);
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1600);
+    } catch (error) {
+      console.error('Could not copy order number:', error);
+    }
+  };
 
   const handleOpenChat = () => {
     Haptics.selectionAsync();
@@ -260,22 +269,38 @@ export default function OrderDetailsScreen({ navigation, route }) {
     navigation.navigate('WriteReview', { orderId: order.id, item, storeId: order.storeId });
   };
 
+  const header = (
+    <View style={styles.header}>
+      <TouchableOpacity
+        onPress={() => navigation.goBack()}
+        style={styles.headerBtn}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
+      >
+        <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+      </TouchableOpacity>
+      <Text style={styles.headerTitle}>Order details</Text>
+      {order ? (
+        <TouchableOpacity
+          onPress={handleContactSupport}
+          style={[styles.headerBtn, styles.headerBtnEnd]}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Get help with this order"
+        >
+          <Ionicons name="help-circle-outline" size={24} color={Colors.light.tint} />
+        </TouchableOpacity>
+      ) : (
+        <View style={styles.headerBtn} />
+      )}
+    </View>
+  );
+
   if (!order) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={styles.backButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            accessibilityRole="button"
-            accessibilityLabel="Go back"
-          >
-            <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Order Details</Text>
-          <View style={{ width: 40 }} />
-        </View>
+        {header}
         <Animated.View
           style={styles.centerContainer}
           entering={reduceMotion ? undefined : FadeIn.duration(220)}
@@ -293,8 +318,9 @@ export default function OrderDetailsScreen({ navigation, route }) {
     );
   }
 
-  const statusLabel = (order.status || '').charAt(0).toUpperCase() + (order.status || '').slice(1);
-  const timelineIndex = getTimelineStepIndex(order.status);
+  const isCancelled = status === 'cancelled';
+  const color = tagColor(status);
+  const beforeShipping = status === 'pending' || status === 'processing';
   // Exactly the lines firestore.rules will accept a review for: a delivered
   // order, and a product listed in that order's own productIds. Orders
   // placed before productIds existed yield an empty set and show no review
@@ -304,127 +330,123 @@ export default function OrderDetailsScreen({ navigation, route }) {
   const shippingAddress = order.shippingAddress;
   const paymentMethod = order.paymentMethod;
   const paymentLabel = getPaymentLabel(paymentMethod);
-  // "Paid via GCash" used to be printed for every online order, back when
-  // selecting a method did nothing at all — it was the one sentence in
-  // this screen that was not true. It is now read from the order's own
-  // paymentStatus rather than assumed from the method, so an order that
-  // was never charged cannot claim it was.
+  // Read from the order's own paymentStatus rather than assumed from the
+  // method, so an order that was never charged cannot claim it was.
+  const isPaid = paymentMethod && paymentMethod !== 'cod' && getPaymentStatus(order) === 'paid';
   const paymentTrustText = !paymentMethod
     ? ''
     : paymentMethod === 'cod'
-      ? 'Pay when your order arrives — no online payment needed'
-      : getPaymentStatus(order) === 'paid'
-        ? `Paid via ${paymentLabel}`
-        : `Not charged — ${paymentLabel} payment was not completed`;
+      ? 'Pay the rider when it arrives'
+      : isPaid
+        ? paymentMethod === 'card' ? 'Credit / debit card' : 'E-wallet'
+        : `Not charged. The ${paymentLabel} payment was not completed.`;
 
   // Shown only where it is true, and stated plainly rather than softened.
   // An order carrying a simulated authorisation must say so on the screen
   // a customer or a Store Manager would point at as proof of payment.
   const sandboxNote = getPaymentNote(order);
+  const itemCount = items.reduce((n, item) => n + (item.quantity || 1), 0);
+  const fade = (delay) => (reduceMotion ? undefined : FadeIn.duration(220).delay(delay).easing(EASE_OUT_QUART));
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Order Details</Text>
-        <TouchableOpacity
-          onPress={handleContactSupport}
-          style={styles.headerAction}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Get help with this order"
-        >
-          <Ionicons name="help-circle-outline" size={24} color={Colors.light.tint} />
-        </TouchableOpacity>
-      </View>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      {header}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        {/* Order Status */}
-        <Text style={styles.sectionTitle}>Order Status</Text>
+        {/* The tag */}
         <Animated.View
-          entering={reduceMotion ? undefined : FadeIn.duration(220).easing(EASE_OUT_QUART)}
-          accessible
-          accessibilityLabel={`Order ${formatOrderNumber(order.id)}, status ${statusLabel}. ${getStatusReassurance(order.status)}`}
+          entering={fade(0)}
+          style={[styles.tag, { backgroundColor: color }]}
         >
-          <Card variant="flat" style={styles.heroCard}>
-            <View style={styles.heroTop}>
-              <Animated.View
-                style={[styles.heroIconCircle, { backgroundColor: statusColor + '15' }, heroIconAnimatedStyle]}
-              >
-                <Ionicons name={getStatusIcon(order.status)} size={26} color={statusColor} />
-              </Animated.View>
-              <View style={styles.heroTextWrap}>
-                <Text style={[styles.heroStatusLabel, { color: statusColor }]}>{statusLabel}</Text>
-                <Text style={styles.heroStatusSubtitle}>{getStatusReassurance(order.status)}</Text>
-              </View>
-            </View>
+          <View style={styles.tagGlow} />
+          <View style={styles.tagString} />
+          <View style={styles.tagHole} />
 
-            {isCancelled ? (
-              <View style={styles.cancelledNote}>
-                <Text style={styles.cancelledNoteText}>
-                  If you have questions about this order, our support team can help.
-                </Text>
-              </View>
-            ) : (
-              <StatusTimeline currentIndex={timelineIndex} statusColor={statusColor} reduceMotion={reduceMotion} />
-            )}
+          <View style={styles.tagOrdRow}>
+            <Text style={styles.tagOrdLabel}>ORDER</Text>
+            <Text style={styles.tagOrdNumber}>{formatOrderNumber(order.id)}</Text>
+            <TouchableOpacity
+              onPress={handleCopy}
+              style={styles.tagCopy}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel={copied ? 'Order number copied' : 'Copy order number'}
+            >
+              <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={13} color="#fff" />
+            </TouchableOpacity>
+            {copied ? <Text style={styles.tagCopied}>Copied</Text> : null}
+          </View>
 
-            <View style={styles.heroDivider} />
-            <View style={styles.heroMetaRow}>
-              <View>
-                <Text style={styles.heroMetaLabel}>Order #</Text>
-                <Text style={styles.heroMetaValue}>{formatOrderNumber(order.id)}</Text>
-              </View>
-              <View style={styles.heroMetaRight}>
-                <Text style={styles.heroMetaLabel}>Date placed</Text>
-                <Text style={styles.heroMetaValue}>{order.date}</Text>
-              </View>
+          <View
+            accessible
+            accessibilityRole="header"
+            accessibilityLabel={`${headline(status)}. ${reassurance(status, order.storeName)}`}
+          >
+            <Animated.Text style={[styles.tagHead, headStyle]}>{headline(status)}</Animated.Text>
+            <Text style={styles.tagSub}>{reassurance(status, order.storeName)}</Text>
+          </View>
+
+          {isCancelled ? (
+            <Text style={styles.tagCancelNote}>
+              If you have questions about this order, our support team can help.
+            </Text>
+          ) : (
+            <View
+              accessible
+              accessibilityLabel={`Step ${stepIndex(status) + 1} of 4: ${STEPS[stepIndex(status)].label}`}
+            >
+              <Tracker
+                index={stepIndex(status)}
+                color={color}
+                placedDate={order.date}
+                reduceMotion={reduceMotion}
+              />
             </View>
-          </Card>
+          )}
+
+          <DashedRule color="rgba(255,255,255,0.4)" style={styles.tagRule} />
+          <View style={styles.tagMeta}>
+            <Text style={styles.tagMetaLabel}>Placed</Text>
+            <Text style={styles.tagMetaValue}>{order.date || '—'}</Text>
+          </View>
         </Animated.View>
 
-        {/* Order chat — straight to the store that is packing this parcel.
-            Only orders that belong to a store have someone to talk to. */}
+        {/* The seller, and the way into the order's chat. Only orders that
+            belong to a store have someone to talk to. */}
         {order.storeId ? (
-          <AnimatedPressable
-            onPress={handleOpenChat}
-            accessibilityRole="button"
-            accessibilityLabel={`Message ${order.storeName || 'the store'}${unreadFromStore ? ', new message' : ''}`}
-          >
-            <Card variant="flat" style={styles.chatCard}>
-              <View style={[styles.paymentIconCircle, { backgroundColor: Colors.light.tint + '15' }]}>
-                <Ionicons name="chatbubbles-outline" size={18} color={Colors.light.tint} />
+          <Animated.View entering={fade(40)}>
+            <Card variant="flat" style={styles.sellerCard}>
+              <View style={styles.sellerRow}>
+                <StoreLogo uri={store?.logoUrl} size={44} radius={14} />
+                <View style={styles.sellerWho}>
+                  <Text style={styles.sellerName} numberOfLines={2}>{order.storeName || 'The store'}</Text>
+                  <Text style={styles.sellerRole}>Seller</Text>
+                </View>
+                <AnimatedPressable
+                  onPress={handleOpenChat}
+                  style={styles.msgBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Message ${order.storeName || 'the store'}${unreadFromStore ? ', new message' : ''}`}
+                >
+                  <Ionicons name="chatbubble-outline" size={16} color="#fff" />
+                  <Text style={styles.msgBtnText}>Message</Text>
+                  {unreadFromStore ? <View style={styles.msgBadge} /> : null}
+                </AnimatedPressable>
               </View>
-              <View style={styles.paymentTextWrap}>
-                <Text style={styles.paymentLabel}>Message {order.storeName || 'the store'}</Text>
-                <Text style={styles.paymentTrustText}>
-                  {unreadFromStore ? 'You have a new message' : 'Ask about condition, sizing, or delivery'}
-                </Text>
-              </View>
-              {unreadFromStore ? <View style={styles.unreadDot} /> : null}
-              <Ionicons name="chevron-forward" size={18} color={Colors.light.icon} />
+              {beforeShipping ? (
+                <View style={styles.sellerHint}>
+                  <Ionicons name="camera-outline" size={15} color={Colors.light.secondary} />
+                  <Text style={styles.sellerHintText}>
+                    Ask for a photo of the exact piece before it ships.
+                  </Text>
+                </View>
+              ) : null}
             </Card>
-          </AnimatedPressable>
+          </Animated.View>
         ) : null}
 
         {/* Items */}
-        <Text style={[styles.sectionTitle, order.storeName && styles.sectionTitleWithSub]}>
-          Items ({items.length})
-        </Text>
-        {/* The store to ask about this parcel. One order is one store's —
-            a cart spanning several becomes several orders. */}
-        {order.storeName ? (
-          <Text style={styles.soldBy}>Sold by {order.storeName}</Text>
-        ) : null}
+        <SectionTitle>{itemCount === 1 ? 'Item · 1' : `Items · ${itemCount}`}</SectionTitle>
         {items.length === 0 ? (
           <Text style={styles.emptyItemsText}>No item details available for this order.</Text>
         ) : (
@@ -432,6 +454,8 @@ export default function OrderDetailsScreen({ navigation, route }) {
             const existingReview = reviewsByProductId[item.productId];
             const showReviewRow =
               canReviewThisOrder && item.productId && reviewableProductIds.has(item.productId);
+            const qty = item.quantity || 1;
+            const chips = [item.size, item.color, `×${qty}`].filter(Boolean);
 
             return (
               <Animated.View
@@ -445,7 +469,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
                   <View
                     style={styles.itemRow}
                     accessible
-                    accessibilityLabel={`${item.name}${item.size ? `, size ${item.size}` : ''}${item.color ? `, color ${item.color}` : ''}, quantity ${item.quantity || 1}, ₱${(Number(item.price) * (item.quantity || 1)).toFixed(2)}`}
+                    accessibilityLabel={`${item.name}${item.size ? `, size ${item.size}` : ''}${item.color ? `, color ${item.color}` : ''}, quantity ${qty}, ${peso(Number(item.price) * qty)}`}
                   >
                     {item.image ? (
                       <ProductImage uri={item.image} style={styles.itemImage} />
@@ -456,16 +480,13 @@ export default function OrderDetailsScreen({ navigation, route }) {
                     )}
                     <View style={styles.itemDetails}>
                       <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
-                      <Text style={styles.itemSpecs}>
-                        {item.size ? `Size: ${item.size}` : ''}
-                        {item.size && item.color ? '  ·  ' : ''}
-                        {item.color ? `Color: ${item.color}` : ''}
-                      </Text>
-                      <Text style={styles.itemQty}>Qty: {item.quantity || 1}</Text>
+                      <View style={styles.chips}>
+                        {chips.map((c) => (
+                          <Text key={c} style={styles.chip}>{c}</Text>
+                        ))}
+                      </View>
                     </View>
-                    <Text style={styles.itemPrice}>
-                      ₱{(Number(item.price) * (item.quantity || 1)).toFixed(2)}
-                    </Text>
+                    <Text style={styles.itemPrice}>{peso(Number(item.price) * qty)}</Text>
                   </View>
 
                   {/* Asking for the review here, on the delivered order,
@@ -503,79 +524,99 @@ export default function OrderDetailsScreen({ navigation, route }) {
           })
         )}
 
-        {/* Delivery Address */}
-        <Text style={styles.sectionTitle}>Delivery Address</Text>
-        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220).delay(60).easing(EASE_OUT_QUART)}>
-          <Card variant="flat" style={styles.addressCard}>
-            <Ionicons
-              name="location-outline"
-              size={20}
-              color={shippingAddress ? Colors.light.tint : Colors.light.icon}
-            />
+        {/* Deliver to */}
+        <SectionTitle>Deliver to</SectionTitle>
+        <Animated.View entering={fade(60)}>
+          <Card variant="flat" style={styles.row}>
+            <View style={[styles.ico, styles.icoClay]}>
+              <Ionicons name="location-outline" size={18} color={Colors.light.tint} />
+            </View>
             {shippingAddress ? (
-              <View style={styles.addressTextWrap}>
-                <Text style={styles.addressName}>
-                  {shippingAddress.fullName} · {shippingAddress.phone}
-                </Text>
-                <Text style={styles.addressDetail}>
+              <View style={styles.rowText}>
+                <Text style={styles.rowTitle}>{shippingAddress.fullName}</Text>
+                <Text style={styles.rowBody}>{shippingAddress.phone}</Text>
+                <Text style={styles.rowBody}>
                   {shippingAddress.address}, {shippingAddress.city}, {shippingAddress.province} {shippingAddress.zipCode}
                 </Text>
               </View>
             ) : (
-              <Text style={styles.addressMissingText}>Address not available for this order.</Text>
+              <Text style={[styles.rowText, styles.rowBody]}>Address not available for this order.</Text>
             )}
           </Card>
         </Animated.View>
 
-        {/* Payment Method */}
-        <Text style={styles.sectionTitle}>Payment Method</Text>
-        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220).delay(80).easing(EASE_OUT_QUART)}>
-          <Card variant="flat" style={styles.paymentCard}>
-            <View style={[styles.paymentIconCircle, { backgroundColor: Colors.light.tint + '15' }]}>
-              <Ionicons name={getPaymentIcon(paymentMethod)} size={18} color={Colors.light.tint} />
+        {/* Payment */}
+        <SectionTitle>Payment</SectionTitle>
+        <Animated.View entering={fade(80)}>
+          <Card variant="flat" style={styles.payCard}>
+            <View style={styles.payRow}>
+              <View style={[styles.ico, styles.icoMoss]}>
+                <Ionicons name={getPaymentIcon(paymentMethod)} size={18} color={Colors.light.secondary} />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowTitle}>{paymentLabel}</Text>
+                {paymentTrustText ? <Text style={styles.rowBody}>{paymentTrustText}</Text> : null}
+              </View>
+              {isPaid ? <Text style={styles.paidPill}>Paid</Text> : null}
             </View>
-            <View style={styles.paymentTextWrap}>
-              <Text style={styles.paymentLabel}>{paymentLabel}</Text>
-              {paymentTrustText ? <Text style={styles.paymentTrustText}>{paymentTrustText}</Text> : null}
-              {sandboxNote ? <Text style={styles.sandboxNote}>{sandboxNote}</Text> : null}
-            </View>
+            {sandboxNote ? (
+              <View style={styles.sandbox}>
+                <Ionicons name="flask-outline" size={15} color={Colors.light.icon} />
+                <Text style={styles.sandboxText}>{sandboxNote}</Text>
+              </View>
+            ) : null}
           </Card>
         </Animated.View>
 
-        {/* Order Summary */}
-        <Text style={styles.sectionTitle}>Order Summary</Text>
-        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220).delay(100).easing(EASE_OUT_QUART)}>
-          <Card variant="flat" style={styles.summaryCard}>
-            <View style={styles.row}>
-              <Text style={styles.label}>Subtotal</Text>
-              <Text style={styles.value}>₱{Number(order.subtotal || order.total).toFixed(2)}</Text>
+        {/* Receipt */}
+        <Animated.View entering={fade(100)}>
+          <Card variant="flat" style={styles.receipt}>
+            <View style={styles.receiptLine}>
+              <Text style={styles.receiptLabel}>Subtotal</Text>
+              <Text style={styles.receiptValue}>{peso(order.subtotal || order.total)}</Text>
             </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>Shipping</Text>
+            <View style={styles.receiptLine}>
+              <Text style={styles.receiptLabel}>Shipping</Text>
               {order.shipping ? (
-                <Text style={styles.value}>₱{Number(order.shipping).toFixed(2)}</Text>
+                <Text style={styles.receiptValue}>{peso(order.shipping)}</Text>
               ) : (
-                <Text style={styles.valueMoss}>Free</Text>
+                <Text style={styles.receiptFree}>Free</Text>
               )}
             </View>
-            <View style={[styles.row, styles.totalRow]}>
-              <Text style={styles.totalLabel}>Total</Text>
-              <Text style={styles.totalValue}>₱{Number(order.total).toFixed(2)}</Text>
+            <DashedRule color={Colors.light.border} style={styles.receiptRule} />
+            <View style={styles.receiptTotal}>
+              <Text style={styles.receiptTotalLabel}>Total</Text>
+              <Text style={styles.receiptTotalValue}>{peso(order.total)}</Text>
             </View>
           </Card>
         </Animated.View>
 
         {/* Support */}
-        <Animated.View
-          style={styles.supportWrap}
-          entering={reduceMotion ? undefined : FadeIn.duration(220).delay(120).easing(EASE_OUT_QUART)}
-        >
-          <Button variant="secondary" label="Need Help? Contact Support" onPress={handleContactSupport} />
+        <Animated.View entering={fade(120)}>
+          <AnimatedPressable
+            onPress={handleContactSupport}
+            accessibilityRole="button"
+            accessibilityLabel="Problem with this order? Contact PlainCo support"
+          >
+            <Card variant="flat" style={styles.help}>
+              <View style={[styles.ico, styles.icoClay]}>
+                <Ionicons name="help-circle-outline" size={18} color={Colors.light.tint} />
+              </View>
+              <View style={styles.rowText}>
+                <Text style={styles.rowTitle}>Problem with this order?</Text>
+                <Text style={styles.rowBody}>Contact PlainCo support</Text>
+              </View>
+              <Text style={styles.helpGo}>Help</Text>
+              <Ionicons name="chevron-forward" size={16} color={Colors.light.tint} />
+            </Card>
+          </AnimatedPressable>
         </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );
 }
+
+const WHITE_SOFT = 'rgba(255,255,255,0.28)';
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
@@ -583,87 +624,173 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
   },
-  backButton: { width: 40, height: 40, justifyContent: 'center' },
+  headerBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  headerBtnEnd: { alignItems: 'center' },
   headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
-  headerAction: { width: 40, height: 40, justifyContent: 'center', alignItems: 'flex-end' },
-  content: { padding: 20, paddingBottom: 40 },
-  sectionTitle: { fontSize: 16, fontWeight: 'bold', color: Colors.light.text, marginBottom: 12 },
-
-  // Order Status hero card
-  heroCard: { marginBottom: 24 },
-  heroTop: { flexDirection: 'row', alignItems: 'center' },
-  heroIconCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    justifyContent: 'center',
-    alignItems: 'center',
+  content: { paddingHorizontal: 18, paddingTop: 6, paddingBottom: 40 },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: Colors.light.icon,
+    marginTop: 22,
+    marginBottom: 10,
   },
-  heroTextWrap: { flex: 1, marginLeft: 14 },
-  heroStatusLabel: { fontSize: 18, fontWeight: '700', marginBottom: 2 },
-  heroStatusSubtitle: { fontSize: 13, color: Colors.light.icon },
-  heroDivider: { height: 1, backgroundColor: Colors.light.border, marginTop: 16, marginBottom: 12 },
-  heroMetaRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  heroMetaRight: { alignItems: 'flex-end' },
-  heroMetaLabel: { fontSize: 11, color: Colors.light.icon, marginBottom: 2 },
-  heroMetaValue: { fontSize: 13, fontWeight: '600', color: Colors.light.text },
-  sectionTitleWithSub: { marginBottom: 2 },
-  soldBy: { fontSize: 13, color: Colors.light.icon, marginBottom: 12 },
 
-  cancelledNote: {
-    marginTop: 16,
-    backgroundColor: Colors.light.danger + '10',
-    borderRadius: Radius.sm,
-    padding: 12,
+  // The tag
+  tag: { borderRadius: Radius.xl, padding: 20, paddingBottom: 18, overflow: 'hidden' },
+  tagGlow: {
+    position: 'absolute',
+    right: -40,
+    top: -60,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(255,255,255,0.07)',
   },
-  cancelledNoteText: { fontSize: 12, color: Colors.light.danger, lineHeight: 17 },
-
-  // Status timeline
-  timelineWrap: { marginTop: 18 },
-  timelineRow: { flexDirection: 'row', alignItems: 'center' },
-  timelineConnector: {
-    flex: 1,
-    height: 2,
-    backgroundColor: Colors.light.border,
-    marginHorizontal: 4,
-    overflow: 'hidden',
+  tagString: {
+    position: 'absolute',
+    top: -6,
+    right: 26,
+    width: 2,
+    height: 28,
+    borderRadius: 1,
+    backgroundColor: 'rgba(255,255,255,0.55)',
   },
-  timelineConnectorFill: { flex: 1, height: 2 },
-  timelineCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: Colors.light.border,
+  tagHole: {
+    position: 'absolute',
+    top: 18,
+    right: 20,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     backgroundColor: Colors.light.background,
-    justifyContent: 'center',
+  },
+  tagOrdRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 30 },
+  tagOrdLabel: { fontSize: 11.5, color: 'rgba(255,255,255,0.85)', letterSpacing: 0.4 },
+  tagOrdNumber: { fontSize: 12.5, fontWeight: '600', color: '#fff', fontVariant: ['tabular-nums'], letterSpacing: 0.6 },
+  tagCopy: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    backgroundColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  timelineCircleCurrent: { backgroundColor: Colors.light.background },
-  timelineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.light.tint },
-  timelineLabelsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  timelineLabel: { fontSize: 11, color: Colors.light.icon, fontWeight: '500', width: 70, textAlign: 'center' },
-  timelineLabelActive: { color: Colors.light.text, fontWeight: '600' },
+  tagCopied: { fontSize: 11, color: '#fff', fontWeight: '600' },
+  tagHead: { fontSize: 24, fontWeight: '600', color: '#fff', marginTop: 12, alignSelf: 'flex-start' },
+  tagSub: { fontSize: 13, color: 'rgba(255,255,255,0.92)', marginTop: 2 },
+  tagCancelNote: { fontSize: 12.5, color: '#fff', lineHeight: 18, marginTop: 14 },
+  tagRule: { marginTop: 16 },
+  tagMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
+  tagMetaLabel: { fontSize: 12, color: 'rgba(255,255,255,0.82)' },
+  tagMetaValue: { fontSize: 12, fontWeight: '600', color: '#fff' },
 
-  emptyItemsText: { fontSize: 13, color: Colors.light.icon, marginBottom: 20 },
-  // The card is now a column (line, then optional review row); the
-  // horizontal layout it used to own moved down to itemRow.
-  itemCard: {
-    padding: 12,
-    marginBottom: 12,
+  // Tracker
+  track: { flexDirection: 'row', marginTop: 20 },
+  trackStep: { flex: 1, alignItems: 'center' },
+  trackTodo: { opacity: 0.72 },
+  trackLine: {
+    position: 'absolute',
+    top: 11,
+    right: '50%',
+    width: '100%',
+    height: 2,
+    backgroundColor: WHITE_SOFT,
   },
-  itemRow: {
+  trackLineOn: { backgroundColor: '#fff' },
+  trackDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trackDotOn: { backgroundColor: '#fff', borderColor: '#fff' },
+  trackDotNow: {
+    shadowColor: '#fff',
+    shadowOpacity: 0.5,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  nowInner: { width: 9, height: 9, borderRadius: 4.5 },
+  trackLabel: { fontSize: 11, fontWeight: '600', color: '#fff', marginTop: 6 },
+  trackSub: { fontSize: 10, color: 'rgba(255,255,255,0.78)', marginTop: 1 },
+
+  // Dashed rule
+  dashClip: { height: 1, overflow: 'hidden' },
+  dashBox: { height: 2, borderWidth: 1, borderStyle: 'dashed', borderRadius: 1 },
+
+  // Seller
+  sellerCard: { padding: 0, marginTop: 22, overflow: 'hidden' },
+  sellerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  sellerWho: { flex: 1, minWidth: 0 },
+  sellerName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, lineHeight: 19 },
+  sellerRole: { fontSize: 12, color: Colors.light.icon },
+  msgBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.light.tint,
+    paddingHorizontal: 14,
+    minHeight: 40,
+    borderRadius: Radius.md,
   },
+  msgBtnText: { fontSize: 13, fontWeight: '600', color: '#fff' },
+  msgBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: Colors.light.text,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  sellerHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+  },
+  sellerHintText: { flex: 1, fontSize: 12, color: Colors.light.icon },
+
+  // Items
+  emptyItemsText: { fontSize: 13, color: Colors.light.icon },
+  // The card is a column (line, then optional review row).
+  itemCard: { padding: 12, marginBottom: 10 },
+  itemRow: { flexDirection: 'row', alignItems: 'center' },
+  itemImage: { width: 64, height: 64, borderRadius: Radius.md, backgroundColor: Colors.light.border },
+  itemImagePlaceholder: { justifyContent: 'center', alignItems: 'center' },
+  itemDetails: { flex: 1, marginLeft: 12, marginRight: 8 },
+  itemName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  chip: {
+    fontSize: 11,
+    color: Colors.light.icon,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+    overflow: 'hidden',
+  },
+  itemPrice: { fontSize: 14, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
   // A quiet in-card row, not a Button: asking for a review should not
-  // compete with "Contact Support" at the bottom of the screen, and Clay is
-  // spent here on the text rather than on a filled block.
+  // compete with the Message button, and Clay is spent here on the text
+  // rather than on a filled block.
   reviewRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -675,52 +802,59 @@ const styles = StyleSheet.create({
     borderTopColor: Colors.light.border,
   },
   reviewRowText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.tint },
-  itemImage: { width: 60, height: 60, borderRadius: 8, backgroundColor: Colors.light.border },
-  itemImagePlaceholder: { justifyContent: 'center', alignItems: 'center' },
-  itemDetails: { flex: 1, marginLeft: 12 },
-  itemName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 2 },
-  itemSpecs: { fontSize: 12, color: Colors.light.icon, marginBottom: 2 },
-  itemQty: { fontSize: 12, color: Colors.light.icon },
-  itemPrice: { fontSize: 14, fontWeight: '700', color: Colors.light.text },
 
-  // Delivery Address
-  addressCard: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
-  addressTextWrap: { flex: 1, marginLeft: 12 },
-  addressName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 4 },
-  addressDetail: { fontSize: 12, color: Colors.light.icon, lineHeight: 18 },
-  addressMissingText: { flex: 1, marginLeft: 12, fontSize: 13, color: Colors.light.icon },
+  // Icon rows (address, payment, help)
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 14 },
+  ico: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  icoClay: { backgroundColor: Colors.light.tint + '15' },
+  icoMoss: { backgroundColor: Colors.light.secondary + '20' },
+  rowText: { flex: 1 },
+  rowTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 2 },
+  rowBody: { fontSize: 13, color: Colors.light.icon, lineHeight: 19 },
 
-  // Payment Method
-  paymentCard: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
-  paymentIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
+  // Payment
+  payCard: { padding: 0 },
+  payRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  paidPill: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.light.secondary,
+    backgroundColor: Colors.light.secondary + '20',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: Radius.pill,
+    overflow: 'hidden',
   },
-  paymentTextWrap: { flex: 1, marginLeft: 12 },
-  paymentLabel: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 2 },
-  paymentTrustText: { fontSize: 12, color: Colors.light.icon },
-  // Gold, the money colour, and the only place it earns its reservation
-  // outside a price — this line is about the money not having moved.
-  sandboxNote: { fontSize: 11, color: Colors.light.highlight, marginTop: 2 },
+  sandbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 14,
+    marginBottom: 14,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: Colors.light.border,
+    backgroundColor: Colors.light.background,
+  },
+  sandboxText: { flex: 1, fontSize: 11.5, color: Colors.light.icon, lineHeight: 16 },
 
-  // Order chat
-  chatCard: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 24 },
-  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.light.tint },
+  // Receipt
+  receipt: { marginTop: 22 },
+  receiptLine: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
+  receiptLabel: { fontSize: 13.5, color: Colors.light.icon },
+  receiptValue: { fontSize: 13.5, color: Colors.light.text, fontVariant: ['tabular-nums'] },
+  receiptFree: { fontSize: 13.5, fontWeight: '600', color: Colors.light.success },
+  receiptRule: { marginTop: 10 },
+  receiptTotal: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: 14 },
+  receiptTotalLabel: { fontSize: 15, fontWeight: '600', color: Colors.light.text },
+  receiptTotalValue: { fontSize: 24, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
 
-  // Order Summary
-  summaryCard: { marginBottom: 24 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
-  totalRow: { borderTopWidth: 1, borderTopColor: Colors.light.border, marginTop: 8, paddingTop: 12 },
-  label: { fontSize: 14, color: Colors.light.icon },
-  value: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-  valueMoss: { fontSize: 14, fontWeight: 'bold', color: Colors.light.secondary },
-  totalLabel: { fontSize: 16, fontWeight: 'bold', color: Colors.light.text },
-  totalValue: { fontSize: 16, fontWeight: 'bold', color: Colors.light.highlight },
-
-  supportWrap: { marginTop: 4 },
+  // Support
+  help: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, marginTop: 22 },
+  helpGo: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
 
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
   emptyActionWrap: { marginTop: Spacing.md, width: 200, alignSelf: 'center' },
