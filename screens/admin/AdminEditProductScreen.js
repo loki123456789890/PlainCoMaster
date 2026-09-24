@@ -20,15 +20,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { showAppAlert } from '../../utils/appAlert';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  cancelAnimation,
-  useReducedMotion,
-  Easing,
-  FadeIn,
-} from 'react-native-reanimated';
+import Animated, { useReducedMotion, FadeIn } from 'react-native-reanimated';
 import { deleteField } from 'firebase/firestore';
 import { useProducts } from '../../context/ProductContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
@@ -46,6 +38,7 @@ import { pickAndUploadProductImage, uploadErrorMessage } from '../../utils/image
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Sheet from '../../components/shop/Sheet';
+import DeleteProductPanel from '../../components/admin/DeleteProductPanel';
 import { TopBar, OfflineNotice, UndoToast, useAutoClear } from '../../components/shop/TabScreen';
 
 const INK = Colors.light.text;
@@ -58,7 +51,6 @@ const CARD_LINE = '#EEE7DD';
 const ERR = '#B42318';
 const CHANGED_LINE = '#E6B9A5';
 const CHANGED_BG = '#FFFBF9';
-const HOLD_MS = 1200;
 
 // Light swatches get a dark tick so it shows.
 const LIGHT_SWATCHES = ['White', 'Beige', 'Yellow'];
@@ -228,55 +220,6 @@ function Field({ value, onChangeText, error, changed, prefix, multiline, ...rest
         {...rest}
       />
     </View>
-  );
-}
-
-// Delete, press and hold: a darker fill sweeps across while it's held,
-// and letting go early cancels. A screen reader's double-tap deletes
-// directly, since holding isn't something it can do.
-function HoldToDelete({ onDelete, deleting }) {
-  const reduceMotion = useReducedMotion();
-  const fill = useSharedValue(0);
-  const timer = useRef(null);
-  const [holding, setHolding] = useState(false);
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const start = () => {
-    if (deleting) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setHolding(true);
-    fill.value = withTiming(1, { duration: reduceMotion ? 0 : HOLD_MS, easing: Easing.linear });
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      setHolding(false);
-      onDelete();
-    }, HOLD_MS);
-  };
-  const stop = () => {
-    if (!timer.current) return;
-    clearTimeout(timer.current);
-    timer.current = null;
-    setHolding(false);
-    cancelAnimation(fill);
-    fill.value = withTiming(0, { duration: 200 });
-  };
-  const fillStyle = useAnimatedStyle(() => ({ width: `${fill.value * 100}%` }));
-
-  return (
-    <Pressable
-      onPressIn={start}
-      onPressOut={stop}
-      disabled={deleting}
-      style={styles.hold}
-      accessibilityRole="button"
-      accessibilityLabel="Hold to delete"
-      accessibilityHint="Press and hold to delete this product"
-      accessibilityActions={[{ name: 'activate' }]}
-      onAccessibilityAction={(event) => event.nativeEvent.actionName === 'activate' && onDelete()}
-    >
-      <Animated.View style={[styles.holdFill, fillStyle]} />
-      <Text style={styles.holdText}>{deleting ? 'Deleting…' : holding ? 'Keep holding…' : 'Hold to delete'}</Text>
-    </Pressable>
   );
 }
 
@@ -1138,91 +1081,21 @@ export default function AdminEditProductScreen({ navigation, route }) {
 
       {/* Delete: what it affects, the gentler option, then press and hold. */}
       <Sheet visible={deleteOpen} onClose={() => setDeleteOpen(false)} locked={deleting}>
-        <View style={styles.sheetProduct}>
-          {product.imageUrl ? (
-            <Image source={{ uri: product.imageUrl }} style={styles.sheetThumb} />
-          ) : (
-            <View style={styles.sheetThumb} />
-          )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.sheetProductName} numberOfLines={1}>
-              {product.name}
-            </Text>
-            <Text style={styles.sheetProductMeta}>
-              {typeLabel(original.type)} · {peso(original.price)}
-            </Text>
-          </View>
-        </View>
-        <Text style={styles.sheetTitle} accessibilityRole="header">
-          Delete this product?
-        </Text>
-        <Text style={styles.sheetText}>Here&apos;s what deleting it affects:</Text>
-        <View style={styles.impact}>
-          {[
-            {
-              icon: 'storefront-outline',
-              bg: '#FBEDEB',
-              color: ERR,
-              strong: 'disappears from the shop',
-              before: 'It ',
-              after: ' right away.',
-            },
-            {
-              icon: 'heart-outline',
-              bg: '#F6E6DE',
-              color: CLAY,
-              before: 'Shoppers who saved it in ',
-              strong: 'favorites or a cart',
-              after: ' see it as unavailable.',
-            },
-            {
-              icon: 'receipt-outline',
-              bg: '#EEF0EA',
-              color: MOSS,
-              strong: 'Past orders',
-              before: '',
-              after: ' keep their own copy, so order history stays intact.',
-            },
-          ].map((row, i) => (
-            <View key={row.icon} style={[styles.impactRow, i === 2 && { borderBottomWidth: 0 }]}>
-              <View style={[styles.impactIcon, { backgroundColor: row.bg }]}>
-                <Ionicons name={row.icon} size={16} color={row.color} />
-              </View>
-              <Text style={styles.impactText}>
-                {row.before}
-                <Text style={{ fontWeight: '600', color: INK }}>{row.strong}</Text>
-                {row.after}
-              </Text>
-            </View>
-          ))}
-        </View>
-        {savedStock !== 0 ? (
-          <Pressable
-            onPress={() => {
-              setDeleteOpen(false);
-              markSoldOut();
-            }}
-            disabled={deleting}
-            style={({ pressed }) => [styles.alt, pressed && { borderColor: '#C9D3BE' }]}
-            accessibilityRole="button"
-          >
-            <Ionicons name="checkmark-circle-outline" size={20} color="#37412F" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.altTitle}>Just not selling it right now?</Text>
-              <Text style={styles.altText}>Mark it sold out instead. You can restock it later.</Text>
-            </View>
-            <Text style={styles.altGo}>Sold out →</Text>
-          </Pressable>
-        ) : null}
-        <HoldToDelete onDelete={handleDelete} deleting={deleting} />
-        <Pressable
-          onPress={() => setDeleteOpen(false)}
-          disabled={deleting}
-          style={({ pressed }) => [styles.ghost, pressed && { opacity: 0.6 }]}
-          accessibilityRole="button"
-        >
-          <Text style={styles.ghostText}>Keep it</Text>
-        </Pressable>
+        <DeleteProductPanel
+          product={{ ...product, imageUrl: original.imageUrl || product.imageUrl }}
+          meta={`${typeLabel(original.type)} · ${peso(original.price)}`}
+          onSoldOut={
+            savedStock !== 0
+              ? () => {
+                  setDeleteOpen(false);
+                  markSoldOut();
+                }
+              : null
+          }
+          onDelete={handleDelete}
+          onKeep={() => setDeleteOpen(false)}
+          deleting={deleting}
+        />
       </Sheet>
 
       {/* Discard: exactly what would be lost, old → new. */}
@@ -1608,20 +1481,6 @@ const styles = StyleSheet.create({
   orLine: { flex: 1, height: 1, backgroundColor: LINE },
   orText: { fontSize: 11, color: MUTED },
 
-  sheetProduct: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 12,
-    borderRadius: 18,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: CARD_LINE,
-    marginBottom: 14,
-  },
-  sheetThumb: { width: 52, height: 58, borderRadius: 12, backgroundColor: '#EFE6DA' },
-  sheetProductMeta: { fontSize: 12, color: MUTED, marginTop: 1 },
-  sheetProductName: { fontSize: 14, fontWeight: '600', color: INK },
   impact: {
     backgroundColor: '#fff',
     borderWidth: 1,
@@ -1631,41 +1490,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     marginBottom: 12,
   },
-  impactRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1EBE3',
-  },
-  impactIcon: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  impactText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: MUTED },
-  alt: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 16,
-    backgroundColor: '#EEF0EA',
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-    marginBottom: 14,
-  },
-  altTitle: { fontSize: 13, fontWeight: '600', color: '#37412F' },
-  altText: { fontSize: 12, lineHeight: 17, color: '#37412F' },
-  altGo: { fontSize: 12.5, fontWeight: '600', color: '#37412F' },
-  hold: {
-    height: 54,
-    borderRadius: 16,
-    backgroundColor: ERR,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  holdFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: '#7E1810' },
-  holdText: { fontSize: 15.5, fontWeight: '600', color: '#fff' },
   ghost: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   ghostText: { fontSize: 15.5, fontWeight: '600', color: MUTED },
 

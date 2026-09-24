@@ -13,10 +13,10 @@ import { useProducts } from '../../context/ProductContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors } from '../../constants/theme';
 import { stockLevel, parseStockLimit } from '../../utils/stock';
-import Button from '../../components/ui/Button';
 import SkeletonBlock from '../../components/ui/Skeleton';
 import ProductImage from '../../components/ui/ProductImage';
 import Sheet from '../../components/shop/Sheet';
+import DeleteProductPanel from '../../components/admin/DeleteProductPanel';
 import Reveal from '../../components/shop/Reveal';
 import { TopBar, OfflineNotice, BigEmpty, UndoToast, useAutoClear } from '../../components/shop/TabScreen';
 
@@ -95,9 +95,9 @@ function Action({ icon, title, detail, danger, onPress }) {
 }
 
 // The ⋯ sheet: the product up top, then its actions. "Delete product"
-// swaps the actions for the confirmation rather than stacking a second
-// dialog over the sheet.
-function ActionSheet({ product, onClose, onEdit, onDuplicate, onDelete, deleting }) {
+// swaps the actions for the same delete panel Edit Product uses, rather
+// than stacking a second dialog over the sheet.
+function ActionSheet({ product, onClose, onEdit, onDuplicate, onDelete, onSoldOut, deleting }) {
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
     if (product) setConfirming(false);
@@ -110,54 +110,47 @@ function ActionSheet({ product, onClose, onEdit, onDuplicate, onDelete, deleting
 
   return (
     <Sheet visible={Boolean(product)} onClose={onClose} locked={deleting}>
-      <View style={styles.sheetProduct}>
-        <ProductImage uri={shown.imageUrl || shown.image} style={styles.sheetThumb} />
-        <View style={{ flex: 1 }}>
-          <Text style={styles.sheetName} numberOfLines={1}>
-            {shown.name}
-          </Text>
-          <Text style={styles.sheetMeta} numberOfLines={1}>
-            {isUkay(shown) ? 'Ukay-Ukay' : 'Ready-to-Wear'} · {peso(shown.price)} · {info.label}
-          </Text>
-        </View>
-      </View>
       {confirming ? (
-        <View>
-          <Text style={styles.confirmTitle} accessibilityRole="header">
-            Delete this product?
-          </Text>
-          <Text style={styles.confirmText}>
-            It disappears from the shop right away. Past orders keep their own copy, so order history isn&apos;t
-            affected. This can&apos;t be undone.
-          </Text>
-          <View style={styles.confirmRow}>
-            <View style={{ flex: 1 }}>
-              <Button variant="secondary" label="Keep it" fontSize={15} onPress={onClose} disabled={deleting} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Button variant="danger" label="Delete" fontSize={15} onPress={onDelete} loading={deleting} />
-            </View>
-          </View>
-        </View>
+        <DeleteProductPanel
+          product={shown}
+          meta={`${isUkay(shown) ? 'Ukay-Ukay' : 'Ready-to-Wear'} · ${peso(shown.price)} · ${info.label}`}
+          onSoldOut={stockLevel(shown.stock) === 'out' ? null : onSoldOut}
+          onDelete={onDelete}
+          onKeep={onClose}
+          deleting={deleting}
+        />
       ) : (
         <View>
-          <Action icon="create-outline" title="Edit details" detail="Name, price, stock, variants" onPress={onEdit} />
-          <Action
-            icon="copy-outline"
-            title="Duplicate"
-            detail="Start a new listing from this one"
-            onPress={onDuplicate}
-          />
-          <Action
-            icon="trash-outline"
-            title="Delete product"
-            detail="Removes it from the shop"
-            danger
-            onPress={() => {
-              Haptics.selectionAsync();
-              setConfirming(true);
-            }}
-          />
+          <View style={styles.sheetProduct}>
+            <ProductImage uri={shown.imageUrl || shown.image} style={styles.sheetThumb} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sheetName} numberOfLines={1}>
+                {shown.name}
+              </Text>
+              <Text style={styles.sheetMeta} numberOfLines={1}>
+                {isUkay(shown) ? 'Ukay-Ukay' : 'Ready-to-Wear'} · {peso(shown.price)} · {info.label}
+              </Text>
+            </View>
+          </View>
+          <View>
+            <Action icon="create-outline" title="Edit details" detail="Name, price, stock, variants" onPress={onEdit} />
+            <Action
+              icon="copy-outline"
+              title="Duplicate"
+              detail="Start a new listing from this one"
+              onPress={onDuplicate}
+            />
+            <Action
+              icon="trash-outline"
+              title="Delete product"
+              detail="Removes it from the shop"
+              danger
+              onPress={() => {
+                Haptics.selectionAsync();
+                setConfirming(true);
+              }}
+            />
+          </View>
         </View>
       )}
     </Sheet>
@@ -167,7 +160,15 @@ function ActionSheet({ product, onClose, onEdit, onDuplicate, onDelete, deleting
 export default function AdminProductsScreen({ navigation, route }) {
   // storeProducts, not products: this screen manages the signed-in
   // manager's own store, and every other store's items are refused them.
-  const { storeProducts: products, loading, error, deleteProduct, refreshProducts, retryFetchProducts } = useProducts();
+  const {
+    storeProducts: products,
+    loading,
+    error,
+    deleteProduct,
+    updateProduct,
+    refreshProducts,
+    retryFetchProducts,
+  } = useProducts();
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -236,6 +237,22 @@ export default function AdminProductsScreen({ navigation, route }) {
     } else {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       showAppAlert('Error', 'Failed to delete product: ' + result.error);
+    }
+  };
+
+  // The delete panel's gentler option: stock to 0 keeps the listing (and its
+  // photos, variants and measurements) for a restock, rather than deleting it.
+  const markSoldOut = async () => {
+    const product = selected;
+    if (!product?.id) return;
+    setSelected(null);
+    const result = await updateProduct(product.id, { stock: 0 });
+    if (result.success) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setToast(`"${product.name}" is now sold out`);
+    } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showAppAlert('Error', 'Could not mark it sold out: ' + result.error);
     }
   };
 
@@ -428,6 +445,7 @@ export default function AdminProductsScreen({ navigation, route }) {
         onEdit={edit}
         onDuplicate={duplicate}
         onDelete={confirmDelete}
+        onSoldOut={markSoldOut}
         deleting={deleting}
       />
     </SafeAreaView>
@@ -571,20 +589,4 @@ const styles = StyleSheet.create({
   },
   actionTitle: { fontSize: 14, fontWeight: '500', color: INK },
   actionDetail: { fontSize: 11.5, color: MUTED },
-  confirmTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: INK,
-    textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 6,
-  },
-  confirmText: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: MUTED,
-    textAlign: 'center',
-    marginBottom: 14,
-  },
-  confirmRow: { flexDirection: 'row', gap: 10 },
 });
