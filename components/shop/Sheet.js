@@ -42,7 +42,17 @@ export default function Sheet({ visible, onClose, locked, dark, footer, children
   if (!mounted) return null;
   const close = () => !locked && onClose();
   return (
-    <Modal transparent visible animationType="none" onRequestClose={close}>
+    // Translucent bars: the app is edge-to-edge, so the sheet runs under
+    // Android's navigation bar and pads by the inset once. Without these the
+    // Modal stops above the bar and the inset padding is added a second time.
+    <Modal
+      transparent
+      visible
+      animationType="none"
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={close}
+    >
       <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, dark && styles.scrimDark, scrim]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityLabel="Close" />
       </Animated.View>
