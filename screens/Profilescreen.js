@@ -44,6 +44,7 @@ import {
   query,
   where,
   getDocs,
+  getCountFromServer,
   deleteField,
 } from 'firebase/firestore';
 import { showAppAlert } from '../utils/appAlert';
@@ -58,6 +59,7 @@ import Button from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import SkeletonBlock from '../components/ui/Skeleton';
 import TabBar, { goToTab } from '../components/shop/TabBar';
+import Sheet from '../components/shop/Sheet';
 import Reveal from '../components/shop/Reveal';
 import { PageHead, OfflineNotice } from '../components/shop/TabScreen';
 import { EASE_OUT_QUINT } from '../constants/motion';
@@ -208,6 +210,62 @@ function NameSheet({ visible, onClose, value, onChange, error, email, saving, is
   );
 }
 
+// The account being logged out of, so there's no doubt which one it is.
+function WhoCard({ name, email, photoUrl }) {
+  const initials = initialsOf(name);
+  return (
+    <View style={styles.who}>
+      {photoUrl ? (
+        <Image source={{ uri: photoUrl }} style={styles.whoAvatar} contentFit="cover" />
+      ) : (
+        <View style={[styles.whoAvatar, styles.avatarInitials]}>
+          {initials ? <Text style={styles.whoInitials}>{initials}</Text> : <Ionicons name="person" size={20} color="#fff" />}
+        </View>
+      )}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.whoName} numberOfLines={1}>
+          {name}
+        </Text>
+        <Text style={styles.whoEmail} numberOfLines={1}>
+          {email}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// One consequence in the deactivate dialog: red for what's lost, moss for
+// what's kept, grey for how to undo it.
+function Consequence({ icon, color, children, last }) {
+  return (
+    <View style={[styles.cons, !last && styles.consDivider]}>
+      <Ionicons name={icon} size={18} color={color} style={{ marginTop: 1 }} />
+      <Text style={styles.consText}>{children}</Text>
+    </View>
+  );
+}
+
+// Shown after logging out or deactivating, over the (now signed-out)
+// Profile screen, until the customer moves on to Landing.
+function Farewell({ farewell, onDone }) {
+  const reduceMotion = useReducedMotion();
+  if (!farewell) return null;
+  return (
+    <Modal transparent={false} visible animationType={reduceMotion ? 'none' : 'fade'} onRequestClose={onDone}>
+      <View style={styles.bye}>
+        <View style={styles.byeTile}>
+          <Ionicons name={farewell.icon} size={36} color={Colors.light.icon} />
+        </View>
+        <Text style={styles.byeTitle} accessibilityRole="header">
+          {farewell.title}
+        </Text>
+        <Text style={styles.byeText}>{farewell.text}</Text>
+        <Button variant="primary" label="Back to the landing screen" fontSize={15.5} onPress={onDone} style={styles.byeButton} />
+      </View>
+    </Modal>
+  );
+}
+
 function ProfileSkeleton() {
   return (
     <View style={[styles.card, styles.cardSkeleton]}>
@@ -230,6 +288,13 @@ export default function ProfileScreen({ navigation, route }) {
   const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
   const [deactivateVisible, setDeactivateVisible] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
+  // Deactivate stays disabled until the customer ticks that they understand
+  // they can't log back in.
+  const [deactivateAck, setDeactivateAck] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  // What the goodbye screen says after logging out or deactivating.
+  const [farewell, setFarewell] = useState(null);
+  const [orderCount, setOrderCount] = useState(null);
   // True only while the sole-platform-admin check is in flight, so the row
   // can't be tapped twice into two queries.
   const [checkingSoleAdmin, setCheckingSoleAdmin] = useState(false);
@@ -280,6 +345,11 @@ export default function ProfileScreen({ navigation, route }) {
           if (active) setLoadingProfile(false);
         }
       })();
+      // The count beside My Orders. An aggregate, so it costs one read
+      // however many orders there are; left blank if it can't be had.
+      getCountFromServer(collection(db, 'users', user.uid, 'orders'))
+        .then((snap) => active && setOrderCount(snap.data().count))
+        .catch((error) => console.error('Could not count orders:', error?.code));
       return () => {
         active = false;
       };
@@ -471,15 +541,30 @@ export default function ProfileScreen({ navigation, route }) {
     else navigation.navigate('AdminLogin');
   };
 
+  const firstName = (userData.name || '').trim().split(/\s+/)[0];
+
+  const goToLanding = () => {
+    setFarewell(null);
+    navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
+  };
+
   const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
     try {
       await signOut(auth);
       setLogoutVisible(false);
-      navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
+      setFarewell({
+        icon: 'log-out-outline',
+        title: "You're logged out",
+        text: `See you soon${firstName ? `, ${firstName}` : ''}. Your cart and favorites will be waiting.`,
+      });
     } catch (error) {
       console.error('Logout failed:', error?.code);
       setLogoutVisible(false);
       showAppAlert('Error', 'Failed to log out. Please try again.');
+    } finally {
+      setLoggingOut(false);
     }
   };
 
@@ -514,6 +599,7 @@ export default function ProfileScreen({ navigation, route }) {
       }
     }
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setDeactivateAck(false);
     setDeactivateVisible(true);
   };
 
@@ -531,7 +617,11 @@ export default function ProfileScreen({ navigation, route }) {
       await signOut(auth);
       setDeactivateVisible(false);
       setDeactivating(false);
-      navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
+      setFarewell({
+        icon: 'ban-outline',
+        title: 'Your account is deactivated',
+        text: "You've been logged out. Your past orders are kept for records. To restore access, contact PlainCo support.",
+      });
     } catch (error) {
       setDeactivating(false);
       console.error('Error deactivating account:', error);
@@ -551,17 +641,26 @@ export default function ProfileScreen({ navigation, route }) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ConfirmDialog
-        visible={logoutVisible}
-        onClose={() => setLogoutVisible(false)}
-        icon="log-out-outline"
-        title="Log out of PlainCo?"
-        confirmLabel="Log Out"
-        confirmVariant="primary"
-        onConfirm={handleLogout}
-      >
-        <Text style={styles.dialogText}>You&apos;ll need to log in again next time you open the app.</Text>
-      </ConfirmDialog>
+      {/* Cart and favorites live under the account in Firestore, so the
+          promise that they'll be waiting is one the app keeps. */}
+      <Sheet visible={logoutVisible} onClose={() => setLogoutVisible(false)} locked={loggingOut}>
+        <Text style={styles.sheetTitle} accessibilityRole="header">
+          Log out of PlainCo?
+        </Text>
+        <Text style={styles.sheetSub}>
+          Your cart and favorites are saved to your account. They&apos;ll be here when you log back in.
+        </Text>
+        <WhoCard name={userData.name} email={userData.email} photoUrl={userData.photoUrl} />
+        <Button variant="primary" label="Log out" fontSize={15.5} onPress={handleLogout} loading={loggingOut} fullWidth />
+        <Pressable
+          onPress={() => setLogoutVisible(false)}
+          disabled={loggingOut}
+          style={({ pressed }) => [styles.ghost, pressed && { opacity: 0.6 }]}
+          accessibilityRole="button"
+        >
+          <Text style={styles.ghostText}>Stay logged in</Text>
+        </Pressable>
+      </Sheet>
 
       <ConfirmDialog
         visible={deactivateVisible}
@@ -569,27 +668,42 @@ export default function ProfileScreen({ navigation, route }) {
         icon="ban-outline"
         iconTone="danger"
         title="Deactivate your account?"
+        cancelLabel="Keep account"
         confirmLabel={!isConnected ? 'Offline' : 'Deactivate'}
         confirmVariant="danger"
         onConfirm={handleDeactivateAccount}
         loading={deactivating}
-        confirmDisabled={deactivating || !isConnected}
+        confirmDisabled={!deactivateAck || deactivating || !isConnected}
         cancelDisabled={deactivating}
       >
-        <View style={styles.dialogList}>
-          {[
-            "You'll be signed out and can't sign in again.",
-            'Your past orders are kept for transaction records.',
-            'Only a PlainCo Platform Admin can reactivate your account.',
-            'To ask about your data, use Contact Support in the Help Center.',
-          ].map((line) => (
-            <View key={line} style={styles.dialogItem}>
-              <Text style={styles.dialogBullet}>•</Text>
-              <Text style={styles.dialogItemText}>{line}</Text>
-            </View>
-          ))}
+        <Text style={styles.dialogText}>Here&apos;s what happens:</Text>
+        <View style={styles.consCard}>
+          <Consequence icon="log-out-outline" color={DANGER_INK}>
+            You&apos;ll be logged out and <Text style={styles.bold}>can&apos;t log in again</Text>.
+          </Consequence>
+          <Consequence icon="receipt-outline" color={Colors.light.secondary}>
+            Your past orders are <Text style={styles.bold}>kept</Text> for transaction records.
+          </Consequence>
+          <Consequence icon="shield-outline" color={Colors.light.icon} last>
+            Only a PlainCo Platform Admin can reactivate it. For questions about your data, contact support from the Help
+            Center.
+          </Consequence>
         </View>
+        <Pressable
+          onPress={() => setDeactivateAck((on) => !on)}
+          disabled={deactivating}
+          style={styles.ack}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: deactivateAck, disabled: deactivating }}
+        >
+          <View style={[styles.ackBox, deactivateAck && styles.ackBoxOn]}>
+            {deactivateAck ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+          </View>
+          <Text style={styles.ackText}>I understand I won&apos;t be able to log in to this account again.</Text>
+        </Pressable>
       </ConfirmDialog>
+
+      <Farewell farewell={farewell} onDone={goToLanding} />
 
       <PrivacyPolicyModal visible={privacyPolicyVisible} onClose={() => setPrivacyPolicyVisible(false)} />
 
@@ -729,6 +843,7 @@ export default function ProfileScreen({ navigation, route }) {
           <Row
             icon="receipt-outline"
             label="My Orders"
+            note={orderCount ? `${orderCount} order${orderCount === 1 ? '' : 's'}` : null}
             onPress={() => navigation.navigate('Orders')}
             hint="Opens your order history"
           />
@@ -890,11 +1005,58 @@ const styles = StyleSheet.create({
 
   version: { textAlign: 'center', fontSize: 11, color: '#8E857B', marginTop: 8 },
 
-  dialogText: { fontSize: 13.5, lineHeight: 20, color: Colors.light.icon, textAlign: 'center', marginBottom: 18 },
-  dialogList: { alignSelf: 'stretch', backgroundColor: '#FFFFFF', borderRadius: 14, padding: 12, marginBottom: 18, gap: 4 },
-  dialogItem: { flexDirection: 'row', gap: 8 },
-  dialogBullet: { fontSize: 12.5, lineHeight: 19, color: Colors.light.icon },
-  dialogItemText: { flex: 1, fontSize: 12.5, lineHeight: 19, color: Colors.light.text },
+  dialogText: { fontSize: 12.5, lineHeight: 19, color: Colors.light.icon, textAlign: 'center', marginTop: -4, marginBottom: 14 },
+  consCard: {
+    alignSelf: 'stretch',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#EEE7DD',
+    paddingHorizontal: 14,
+    paddingVertical: 4,
+    marginBottom: 12,
+  },
+  cons: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 10 },
+  consDivider: { borderBottomWidth: 1, borderBottomColor: '#F1EBE3' },
+  consText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: Colors.light.text },
+  bold: { fontWeight: '600' },
+  ack: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingHorizontal: 4, paddingTop: 4, paddingBottom: 16 },
+  ackBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+    borderWidth: 1.5,
+    borderColor: '#CFC6BC',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ackBoxOn: { backgroundColor: DANGER_INK, borderColor: DANGER_INK },
+  ackText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: Colors.light.text },
+
+  who: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EEE7DD',
+    marginBottom: 14,
+  },
+  whoAvatar: { width: 42, height: 42, borderRadius: 13 },
+  whoInitials: { fontSize: 15, fontWeight: '600', color: '#fff' },
+  whoName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
+  whoEmail: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
+  ghost: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  ghostText: { fontSize: 15.5, fontWeight: '600', color: Colors.light.icon },
+
+  bye: { flex: 1, backgroundColor: Colors.light.background, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 },
+  byeTile: { width: 80, height: 80, borderRadius: 26, backgroundColor: '#F1EBE3', alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  byeTitle: { fontSize: 21, fontWeight: '600', color: Colors.light.text, textAlign: 'center', marginBottom: 6 },
+  byeText: { fontSize: 13, lineHeight: 20, color: Colors.light.icon, textAlign: 'center', marginBottom: 22 },
+  byeButton: { alignSelf: 'stretch', maxWidth: 320, width: '100%' },
 
   scrim: { backgroundColor: 'rgba(28,27,26,0.42)' },
   sheetWrap: { flex: 1, justifyContent: 'flex-end' },
