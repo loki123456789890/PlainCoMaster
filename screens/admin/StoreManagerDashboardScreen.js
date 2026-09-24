@@ -313,7 +313,7 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       logoutAsAdmin();
       // Reset the nav stack so "back" can't return to admin screens
       // after the session is gone.
-      navigation.reset({ index: 0, routes: [{ name: 'AdminLogin' }] });
+      navigation.reset({ index: 0, routes: [{ name: 'AdminLogin', params: { loggedOut: true } }] });
     } catch (error) {
       console.error('Error signing out:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -430,9 +430,45 @@ export default function StoreManagerDashboardScreen({ navigation }) {
         <Text style={styles.sheetTitle} accessibilityRole="header">
           Log out of the Staff Portal?
         </Text>
-        <Text style={styles.sheetText}>
-          Your store keeps running while you&apos;re away. Orders and messages will be waiting when you log back in.
-        </Text>
+        <Text style={styles.sheetText}>Your store keeps running while you&apos;re away.</Text>
+        {/* Who is signed in, so logging out of the wrong account is caught here. */}
+        <View style={styles.whoCard}>
+          <StoreLogo uri={store?.logoUrl} size={42} radius={12} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.whoName} numberOfLines={1}>
+              {managerName || auth.currentUser?.email || 'Store Manager'}
+            </Text>
+            <Text style={styles.whoStore} numberOfLines={1}>
+              {store?.name || 'No store assigned'}
+            </Text>
+          </View>
+          <Text style={styles.whoRole}>MANAGER</Text>
+        </View>
+        {/* Orders still waiting are the one thing worth a second look before
+            leaving; the row goes straight to them instead. */}
+        {!ordersLoading && !ordersError && orders.toPrepare > 0 ? (
+          <Pressable
+            onPress={() => {
+              setLogoutVisible(false);
+              handleNavigate('AdminOrders');
+            }}
+            disabled={loggingOut}
+            style={({ pressed }) => [styles.remind, pressed && { opacity: 0.8 }]}
+            accessibilityRole="button"
+            accessibilityHint="Opens order management"
+          >
+            <View style={styles.remindCount}>
+              <Text style={styles.remindCountText}>{orders.toPrepare}</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.remindTitle}>Before you go</Text>
+              <Text style={styles.remindText}>
+                {orders.toPrepare === 1 ? '1 order is' : `${orders.toPrepare} orders are`} still waiting to be prepared
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#6B5A2E" />
+          </Pressable>
+        ) : null}
         <Button label="Log out" fontSize={15.5} onPress={confirmLogout} loading={loggingOut} fullWidth />
         <Pressable
           onPress={() => setLogoutVisible(false)}
@@ -872,21 +908,51 @@ const styles = StyleSheet.create({
   },
   tileDotText: { fontSize: 10, fontWeight: '600', color: '#fff' },
 
-  sheetTitle: {
-    fontSize: 19,
+  sheetTitle: { fontSize: 19, fontWeight: '600', color: INK, marginTop: 4 },
+  sheetText: { fontSize: 13, lineHeight: 20, color: MUTED, marginTop: 4, marginBottom: 12 },
+  whoCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: 18,
+    backgroundColor: INK,
+    marginBottom: 12,
+  },
+  whoName: { fontSize: 14, fontWeight: '600', color: Colors.light.background },
+  whoStore: { fontSize: 11.5, color: ON_INK_MUTED, marginTop: 1 },
+  whoRole: {
+    fontSize: 10.5,
     fontWeight: '600',
-    color: INK,
-    textAlign: 'center',
-    marginTop: 4,
+    letterSpacing: 0.8,
+    color: '#CFE0BF',
+    backgroundColor: 'rgba(143,163,125,0.2)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
-  sheetText: {
-    fontSize: 13.5,
-    lineHeight: 20,
-    color: MUTED,
-    textAlign: 'center',
-    marginTop: 6,
-    marginBottom: 18,
+  remind: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: '#F6EFE3',
+    marginBottom: 14,
   },
+  remindCount: {
+    width: 40,
+    height: 40,
+    borderRadius: 13,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  remindCountText: { fontSize: 16, fontWeight: '600', color: '#6B5A2E' },
+  remindTitle: { fontSize: 13, fontWeight: '600', color: INK },
+  remindText: { fontSize: 11.5, color: '#6B5A2E', marginTop: 1 },
   ghost: {
     height: 46,
     alignItems: 'center',

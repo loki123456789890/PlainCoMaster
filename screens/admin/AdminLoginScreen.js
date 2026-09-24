@@ -35,6 +35,7 @@ import useNetworkStatus from '../../hooks/useNetworkStatus';
 import Button from '../../components/ui/Button';
 import Sheet from '../../components/shop/Sheet';
 import Reveal from '../../components/shop/Reveal';
+import StaffLoggedOut from '../../components/auth/StaffLoggedOut';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors } from '../../constants/theme';
 import { getHomeRouteForRole, ROLE_SELLER, ROLE_PLATFORM_ADMIN } from '../../constants/roles';
@@ -208,6 +209,9 @@ export default function AdminLoginScreen({ navigation, route }) {
   const [loading, setLoading] = useState(false);
   const [welcome, setWelcome] = useState(null);
   const [helpOpen, setHelpOpen] = useState(false);
+  // Arriving from a portal log out: the confirmation covers the form until
+  // "Sign in again".
+  const [loggedOut, setLoggedOut] = useState(Boolean(route?.params?.loggedOut));
   const [shakes, shake] = useShakes();
 
   const passwordInputRef = useRef(null);
@@ -428,6 +432,7 @@ export default function AdminLoginScreen({ navigation, route }) {
           Not staff? <AuthLink onPress={() => goToCustomerLogin()}>Back to customer log in</AuthLink>
         </Text>
       </FadeUp>
+      <StaffLoggedOut visible={loggedOut} onSignIn={() => setLoggedOut(false)} />
       <StaffAccountSheet
         visible={helpOpen}
         onClose={() => setHelpOpen(false)}

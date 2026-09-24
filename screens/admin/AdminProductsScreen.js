@@ -187,17 +187,21 @@ export default function AdminProductsScreen({ navigation, route }) {
     if (route.params?.filter === 'restock') setFilter('low');
   }, [route.params?.filter]);
 
-  // Back from Add product: say it's live, and ring its row for a moment.
+  // Back from Add or Edit: say what happened, and ring the row it
+  // happened to for a moment. Add sends `added`; Edit sends `notice` and
+  // the row to `highlight` (none after a delete).
   const [justAdded, setJustAdded] = useState(null);
   useEffect(() => {
-    const added = route.params?.added;
-    if (!added) return undefined;
-    setToast(`"${added}" is live in your shop`);
-    setFilter('all');
-    setJustAdded(added);
+    const { added, notice, highlight } = route.params || {};
+    if (!added && !notice) return undefined;
+    setToast(added ? `"${added}" is live in your shop` : notice);
+    if (added) setFilter('all');
+    const ring = added || highlight;
+    if (!ring) return undefined;
+    setJustAdded(ring);
     const t = setTimeout(() => setJustAdded(null), 2500);
     return () => clearTimeout(t);
-  }, [route.params?.addedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [route.params?.addedAt, route.params?.noticeAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRefresh = async () => {
     setRefreshing(true);

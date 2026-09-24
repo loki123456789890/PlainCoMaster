@@ -252,7 +252,7 @@ export default function AdminUsersScreen({ navigation }) {
       // after the session is gone.
       navigation.reset({
         index: 0,
-        routes: [{ name: 'AdminLogin' }],
+        routes: [{ name: 'AdminLogin', params: { loggedOut: true } }],
       });
     } catch (error) {
       console.error('Error signing out:', error);

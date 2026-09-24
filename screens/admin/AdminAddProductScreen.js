@@ -1066,7 +1066,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
       <ConfirmDialog
         visible={Boolean(leaveAction)}
         onClose={() => setLeaveAction(null)}
-        title="Discard this product?"
+        title={duplicateFrom ? 'Discard this copy?' : 'Discard this product?'}
         icon="warning-outline"
         iconTone="warning"
         cancelLabel="Keep editing"
@@ -1079,7 +1079,11 @@ export default function AdminAddProductScreen({ navigation, route }) {
           navigation.dispatch(action);
         }}
       >
-        <Text style={styles.dialogText}>It isn&apos;t saved yet. If you leave now, you&apos;ll lose:</Text>
+        <Text style={styles.dialogText}>
+          {duplicateFrom
+            ? `It isn't saved yet. The original "${duplicateFrom.name}" isn't affected. If you leave now, you'll lose:`
+            : "It isn't saved yet. If you leave now, you'll lose:"}
+        </Text>
         <View style={styles.lost}>
           {lostList.map((item) => (
             <Text key={item} style={styles.lostItem}>
