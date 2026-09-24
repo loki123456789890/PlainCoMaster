@@ -4,11 +4,8 @@
 // stays put (title and count, search, category tabs with a sliding
 // indicator) over a two-column grid, and the tab bar underneath.
 //
-// One screen, two views. Without a storeId this is the whole shop, opened
-// as a tab; with one it is that store's page, pushed from "Shop by store"
-// or a product's "Sold by" line, with a back arrow instead of the tab bar.
-// Same grid, search and filters either way, so a store page is the Shop
-// narrowed rather than a second catalogue to keep in step.
+// Opened with a storeId (from "Shop by store" or a product's "Sold by"),
+// the route shows that store's own page instead — see StorePage.js.
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
@@ -36,19 +33,17 @@ import { Image } from 'expo-image';
 import { showAppAlert } from '../utils/appAlert';
 import { auth } from '../firebaseConfig';
 import { useProducts } from '../context/ProductContext';
-import { useStores, useStoreRatings, storeReviewCountLabel } from '../context/StoreContext';
-import { formatAverage, matchedDescriptionSentence } from '../utils/reviews';
-import { useCart } from '../context/CartContext';
+import { useStores, useStoreRatings } from '../context/StoreContext';
+import { formatAverage } from '../utils/reviews';
 import { useFavorites } from '../context/FavoritesContext';
 import { Colors } from '../constants/theme';
-import StarRating from '../components/ui/StarRating';
-import Avatar from '../components/ui/Avatar';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
 import ProductCard from '../components/shop/ProductCard';
 import TabBar from '../components/shop/TabBar';
+import StorePage from './StorePage';
 import Reveal from '../components/shop/Reveal';
 import { EASE_OUT_QUINT } from '../constants/motion';
 
@@ -157,13 +152,14 @@ function NoResults({ title, message, onClear }) {
   );
 }
 
-export default function ShopScreen({ navigation, route }) {
+export default function ShopScreen(props) {
+  return props.route.params?.storeId ? <StorePage {...props} /> : <Catalogue {...props} />;
+}
+
+function Catalogue({ navigation, route }) {
   const { products, loading, error, retryFetchProducts } = useProducts();
-  const { cartCount } = useCart();
   const { isFavorite, toggleFavorite } = useFavorites();
   const { stores, getStore } = useStores();
-  const storeId = route.params?.storeId || null;
-  const store = getStore(storeId);
   const [activeFilter, setActiveFilter] = useState(route.params?.filterType || 'all');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -219,11 +215,6 @@ export default function ShopScreen({ navigation, route }) {
     setActiveFilter('all');
   };
 
-  const scopedProducts = useMemo(
-    () => (storeId ? products.filter((p) => p.storeId === storeId) : products),
-    [products, storeId]
-  );
-
   // Items per store, for "Shop by store". A store with nothing listed is
   // left out: a card that leads to an empty page is a dead end.
   const storeCounts = useMemo(() => {
@@ -235,24 +226,15 @@ export default function ShopScreen({ navigation, route }) {
   }, [products]);
   const browsableStores = stores.filter((s) => storeCounts[s.id] > 0);
 
-  // Seller ratings, side by side in the store row and in full on a store's page.
-  const ratings = useStoreRatings(storeId ? [storeId] : browsableStores.map((s) => s.id));
-  const storeRating = storeId ? ratings[storeId] : undefined;
-
-  // What the store sells, read off its listings, so it cannot claim a
-  // category it has no items in.
-  const storeSells = [
-    scopedProducts.some((p) => p.type === 'ukay-ukay') && 'Ukay-Ukay',
-    scopedProducts.some((p) => p.type === 'ready-to-wear') && 'Ready-to-Wear',
-  ].filter(Boolean);
+  // Seller ratings, side by side in the store row.
+  const ratings = useStoreRatings(browsableStores.map((s) => s.id));
 
   // Category and search compose (AND): typing never resets the tab.
   const query = searchQuery.trim().toLowerCase();
-  const filteredProducts = scopedProducts
+  const filteredProducts = products
     .filter((p) => activeFilter === 'all' || p.type === activeFilter)
     .filter((p) => !query || p.name?.toLowerCase().includes(query) || (TYPE_WORDS[p.type] || '').includes(query));
 
-  const showFilters = !storeId || storeSells.length > 1;
   const count = filteredProducts.length;
 
   const renderProduct = ({ item, index }) => (
@@ -263,7 +245,7 @@ export default function ShopScreen({ navigation, route }) {
       <ProductCard
         product={item}
         favorited={isFavorite(item.id)}
-        storeName={storeId ? null : getStore(item.storeId)?.name}
+        storeName={getStore(item.storeId)?.name}
         onPress={() => navigation.navigate('Product', { product: item })}
         onToggleFavorite={() => handleToggleFavorite(item)}
       />
@@ -272,50 +254,9 @@ export default function ShopScreen({ navigation, route }) {
 
   const renderListHeader = () => (
     <>
-      {/* A store's own page: its logo, what it sells, how long it has been
-          on PlainCo, its description and its seller rating. */}
-      {storeId ? (
-        <View style={styles.profile}>
-          <View style={styles.profileRow}>
-            <Avatar uri={store?.logoUrl} size={48} icon="storefront-outline" />
-            <View style={styles.flex}>
-              <Text style={styles.profileMeta}>
-                {scopedProducts.length} {scopedProducts.length === 1 ? 'item' : 'items'}
-                {storeSells.length > 0 ? ` · ${storeSells.join(' & ')}` : ''}
-              </Text>
-              {store?.createdAt ? (
-                <Text style={styles.profileMeta}>
-                  On PlainCo since {store.createdAt.toLocaleDateString('en-PH', { month: 'long', year: 'numeric' })}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-          {store?.description ? <Text style={styles.profileDescription}>{store.description}</Text> : null}
-          {/* Nothing renders until the rating has loaded, so a slow read
-              never flashes "No reviews yet" at a store that has some. */}
-          {storeRating ? (
-            <View style={styles.rating}>
-              {storeRating.count > 0 ? (
-                <>
-                  <View style={styles.ratingRow}>
-                    <StarRating rating={storeRating.average} size={15} label={store?.name || 'this store'} />
-                    <Text style={styles.ratingValue}>{formatAverage(storeRating.average)}</Text>
-                    <Text style={styles.ratingCount}>({storeReviewCountLabel(storeRating)})</Text>
-                  </View>
-                  <Text style={styles.ratingMatched}>{matchedDescriptionSentence(storeRating)}</Text>
-                </>
-              ) : (
-                <Text style={styles.ratingCount}>
-                  No reviews yet. Buyers can review an item once their order is delivered.
-                </Text>
-              )}
-            </View>
-          ) : null}
-        </View>
-      ) : (
-        // Hidden while searching, like the preview: the results are what
-        // matter then. Remounting replays the entrance when it comes back.
-        !query && (
+        {/* Hidden while searching, like the preview: the results are what
+            matter then. Remounting replays the entrance when it comes back. */}
+        {!query && (
           <View style={styles.extras}>
             {browsableStores.length > 0 && (
               <>
@@ -405,57 +346,24 @@ export default function ShopScreen({ navigation, route }) {
               ))}
             </Reveal>
           </View>
-        )
-      )}
+        )}
     </>
   );
 
   const emptyTitle = query
     ? 'No products found'
     : activeFilter === 'all'
-    ? storeId
-      ? 'This store has no items yet'
-      : 'No products available'
+    ? 'No products available'
     : 'No products in this category yet';
   const emptyMessage = query
     ? `Nothing matches "${searchQuery.trim()}"${activeFilter !== 'all' ? ` in ${FILTER_LABEL[activeFilter]}` : ''}. Try a different keyword or category.`
     : null;
 
   return (
-    <SafeAreaView style={styles.container} edges={storeId ? ['top', 'bottom'] : ['top']}>
+    <SafeAreaView style={styles.container} edges={['top']}>
       {/* The header stays put while the grid scrolls under it; a soft
           shadow shows once there is something underneath. */}
       <View style={[styles.header, scrolled && styles.headerStuck]}>
-        {storeId ? (
-          <View style={styles.storeHead}>
-            <Pressable
-              onPress={() => navigation.goBack()}
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
-              hitSlop={6}
-              accessibilityRole="button"
-              accessibilityLabel="Go back"
-            >
-              <Ionicons name="chevron-back" size={24} color={Colors.light.text} />
-            </Pressable>
-            <Text style={styles.storeTitle} numberOfLines={1}>
-              {store?.name || 'Store'}
-            </Text>
-            <Pressable
-              onPress={() => navigation.navigate('Cart')}
-              style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
-              hitSlop={6}
-              accessibilityRole="button"
-              accessibilityLabel={cartCount > 0 ? `View cart, ${cartCount} items` : 'View cart'}
-            >
-              <Ionicons name="cart-outline" size={23} color={Colors.light.text} />
-              {cartCount > 0 && (
-                <View style={styles.cartBadge}>
-                  <Text style={styles.cartBadgeText}>{cartCount > 99 ? '99+' : cartCount}</Text>
-                </View>
-              )}
-            </Pressable>
-          </View>
-        ) : (
           <View style={styles.titleRow}>
             <Text style={styles.title} accessibilityRole="header">
               Shop
@@ -466,7 +374,6 @@ export default function ShopScreen({ navigation, route }) {
               </Text>
             ) : null}
           </View>
-        )}
 
         <View style={styles.searchWrap}>
           {searchFocused ? <View style={styles.searchHalo} /> : null}
@@ -475,7 +382,7 @@ export default function ShopScreen({ navigation, route }) {
             <TextInput
               ref={searchRef}
               style={styles.searchInput}
-              placeholder={storeId ? 'Search this store' : 'Search by name or category'}
+              placeholder="Search by name or category"
               placeholderTextColor="#8E857B"
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -483,7 +390,7 @@ export default function ShopScreen({ navigation, route }) {
               onBlur={() => setSearchFocused(false)}
               returnKeyType="search"
               autoCorrect={false}
-              accessibilityLabel={storeId ? 'Search this store' : 'Search products'}
+              accessibilityLabel="Search products"
             />
             {searchQuery.length > 0 && (
               <Pressable
@@ -502,8 +409,7 @@ export default function ShopScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* A store that sells only one kind has nothing to switch between. */}
-        {showFilters ? <FilterTabs active={activeFilter} onSelect={handleSelectFilter} /> : null}
+        <FilterTabs active={activeFilter} onSelect={handleSelectFilter} />
       </View>
 
       {loading ? (
@@ -548,7 +454,7 @@ export default function ShopScreen({ navigation, route }) {
         />
       )}
 
-      {storeId ? null : <TabBar navigation={navigation} current="Shop" />}
+      <TabBar navigation={navigation} current="Shop" />
     </SafeAreaView>
   );
 }
@@ -574,25 +480,6 @@ const styles = StyleSheet.create({
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12 },
   title: { fontSize: 26, fontWeight: '600', letterSpacing: -0.5, color: Colors.light.text },
   count: { fontSize: 12.5, color: Colors.light.icon },
-  storeHead: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, marginHorizontal: -8 },
-  storeTitle: { flex: 1, fontSize: 20, fontWeight: '600', letterSpacing: -0.3, color: Colors.light.text, marginHorizontal: 4 },
-  iconButton: { width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  iconButtonPressed: { backgroundColor: 'rgba(28,27,26,0.06)' },
-  cartBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 2,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
-    backgroundColor: Colors.light.tint,
-    borderWidth: 2,
-    borderColor: Colors.light.background,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cartBadgeText: { fontSize: 9.5, fontWeight: '600', color: '#fff' },
 
   searchWrap: { position: 'relative' },
   // The Clay focus halo, drawn as a tinted shape since there's no spread shadow.
@@ -664,16 +551,6 @@ const styles = StyleSheet.create({
   row: { gap: 12 },
   // Half the row each, so a last card with no neighbour doesn't stretch.
   cell: { flex: 1, maxWidth: '50%', marginBottom: 18 },
-
-  profile: { paddingBottom: 14 },
-  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  profileMeta: { fontSize: 12.5, color: Colors.light.icon, marginTop: 2 },
-  profileDescription: { fontSize: 13, color: Colors.light.text, marginTop: 10, lineHeight: 19 },
-  rating: { paddingTop: 10, gap: 4 },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ratingValue: { fontSize: 14, fontWeight: '700', color: Colors.light.text },
-  ratingCount: { fontSize: 13, color: Colors.light.icon, lineHeight: 19 },
-  ratingMatched: { fontSize: 13, color: Colors.light.text, lineHeight: 19 },
 
   extras: { paddingTop: 4, paddingBottom: 18 },
   subhead: { fontSize: 13, fontWeight: '600', color: Colors.light.icon, marginBottom: 10 },

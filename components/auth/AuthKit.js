@@ -213,7 +213,23 @@ function PasswordToggle({ visible, onToggle, accessibilityLabel }) {
 // One form field: label, input, a Moss tick once the value is good, and a
 // line under it that says what's wrong (or, for passwords on Sign Up, that
 // it's fine). The label and border turn Clay while typing, red on a problem.
-export function Field({ label, status, message, inputRef, shakeKey, secure, toggleLabel, onBlur, ...inputProps }) {
+// `prefix` shows fixed text inside the field before what's typed ("+63");
+// `highlight` tints it Moss, for a value the app just filled in; `style`
+// sizes the field's outer box (e.g. flex in a two-column row).
+export function Field({
+  label,
+  status,
+  message,
+  inputRef,
+  shakeKey,
+  secure,
+  toggleLabel,
+  onBlur,
+  prefix,
+  highlight,
+  style,
+  ...inputProps
+}) {
   const c = useAuthColors();
   const reduceMotion = useReducedMotion();
   const [focused, setFocused] = useState(false);
@@ -237,14 +253,24 @@ export function Field({ label, status, message, inputRef, shakeKey, secure, togg
   const messageColor = bad ? c.bad : good ? c.good : c.sub;
 
   return (
-    <View style={styles.field}>
+    <View style={[styles.field, style]}>
       <Text style={[styles.label, { color: labelColor }]}>{label}</Text>
       <Animated.View style={[styles.box, shakeStyle]}>
         {focused || bad ? <View style={[styles.ring, { backgroundColor: bad ? c.ringBad : c.ringFocus }]} /> : null}
+        {prefix ? (
+          <View style={styles.prefix} pointerEvents="none">
+            <Text style={[styles.prefixText, { color: c.sub }]}>{prefix}</Text>
+          </View>
+        ) : null}
         <TextInput
           {...inputProps}
           ref={inputRef}
-          style={[styles.input, { borderColor, backgroundColor: c.fieldBg, color: c.text }, secure && styles.inputSecure]}
+          style={[
+            styles.input,
+            { borderColor, backgroundColor: highlight ? HIGHLIGHT_BG : c.fieldBg, color: c.text },
+            secure && styles.inputSecure,
+            prefix && styles.inputPrefixed,
+          ]}
           placeholderTextColor={c.placeholder}
           secureTextEntry={secure && !revealed}
           onFocus={() => setFocused(true)}
@@ -271,6 +297,8 @@ export function Field({ label, status, message, inputRef, shakeKey, secure, togg
     </View>
   );
 }
+
+const HIGHLIGHT_BG = '#F1F4EC';
 
 // A boxed notice above the form, for what isn't any one field's fault:
 // red for a problem, Moss for "you're in the wrong place".
@@ -507,6 +535,20 @@ const styles = StyleSheet.create({
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
   },
   inputSecure: { paddingRight: 78 },
+  inputPrefixed: { paddingLeft: 66 },
+  prefix: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: Colors.light.border,
+    zIndex: 2,
+  },
+  prefixText: { fontSize: 14.5 },
   tick: {
     position: 'absolute',
     right: 14,

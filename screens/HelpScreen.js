@@ -1,53 +1,42 @@
-import React, { useEffect, useRef, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Pressable,
-  TextInput,
-  Platform,
-  Linking,
-  Share,
-  KeyboardAvoidingView,
-} from 'react-native';
+// screens/HelpScreen.js — Help & Support
+//
+// In the approved address/help/stores preview's design: a search over the
+// FAQ, topic tiles that narrow it, the questions as one accordion, a Clay
+// card that opens the support request form in a sheet, and the ways to reach
+// us. The content, contact details and routing are the app's own: a request
+// about an order goes to the store that sold it, anything else to the
+// PlainCo team (handlesSupport() in firestore.rules).
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Linking, Share, Platform } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
-  withSequence,
+  withRepeat,
   useReducedMotion,
-  interpolateColor,
-  Easing,
   FadeIn,
-  FadeInDown,
   LinearTransition,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { db, auth } from '../firebaseConfig';
-import { showAppAlert } from '../utils/appAlert';
 import { collection, addDoc, serverTimestamp, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { showAppAlert } from '../utils/appAlert';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { Colors, Radius, Spacing } from '../constants/theme';
+import { Colors } from '../constants/theme';
 import { formatOrderNumber } from '../utils/orderNumber';
-import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import EmptyState from '../components/ui/EmptyState';
-import AnimatedPressable from '../components/ui/AnimatedPressable';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import Reveal from '../components/shop/Reveal';
+import Sheet from '../components/shop/Sheet';
+import { TopBar, GroupHeading, OfflineNotice } from '../components/shop/TabScreen';
+import { EASE_OUT_QUINT } from '../constants/motion';
 
-const AnimatedTextInput = Animated.createAnimatedComponent(TextInput);
-
-// FAQ Data
-const faqCategories = [
+const FAQ_CATEGORIES = [
   {
     id: 'orders',
     name: 'Orders',
     icon: 'cart-outline',
-    color: Colors.light.tint,
     questions: [
       {
         id: 'o1',
@@ -57,7 +46,7 @@ const faqCategories = [
       {
         id: 'o2',
         question: 'Can I cancel or modify my order?',
-        answer: 'Orders can\'t be cancelled or modified directly in the app yet. If you need to cancel or change an order, please contact our support team as soon as possible after placing it and we\'ll do our best to help before it ships.',
+        answer: "Orders can't be cancelled or modified directly in the app yet. If you need to cancel or change an order, please contact our support team as soon as possible after placing it and we'll do our best to help before it ships.",
       },
       {
         id: 'o3',
@@ -67,15 +56,14 @@ const faqCategories = [
       {
         id: 'o4',
         question: 'Do you have voucher or promo codes?',
-        answer: 'We don\'t have a voucher or promo code system in the app yet. Keep an eye on our announcements for upcoming deals!',
+        answer: "We don't have a voucher or promo code system in the app yet. Keep an eye on our announcements for upcoming deals!",
       },
     ],
   },
   {
     id: 'shipping',
-    name: 'Shipping & Delivery',
+    name: 'Shipping',
     icon: 'car-outline',
-    color: Colors.light.secondary,
     questions: [
       {
         id: 's1',
@@ -90,20 +78,19 @@ const faqCategories = [
       {
         id: 's3',
         question: 'Do you ship internationally?',
-        answer: 'Currently, we only ship within the Philippines. We\'re working on expanding our shipping coverage internationally soon!',
+        answer: "Currently, we only ship within the Philippines. We're working on expanding our shipping coverage internationally soon!",
       },
       {
         id: 's4',
         question: 'What if my package is damaged?',
-        answer: 'If you receive a damaged item, please contact us within 24 hours of delivery with photos of the damage. We\'ll arrange for a replacement or refund.',
+        answer: "If you receive a damaged item, please contact us within 24 hours of delivery with photos of the damage. We'll arrange for a replacement or refund.",
       },
     ],
   },
   {
     id: 'returns',
-    name: 'Returns & Refunds',
+    name: 'Returns',
     icon: 'refresh-outline',
-    color: Colors.light.highlight,
     questions: [
       {
         id: 'r1',
@@ -113,7 +100,7 @@ const faqCategories = [
       {
         id: 'r2',
         question: 'How do I request a return?',
-        answer: 'There\'s no automatic return request feature in the app yet. Please contact our support team within 7 days of delivery and we\'ll walk you through the process manually.',
+        answer: "There's no automatic return request feature in the app yet. Please contact our support team within 7 days of delivery and we'll walk you through the process manually.",
       },
       {
         id: 'r3',
@@ -123,25 +110,24 @@ const faqCategories = [
       {
         id: 'r4',
         question: 'Can I exchange an item?',
-        answer: 'Exchanges aren\'t handled automatically in the app yet. Contact our support team and we\'ll help arrange a size or color exchange manually.',
+        answer: "Exchanges aren't handled automatically in the app yet. Contact our support team and we'll help arrange a size or color exchange manually.",
       },
     ],
   },
   {
     id: 'account',
-    name: 'Account & Security',
+    name: 'Account',
     icon: 'person-outline',
-    color: Colors.light.success,
     questions: [
       {
         id: 'a1',
         question: 'How do I change my password?',
-        answer: 'There\'s no in-app "change password" option yet. To reset your password, log out and tap "Forgot Password?" on the sign-in screen — we\'ll email you a secure link to set a new one.',
+        answer: 'There\'s no in-app "change password" option yet. Log out, then tap "Forgot password?" on the Log In screen and enter your email — we\'ll send you a secure link to set a new one.',
       },
       {
         id: 'a2',
         question: 'How do I deactivate my account?',
-        answer: 'You can deactivate your account from your Profile screen. Your account will be disabled and you will be signed out, and you will not be able to sign in again. Your personal information is retained only as required for order and transaction records — deactivation does not erase past orders. If you need further action on your data, send us a message through the Contact Support form below.',
+        answer: 'You can deactivate your account from your Profile screen. Your account will be disabled and you will be signed out, and you will not be able to sign in again. Your personal information is retained only as required for order and transaction records — deactivation does not erase past orders. If you need further action on your data, send us a request below.',
       },
       {
         id: 'a3',
@@ -151,135 +137,117 @@ const faqCategories = [
       {
         id: 'a4',
         question: 'How do I update my profile?',
-        answer: 'Profile editing isn\'t available in the app yet — your name and email are set when you sign up. If you need to update this information, please contact our support team.',
+        answer: "Go to Profile. Tap the pencil on your card to change your display name, tap your photo to change it, or tap your delivery address to update it and your mobile number. Your email can't be changed because it's tied to your login.",
       },
     ],
   },
 ];
 
-// Contact Methods
-const contactMethods = [
-  {
-    id: 'email',
-    name: 'Email Support',
-    value: 'support@plainco.com',
-    icon: 'mail-outline',
-    color: Colors.light.tint,
-    action: 'email',
-  },
-  {
-    id: 'phone',
-    name: 'Hotline',
-    value: '+63 2 8123 4567',
-    icon: 'call-outline',
-    color: Colors.light.secondary,
-    action: 'phone',
-  },
-  {
-    id: 'whatsapp',
-    name: 'WhatsApp',
-    value: '+63 912 345 6789',
-    icon: 'logo-whatsapp',
-    color: '#25D366',
-    action: 'whatsapp',
-  },
-  {
-    id: 'messenger',
-    name: 'Facebook Messenger',
-    value: '@plainco.ph',
-    icon: 'logo-facebook',
-    color: '#0084FF',
-    action: 'messenger',
-  },
+const CONTACT = [
+  { id: 'email', name: 'Email', value: 'support@plainco.com', icon: 'mail-outline', url: 'mailto:support@plainco.com' },
+  { id: 'phone', name: 'Call', value: '+63 2 8123 4567', icon: 'call-outline', url: 'tel:+63281234567' },
+  { id: 'whatsapp', name: 'WhatsApp', value: '+63 912 345 6789', icon: 'logo-whatsapp', url: 'https://wa.me/639123456789' },
+  { id: 'messenger', name: 'Messenger', value: '@plainco.ph', icon: 'chatbubble-ellipses-outline', url: 'https://m.me/plainco.ph' },
 ];
 
-// Common Issues
-const commonIssues = [
-  {
-    id: 'issue1',
-    title: 'Order Not Received',
-    description: 'Your order is delayed or missing',
-    icon: 'time-outline',
-  },
-  {
-    id: 'issue2',
-    title: 'Wrong Item Received',
-    description: 'Received incorrect product',
-    icon: 'alert-circle-outline',
-  },
-  {
-    id: 'issue3',
-    title: 'Payment Failed',
-    description: 'Issues with payment processing',
-    icon: 'cash-outline',
-  },
-  {
-    id: 'issue4',
-    title: 'Account Issues',
-    description: 'Login or registration problems',
-    icon: 'person-outline',
-  },
-];
+// Written into the start of the message: the request itself has no topic
+// field, and the rules accept only the fields the form already sends.
+const TOPICS = ['Order not received', 'Wrong item received', 'Payment failed', 'Account issues', 'Something else'];
+const MESSAGE_MIN = 10;
+const MESSAGE_MAX = 500;
 
-// One FAQ row: question + chevron that rotates on expand, answer reveals
-// with a fade, and the surrounding list reflows smoothly via `layout` —
-// same LinearTransition treatment Ordersscreen.js uses for its filtered list.
-function FAQItem({ question, isExpanded, onToggle }) {
-  const reduceMotion = useReducedMotion();
-  const rotation = useSharedValue(isExpanded ? 1 : 0);
-  React.useEffect(() => {
-    rotation.value = withTiming(isExpanded ? 1 : 0, { duration: 200, easing: EASE_OUT_QUART });
-  }, [isExpanded]);
-  const chevronStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${rotation.value * 180}deg` }],
-  }));
+// Monday–Friday 9 AM–8 PM, Saturday 9 AM–6 PM, closed Sunday.
+const isOpenNow = (d = new Date()) => {
+  const day = d.getDay();
+  const h = d.getHours() + d.getMinutes() / 60;
+  if (day === 0) return false;
+  return h >= 9 && h < (day === 6 ? 18 : 20);
+};
 
+// The matched part of a question or answer, marked.
+function Highlighted({ text, q, style }) {
+  if (!q) return <Text style={style}>{text}</Text>;
+  const i = text.toLowerCase().indexOf(q);
+  if (i < 0) return <Text style={style}>{text}</Text>;
   return (
-    <Animated.View layout={reduceMotion ? undefined : LinearTransition.duration(200).easing(EASE_OUT_QUART)}>
-      <AnimatedPressable
-        style={styles.faqItem}
+    <Text style={style}>
+      {text.slice(0, i)}
+      <Text style={styles.mark}>{text.slice(i, i + q.length)}</Text>
+      {text.slice(i + q.length)}
+    </Text>
+  );
+}
+
+function FaqItem({ item, q, open, onToggle, last }) {
+  const reduceMotion = useReducedMotion();
+  const turn = useSharedValue(open ? 1 : 0);
+  useEffect(() => {
+    turn.value = reduceMotion ? (open ? 1 : 0) : withTiming(open ? 1 : 0, { duration: 300, easing: EASE_OUT_QUINT });
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chevron = useAnimatedStyle(() => ({ transform: [{ rotate: `${turn.value * 180}deg` }] }));
+  return (
+    <Animated.View
+      style={[styles.q, !last && styles.qDivider]}
+      layout={reduceMotion ? undefined : LinearTransition.duration(300).easing(EASE_OUT_QUINT)}
+    >
+      <Pressable
         onPress={onToggle}
-        rippleColor={Colors.light.border}
+        style={styles.qButton}
         accessibilityRole="button"
-        accessibilityLabel={question.question}
-        accessibilityHint={isExpanded ? 'Collapses the answer' : 'Expands the answer'}
-        accessibilityState={{ expanded: isExpanded }}
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={item.question}
       >
-        <View style={styles.faqHeader}>
-          <Text style={styles.faqQuestion}>{question.question}</Text>
-          <Animated.View style={chevronStyle}>
-            <Ionicons name="chevron-down" size={20} color={Colors.light.icon} />
-          </Animated.View>
-        </View>
-        {isExpanded && (
-          <Animated.View
-            style={styles.faqAnswer}
-            entering={reduceMotion ? undefined : FadeIn.duration(180).easing(EASE_OUT_QUART)}
-          >
-            <Text style={styles.faqAnswerText}>{question.answer}</Text>
-          </Animated.View>
-        )}
-      </AnimatedPressable>
+        <Highlighted text={item.question} q={q} style={styles.qText} />
+        <Animated.View style={chevron}>
+          <Ionicons name="chevron-down" size={16} color={Colors.light.icon} />
+        </Animated.View>
+      </Pressable>
+      {open ? (
+        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(250)}>
+          <Highlighted text={item.answer} q={q} style={styles.aText} />
+        </Animated.View>
+      ) : null}
     </Animated.View>
   );
 }
 
-export default function HelpScreen({ navigation }) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedQuestion, setSelectedQuestion] = useState(null);
-  const [supportMessage, setSupportMessage] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const { isConnected } = useNetworkStatus();
+// "Open now" with a softly pulsing dot, or "Closed now".
+function LivePill({ open }) {
+  const reduceMotion = useReducedMotion();
+  const t = useSharedValue(0);
+  useEffect(() => {
+    if (open && !reduceMotion) t.value = withRepeat(withTiming(1, { duration: 1800 }), -1, false);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const halo = useAnimatedStyle(() => ({ opacity: 0.6 * (1 - t.value), transform: [{ scale: 1 + t.value * 1.2 }] }));
+  return (
+    <View style={[styles.live, !open && styles.liveOff]}>
+      <View>
+        {open ? <Animated.View style={[styles.liveDot, styles.liveHalo, halo]} /> : null}
+        <View style={[styles.liveDot, !open && styles.liveDotOff]} />
+      </View>
+      <Text style={[styles.liveText, !open && styles.liveTextOff]}>{open ? 'Open now' : 'Closed now'}</Text>
+    </View>
+  );
+}
 
-  // Which order, if any, this message is about. It decides who reads it:
-  // a question about an order goes to the store that sold it, and a
-  // general one to the Platform Admin (handlesSupport() in
-  // firestore.rules). null means "general".
+export default function HelpScreen({ navigation }) {
+  const { isConnected } = useNetworkStatus();
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState(null);
+  const [openIds, setOpenIds] = useState(() => new Set());
+  const [scrolled, setScrolled] = useState(false);
+
+  // The request form, in its sheet.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [topic, setTopic] = useState(null);
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sentTo, setSentTo] = useState(null); // who the sent request went to
   const [recentOrders, setRecentOrders] = useState([]);
   const [aboutOrderId, setAboutOrderId] = useState(null);
 
-  // One-shot, not a listener: the list only needs to be right when the
-  // customer opens the form, and a guest has no orders to offer.
+  // One-shot, not a listener: the list only needs to be right when the form
+  // opens, and a guest has no orders to offer.
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
@@ -287,88 +255,45 @@ export default function HelpScreen({ navigation }) {
       .then((snapshot) => {
         setRecentOrders(
           snapshot.docs
-            // An order from before stores existed has nowhere to be
-            // routed, so it is not offered; the question can still be
-            // sent as a general one.
-            .filter((docSnap) => typeof docSnap.data().storeId === 'string')
-            .map((docSnap) => ({
-              id: docSnap.id,
-              storeId: docSnap.data().storeId,
-              storeName: docSnap.data().storeName || '',
-            }))
+            // An order from before stores existed has nowhere to be routed.
+            .filter((d) => typeof d.data().storeId === 'string')
+            .map((d) => ({ id: d.id, storeId: d.data().storeId, storeName: d.data().storeName || '' }))
         );
       })
       .catch((error) => console.error('Could not load recent orders for support:', error));
   }, []);
-  const reduceMotion = useReducedMotion();
 
-  // Refs for scroll-to-section behavior (replaces the web-only document.getElementById approach)
-  const scrollViewRef = useRef(null);
-  const contactFormY = useRef(0);
-  const messageInputRef = useRef(null);
+  const q = search.trim().toLowerCase();
+  const questions = useMemo(
+    () =>
+      FAQ_CATEGORIES.filter((c) => !category || c.id === category)
+        .flatMap((c) => c.questions)
+        .filter((item) => !q || `${item.question} ${item.answer}`.toLowerCase().includes(q)),
+    [category, q]
+  );
+  // While searching, the best match opens by itself.
+  const firstMatch = q ? questions[0]?.id : null;
+  const heading = category ? FAQ_CATEGORIES.find((c) => c.id === category).name : q ? 'Results' : 'Frequently asked';
 
-  // Briefly glows the message field after a Common Issue tap pre-fills it,
-  // so the user's eye lands on exactly where their draft appeared instead
-  // of having to hunt for it after the auto-scroll.
-  const messageHighlight = useSharedValue(0);
-  const messageHighlightStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(
-      messageHighlight.value,
-      [0, 1],
-      [Colors.light.background, Colors.light.tint + '14']
-    ),
-    borderColor: interpolateColor(
-      messageHighlight.value,
-      [0, 1],
-      [Colors.light.border, Colors.light.tint]
-    ),
-  }));
-
-  // Filter FAQs based on search
-  const filteredFAQs = () => {
-    if (!searchQuery.trim()) return faqCategories;
-
-    const query = searchQuery.toLowerCase();
-    return faqCategories
-      .map(category => ({
-        ...category,
-        questions: category.questions.filter(q =>
-          q.question.toLowerCase().includes(query) ||
-          q.answer.toLowerCase().includes(query)
-        ),
-      }))
-      .filter(category => category.questions.length > 0);
-  };
-
-  const handleToggleFAQ = (question) => {
+  const toggle = (id) => {
     Haptics.selectionAsync();
-    setSelectedQuestion((current) => (current?.id === question.id ? null : question));
+    setOpenIds((prev) => {
+      // A question is open when it's in the set XOR it's the auto-opened
+      // best match, so flipping membership always flips what you see.
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
-  const handleContact = async (method) => {
+  const openContact = async (method) => {
+    Haptics.selectionAsync();
     try {
-      switch (method.action) {
-        case 'email':
-          await Linking.openURL(`mailto:${method.value}`);
-          break;
-        case 'phone':
-          await Linking.openURL(`tel:${method.value.replace(/\s/g, '')}`);
-          break;
-        case 'whatsapp':
-          await Linking.openURL(`https://wa.me/${method.value.replace(/\s/g, '')}`);
-          break;
-        case 'messenger':
-          await Linking.openURL(`https://m.me/${method.value}`);
-          break;
-      }
-    } catch (error) {
-      // Most commonly: the relevant app (Mail, WhatsApp, Messenger) isn't
-      // installed. Without this, the tap does nothing and looks broken —
-      // exactly the wrong impression for the screen meant to build trust.
-      showAppAlert(
-        'Unable to Open',
-        `We couldn't open ${method.name}. You can reach us directly at ${method.value}.`
-      );
+      await Linking.openURL(method.url);
+    } catch (_error) {
+      // Usually the app (Mail, WhatsApp, Messenger) isn't installed.
+      showAppAlert('Unable to Open', `We couldn't open ${method.name}. You can reach us directly at ${method.value}.`);
     }
   };
 
@@ -379,745 +304,500 @@ export default function HelpScreen({ navigation }) {
         url: 'https://plainco.com/download',
         title: 'Share PlainCo',
       });
-    } catch (error) {
+    } catch (_error) {
       showAppAlert('Error', 'Unable to share at this moment.');
     }
   };
 
-  const handleSubmitSupport = async () => {
-    if (!supportMessage.trim()) {
-      showAppAlert('Error', 'Please enter your message');
-      return;
-    }
+  const openRequest = () => {
+    Haptics.selectionAsync();
+    setSentTo(null);
+    setSheetOpen(true);
+  };
 
+  const canSend = topic && message.trim().length >= MESSAGE_MIN && !sending && isConnected;
+
+  const handleSend = async () => {
+    if (!canSend) return;
     if (!auth.currentUser) {
-      showAppAlert(
-        'Log In Required',
-        'Please log in so our support team can follow up with you about this request.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Log In', onPress: () => navigation.navigate('Login') },
-        ]
-      );
+      showAppAlert('Log In Required', 'Please log in so our support team can follow up with you about this request.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Log In', onPress: () => navigation.navigate('Login') },
+      ]);
       return;
     }
-
-    if (!isConnected) {
-      showAppAlert('No Internet Connection', 'Please check your connection and try again.');
-      return;
-    }
-
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setIsSubmitting(true);
+    setSending(true);
     try {
-      // Writes the request to Firestore so it's durable and admin-reviewable.
-      // There's no email/push pipeline yet (would need Cloud Functions + a
-      // mail provider) — this is the real, persisted equivalent of "sent".
-      const aboutOrder = recentOrders.find((order) => order.id === aboutOrderId);
+      const aboutOrder = recentOrders.find((o) => o.id === aboutOrderId);
       await addDoc(collection(db, 'supportRequests'), {
-        message: supportMessage.trim(),
-        userId: auth.currentUser?.uid || null,
-        userEmail: auth.currentUser?.email || null,
+        message: `${topic}: ${message.trim()}`,
+        userId: auth.currentUser.uid,
+        userEmail: auth.currentUser.email || null,
         status: 'open',
         createdAt: serverTimestamp(),
         // Routing. The rules check the order is this customer's and that
         // storeId is its store, so both come from the order itself.
-        ...(aboutOrder
-          ? { orderId: aboutOrder.id, storeId: aboutOrder.storeId }
-          : { storeId: null }),
+        ...(aboutOrder ? { orderId: aboutOrder.id, storeId: aboutOrder.storeId } : { storeId: null }),
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert(
-        'Message Sent!',
-        'Thank you for reaching out. Our support team will respond within 24 hours.',
-        [{ text: 'OK', onPress: () => { setSupportMessage(''); setAboutOrderId(null); } }]
-      );
+      setSentTo(aboutOrder ? aboutOrder.storeName || 'The store' : 'The PlainCo team');
+      setTopic(null);
+      setMessage('');
+      setAboutOrderId(null);
     } catch (error) {
       console.error('Error submitting support request:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showAppAlert(
-        'Error',
-        'Could not send your message. Please try again, or use one of the contact methods above.'
-      );
+      showAppAlert('Error', 'Could not send your request. Please try again, or use one of the contact methods.');
     } finally {
-      setIsSubmitting(false);
+      setSending(false);
     }
   };
 
-  const handleCommonIssue = (issue) => {
-    Haptics.selectionAsync();
-    setSupportMessage(`Hello, I need help with: ${issue.title}. ${issue.description}`);
-    // React Native has no DOM, so we scroll using the ScrollView ref
-    // and the y-position captured by the contact form's onLayout below.
-    setTimeout(() => {
-      scrollViewRef.current?.scrollTo({ y: contactFormY.current, animated: true });
-      setTimeout(() => {
-        messageInputRef.current?.focus();
-        if (!reduceMotion) {
-          messageHighlight.value = withSequence(
-            withTiming(1, { duration: 150, easing: EASE_OUT_QUART }),
-            withTiming(0, { duration: 500, easing: EASE_OUT_QUART })
-          );
-        }
-      }, 350);
-    }, 100);
-  };
-
-  const phoneMethod = contactMethods.find((m) => m.id === 'phone');
-  const emailMethod = contactMethods.find((m) => m.id === 'email');
-  const whatsappMethod = contactMethods.find((m) => m.id === 'whatsapp');
-  const visibleFAQs = filteredFAQs();
+  const open = isOpenNow();
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Help Center</Text>
-        <TouchableOpacity
-          onPress={handleShare}
-          style={styles.headerAction}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Share the PlainCo app"
-        >
-          <Ionicons name="share-outline" size={24} color={Colors.light.text} />
-        </TouchableOpacity>
-      </View>
-
-      {!isConnected && (
-        <Animated.View
-          style={styles.offlineBanner}
-          entering={reduceMotion ? undefined : FadeIn.duration(220)}
-        >
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — sending a message is unavailable, but call, email, and text still work.
-          </Text>
-        </Animated.View>
-      )}
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <TopBar title="Help & Support" onBack={() => navigation.goBack()} stuck={scrolled} />
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.content}
+        onScroll={(e) => {
+          const past = e.nativeEvent.contentOffset.y > 4;
+          if (past !== scrolled) setScrolled(past);
+        }}
+        scrollEventThrottle={32}
       >
-        <ScrollView
-          ref={scrollViewRef}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* Search Bar */}
-          <View style={styles.searchContainer}>
-            <Ionicons name="search-outline" size={20} color={Colors.light.icon} style={styles.searchIcon} />
+        <Reveal delay={40}>
+          <Text style={styles.big} accessibilityRole="header">
+            How can we help?
+          </Text>
+        </Reveal>
+
+        {!isConnected ? (
+          <View style={styles.offlineWrap}>
+            <OfflineNotice>
+              No internet connection — sending a request is unavailable, but call, email, and messaging still work.
+            </OfflineNotice>
+          </View>
+        ) : null}
+
+        <Reveal delay={90}>
+          <View style={styles.search}>
+            <Ionicons name="search" size={19} color={Colors.light.icon} />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search for help..."
-              placeholderTextColor={Colors.light.icon}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              accessibilityLabel="Search for help"
+              value={search}
+              onChangeText={setSearch}
+              placeholder='Search questions, e.g. "refund"'
+              placeholderTextColor="#8E857B"
               returnKeyType="search"
+              autoCorrect={false}
+              accessibilityLabel="Search questions"
             />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity
-                onPress={() => setSearchQuery('')}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            {search ? (
+              <Pressable onPress={() => setSearch('')} style={styles.clear} hitSlop={8} accessibilityLabel="Clear search">
+                <Ionicons name="close" size={14} color={Colors.light.text} />
+              </Pressable>
+            ) : null}
+          </View>
+        </Reveal>
+
+        {/* Tapping a topic narrows the questions to it; tapping it again
+            shows them all. */}
+        <Reveal delay={140} style={styles.topics}>
+          {FAQ_CATEGORIES.map((c) => {
+            const on = category === c.id;
+            return (
+              <Pressable
+                key={c.id}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setCategory(on ? null : c.id);
+                }}
+                style={({ pressed }) => [styles.topic, on && styles.topicOn, pressed && { transform: [{ scale: 0.95 }] }]}
                 accessibilityRole="button"
-                accessibilityLabel="Clear search"
+                accessibilityState={{ selected: on }}
+                accessibilityLabel={`${c.name} questions`}
               >
-                <Ionicons name="close-circle" size={20} color={Colors.light.icon} />
-              </TouchableOpacity>
-            )}
-          </View>
+                <Ionicons name={c.icon} size={22} color={on ? '#fff' : Colors.light.tint} />
+                <Text style={[styles.topicText, on && styles.topicTextOn]}>{c.name}</Text>
+              </Pressable>
+            );
+          })}
+        </Reveal>
 
-          {/* Quick Actions */}
-          <View style={styles.quickActions}>
-            <AnimatedPressable
-              style={styles.quickActionItem}
-              onPress={() => handleContact(phoneMethod)}
-              accessibilityRole="button"
-              accessibilityLabel="Call us"
-              accessibilityHint={`Calls ${phoneMethod.value}`}
-            >
-              <View style={[styles.quickActionIcon, { backgroundColor: Colors.light.tint + '20' }]}>
-                <Ionicons name="call-outline" size={24} color={Colors.light.tint} />
-              </View>
-              <Text style={styles.quickActionText}>Call Us</Text>
-            </AnimatedPressable>
-            <AnimatedPressable
-              style={styles.quickActionItem}
-              onPress={() => handleContact(emailMethod)}
-              accessibilityRole="button"
-              accessibilityLabel="Email support"
-              accessibilityHint={`Opens an email to ${emailMethod.value}`}
-            >
-              <View style={[styles.quickActionIcon, { backgroundColor: Colors.light.secondary + '20' }]}>
-                <Ionicons name="mail-outline" size={24} color={Colors.light.secondary} />
-              </View>
-              <Text style={styles.quickActionText}>Email</Text>
-            </AnimatedPressable>
-            <AnimatedPressable
-              style={styles.quickActionItem}
-              onPress={() => handleContact(whatsappMethod)}
-              accessibilityRole="button"
-              accessibilityLabel="Message us on WhatsApp"
-            >
-              <View style={[styles.quickActionIcon, { backgroundColor: '#25D36620' }]}>
-                <Ionicons name="logo-whatsapp" size={24} color="#25D366" />
-              </View>
-              <Text style={styles.quickActionText}>WhatsApp</Text>
-            </AnimatedPressable>
-            <AnimatedPressable
-              style={styles.quickActionItem}
-              onPress={handleShare}
-              accessibilityRole="button"
-              accessibilityLabel="Share the PlainCo app"
-            >
-              <View style={[styles.quickActionIcon, { backgroundColor: Colors.light.highlight + '20' }]}>
-                <Ionicons name="share-social-outline" size={24} color={Colors.light.highlight} />
-              </View>
-              <Text style={styles.quickActionText}>Share App</Text>
-            </AnimatedPressable>
-          </View>
+        <Reveal delay={200}>
+          <GroupHeading>{heading}</GroupHeading>
+        </Reveal>
+        <Reveal delay={230} style={styles.faq}>
+          {questions.map((item, i) => (
+            <FaqItem
+              key={item.id}
+              item={item}
+              q={q}
+              open={openIds.has(item.id) !== (item.id === firstMatch)}
+              onToggle={() => toggle(item.id)}
+              last={i === questions.length - 1}
+            />
+          ))}
+          {!questions.length ? (
+            <Text style={styles.noResults}>No answers found. Try different words, or send us a request below.</Text>
+          ) : null}
+        </Reveal>
 
-          {/* Common Issues */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Common Issues</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.issuesScroll}
-            >
-              {commonIssues.map((issue) => (
-                <AnimatedPressable
-                  key={issue.id}
-                  onPress={() => handleCommonIssue(issue)}
-                  rippleColor={Colors.light.border}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${issue.title}. ${issue.description}.`}
-                  accessibilityHint="Pre-fills a support message about this issue"
-                >
-                  <Card variant="flat" style={styles.issueCard}>
-                    <View style={styles.issueIcon}>
-                      <Ionicons name={issue.icon} size={24} color={Colors.light.tint} />
-                    </View>
-                    <Text style={styles.issueTitle}>{issue.title}</Text>
-                    <Text style={styles.issueDescription}>{issue.description}</Text>
-                  </Card>
-                </AnimatedPressable>
-              ))}
-            </ScrollView>
-          </View>
-
-          {/* FAQ Section */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Frequently Asked Questions</Text>
-            {visibleFAQs.map((category, categoryIndex) => (
-              <Animated.View
-                key={category.id}
-                style={styles.faqCategory}
-                entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(categoryIndex, 8) * 40).duration(220).easing(EASE_OUT_QUART)}
-                layout={reduceMotion ? undefined : LinearTransition.duration(220).easing(EASE_OUT_QUART)}
-              >
-                <View style={styles.categoryHeader}>
-                  <View style={[styles.categoryIcon, { backgroundColor: category.color + '20' }]}>
-                    <Ionicons name={category.icon} size={20} color={category.color} />
-                  </View>
-                  <Text style={styles.categoryName}>{category.name}</Text>
-                </View>
-                <Card variant="flat" style={styles.faqListCard}>
-                  {category.questions.map((question) => (
-                    <FAQItem
-                      key={question.id}
-                      question={question}
-                      isExpanded={selectedQuestion?.id === question.id}
-                      onToggle={() => handleToggleFAQ(question)}
-                    />
-                  ))}
-                </Card>
-              </Animated.View>
-            ))}
-            {visibleFAQs.length === 0 && (
-              <Animated.View
-                style={styles.noResults}
-                entering={reduceMotion ? undefined : FadeIn.duration(220)}
-              >
-                <EmptyState
-                  icon="search-outline"
-                  title="No results found"
-                  subtitle="Try different keywords or contact our support team below."
-                />
-              </Animated.View>
-            )}
-          </View>
-
-          {/* Contact Support Form */}
-          <View
-            style={styles.section}
-            onLayout={(event) => {
-              contactFormY.current = event.nativeEvent.layout.y;
-            }}
+        <Reveal delay={280}>
+          <Pressable
+            onPress={openRequest}
+            style={({ pressed }) => [styles.cta, pressed && { transform: [{ scale: 0.98 }] }]}
+            accessibilityRole="button"
+            accessibilityLabel="Still stuck? Send us a request"
           >
-            <Text style={styles.sectionTitle}>Contact Support</Text>
-            <Card variant="flat">
-              <Text style={styles.contactSubtitle}>
-                Can&apos;t find what you&apos;re looking for? Send us a message and we&apos;ll help you out!
-              </Text>
-
-              <View style={styles.contactMethods}>
-                {contactMethods.map((method) => (
-                  <AnimatedPressable
-                    key={method.id}
-                    style={styles.contactMethod}
-                    onPress={() => handleContact(method)}
-                    rippleColor={Colors.light.border}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${method.name}, ${method.value}`}
-                  >
-                    <View style={[styles.contactMethodIcon, { backgroundColor: method.color + '20' }]}>
-                      <Ionicons name={method.icon} size={24} color={method.color} />
-                    </View>
-                    <View style={styles.contactMethodInfo}>
-                      <Text style={styles.contactMethodName}>{method.name}</Text>
-                      <Text style={styles.contactMethodValue}>{method.value}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color={Colors.light.icon} />
-                  </AnimatedPressable>
-                ))}
-              </View>
-
-              <View style={styles.divider}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              <View style={styles.supportForm}>
-                <Text style={styles.formLabel}>Send us a message</Text>
-                <AnimatedTextInput
-                  ref={messageInputRef}
-                  style={[styles.messageInput, messageHighlightStyle]}
-                  placeholder="Describe your issue in detail..."
-                  placeholderTextColor={Colors.light.icon}
-                  value={supportMessage}
-                  onChangeText={setSupportMessage}
-                  multiline
-                  numberOfLines={5}
-                  textAlignVertical="top"
-                  accessibilityLabel="Describe your issue"
-                />
-                {/* Only shown when there is an order to pick. The store that
-                    sold it can actually answer, and a general question goes
-                    to PlainCo itself. */}
-                {recentOrders.length > 0 && (
-                  <View style={styles.aboutOrder}>
-                    <Text style={styles.formLabel}>Is this about an order?</Text>
-                    <View style={styles.aboutOrderChips}>
-                      {[{ id: null, label: 'No, a general question' }, ...recentOrders.map((order) => ({
-                        id: order.id,
-                        label: `${formatOrderNumber(order.id)}${order.storeName ? ` · ${order.storeName}` : ''}`,
-                      }))].map((option) => {
-                        const active = aboutOrderId === option.id;
-                        return (
-                          <AnimatedPressable
-                            key={option.id || 'general'}
-                            style={[styles.aboutOrderChip, active && styles.aboutOrderChipActive]}
-                            onPress={() => {
-                              Haptics.selectionAsync();
-                              setAboutOrderId(option.id);
-                            }}
-                            accessibilityRole="radio"
-                            accessibilityState={{ checked: active }}
-                            accessibilityLabel={option.id ? `About order ${option.label}` : option.label}
-                          >
-                            <Text style={[styles.aboutOrderChipText, active && styles.aboutOrderChipTextActive]}>
-                              {option.label}
-                            </Text>
-                          </AnimatedPressable>
-                        );
-                      })}
-                    </View>
-                    <Text style={styles.aboutOrderHint}>
-                      {aboutOrderId
-                        ? 'This goes to the store that sold the order.'
-                        : 'This goes to the PlainCo team.'}
-                    </Text>
-                  </View>
-                )}
-                <View style={styles.submitButtonWrap}>
-                  <Button
-                    variant="primary"
-                    label={!isConnected ? 'No Internet Connection' : 'Send Message'}
-                    onPress={handleSubmitSupport}
-                    loading={isSubmitting}
-                    disabled={isSubmitting || !isConnected}
-                  />
-                </View>
-              </View>
-            </Card>
-          </View>
-
-          {/* Operating Hours */}
-          <View style={styles.section}>
-            <View
-              accessible
-              accessibilityLabel="Support hours: Monday to Friday, 9 AM to 8 PM. Saturday, 9 AM to 6 PM. Sunday, closed. Average response time: 2 to 4 hours."
-            >
-              <Card variant="flat" style={styles.hoursCard}>
-                <Ionicons name="time-outline" size={24} color={Colors.light.tint} />
-                <View style={styles.hoursInfo}>
-                  <Text style={styles.hoursTitle}>Support Hours</Text>
-                  <Text style={styles.hoursText}>Monday - Friday: 9:00 AM - 8:00 PM</Text>
-                  <Text style={styles.hoursText}>Saturday: 9:00 AM - 6:00 PM</Text>
-                  <Text style={styles.hoursText}>Sunday: Closed</Text>
-                  <Text style={styles.hoursNote}>Average response time: 2-4 hours</Text>
-                </View>
-              </Card>
+            <View style={styles.ctaRing} pointerEvents="none" />
+            <Ionicons name="chatbox-ellipses-outline" size={24} color="#fff" />
+            <View style={styles.flex}>
+              <Text style={styles.ctaTitle}>Still stuck? Send us a request</Text>
+              <Text style={styles.ctaSub}>We&apos;ll reply to your email, usually within 24 hours.</Text>
             </View>
-          </View>
+          </Pressable>
+        </Reveal>
 
-          {/* Footer */}
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>© {new Date().getFullYear()} PlainCo. All rights reserved.</Text>
-            <Text style={styles.footerVersion}>Version 1.0.0</Text>
+        <Reveal delay={320}>
+          <GroupHeading>Contact us</GroupHeading>
+        </Reveal>
+        <Reveal delay={340}>
+          <View
+            style={styles.hours}
+            accessible
+            accessibilityLabel={`Support hours: Monday to Friday, 9 AM to 8 PM. Saturday, 9 AM to 6 PM. Sunday, closed. ${open ? 'Open now' : 'Closed now'}.`}
+          >
+            <View style={styles.flex}>
+              <Text style={styles.hoursTitle}>Support hours</Text>
+              <Text style={styles.hoursText}>Mon–Fri · 9:00 AM – 8:00 PM</Text>
+              <Text style={styles.hoursText}>Sat · 9:00 AM – 6:00 PM · Sun closed</Text>
+            </View>
+            <LivePill open={open} />
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </Reveal>
+        <Reveal delay={380} style={styles.channels}>
+          {CONTACT.map((m) => (
+            <Pressable
+              key={m.id}
+              onPress={() => openContact(m)}
+              style={({ pressed }) => [styles.channel, pressed && { transform: [{ scale: 0.97 }] }]}
+              accessibilityRole="button"
+              accessibilityLabel={`${m.name}, ${m.value}`}
+            >
+              <View style={styles.channelIcon}>
+                <Ionicons name={m.icon} size={18} color={Colors.light.text} />
+              </View>
+              <View style={styles.flex}>
+                <Text style={styles.channelName}>{m.name}</Text>
+                <Text style={styles.channelValue} numberOfLines={1}>
+                  {m.value}
+                </Text>
+              </View>
+            </Pressable>
+          ))}
+        </Reveal>
+        <Reveal delay={420}>
+          <Pressable onPress={handleShare} style={styles.share} accessibilityRole="button">
+            <Ionicons name="share-social-outline" size={18} color={Colors.light.text} />
+            <Text style={styles.shareText}>Share PlainCo with a friend</Text>
+          </Pressable>
+        </Reveal>
+      </ScrollView>
+
+      <Sheet visible={sheetOpen} onClose={() => setSheetOpen(false)} locked={sending}>
+        {sentTo ? (
+          <SentView sentTo={sentTo} onDone={() => setSheetOpen(false)} />
+        ) : (
+          <>
+            <Text style={styles.sheetTitle}>Send a support request</Text>
+            <Text style={styles.sheetSub}>
+              Tell us what happened.
+              {auth.currentUser?.email ? (
+                <>
+                  {" We'll reply to "}
+                  <Text style={styles.bold}>{auth.currentUser.email}</Text>.
+                </>
+              ) : null}
+            </Text>
+
+            <Text style={styles.label}>Topic</Text>
+            <View style={styles.pills}>
+              {TOPICS.map((t) => {
+                const on = topic === t;
+                return (
+                  <Pressable
+                    key={t}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setTopic(t);
+                    }}
+                    style={[styles.pill, on && styles.pillOn]}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: on }}
+                  >
+                    <Text style={[styles.pillText, on && styles.pillTextOn]}>{t}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Only when there's an order to pick: the store that sold it can
+                actually answer, and anything else goes to PlainCo itself. */}
+            {recentOrders.length > 0 ? (
+              <>
+                <Text style={styles.label}>
+                  Is this about an order? <Text style={styles.optional}>(optional)</Text>
+                </Text>
+                <View style={styles.pills}>
+                  {[{ id: null, label: 'No, a general question' }, ...recentOrders.map((o) => ({
+                    id: o.id,
+                    label: `${formatOrderNumber(o.id)}${o.storeName ? ` · ${o.storeName}` : ''}`,
+                  }))].map((opt) => {
+                    const on = aboutOrderId === opt.id;
+                    return (
+                      <Pressable
+                        key={opt.id || 'general'}
+                        onPress={() => {
+                          Haptics.selectionAsync();
+                          setAboutOrderId(opt.id);
+                        }}
+                        style={[styles.pill, on && styles.pillOn]}
+                        accessibilityRole="radio"
+                        accessibilityState={{ checked: on }}
+                        accessibilityLabel={opt.id ? `About order ${opt.label}` : opt.label}
+                      >
+                        <Text style={[styles.pillText, on && styles.pillTextOn]}>{opt.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.routeHint}>
+                  {aboutOrderId ? 'This goes to the store that sold the order.' : 'This goes to the PlainCo team.'}
+                </Text>
+              </>
+            ) : null}
+
+            <View style={styles.labelRow}>
+              <Text style={styles.label}>Message</Text>
+              <Text style={styles.count}>
+                {message.length}/{MESSAGE_MAX}
+              </Text>
+            </View>
+            <TextInput
+              style={styles.textarea}
+              value={message}
+              onChangeText={setMessage}
+              maxLength={MESSAGE_MAX}
+              multiline
+              textAlignVertical="top"
+              placeholder="What went wrong? Include sizes, colors or dates if it helps."
+              placeholderTextColor="#B3AAA0"
+              accessibilityLabel="Message"
+            />
+            <View style={styles.sendWrap}>
+              <Button
+                variant="primary"
+                label={!isConnected ? 'No Internet Connection' : 'Send request'}
+                fontSize={16}
+                onPress={handleSend}
+                loading={sending}
+                disabled={!canSend}
+              />
+            </View>
+          </>
+        )}
+      </Sheet>
     </SafeAreaView>
   );
 }
 
+function SentView({ sentTo, onDone }) {
+  const reduceMotion = useReducedMotion();
+  return (
+    <Animated.View style={styles.done} entering={reduceMotion ? undefined : FadeIn.duration(400)}>
+      <View style={styles.doneIcon}>
+        <Ionicons name="checkmark" size={36} color={Colors.light.secondary} />
+      </View>
+      <Text style={styles.doneTitle}>Request sent</Text>
+      <Text style={styles.doneText}>
+        Thanks! {sentTo} will review it and reply to your email, usually within 24 hours.
+      </Text>
+      <View style={styles.doneButton}>
+        <Button variant="secondary" label="Done" fontSize={16} onPress={onDone} />
+      </View>
+    </Animated.View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
-  },
-  header: {
+  container: { flex: 1, backgroundColor: Colors.light.background },
+  flex: { flex: 1 },
+  bold: { fontWeight: '600', color: Colors.light.text },
+  content: { paddingHorizontal: 20, paddingBottom: 30 },
+  big: { fontSize: 26, fontWeight: '600', letterSpacing: -0.5, color: Colors.light.text, marginTop: 4, marginBottom: 14 },
+  offlineWrap: { marginHorizontal: -20 },
+
+  search: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  headerAction: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'flex-end',
-  },
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
-  },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-  keyboardView: {
-    flex: 1,
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.light.background,
-    margin: 20,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
+    gap: 10,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
     borderColor: Colors.light.border,
-  },
-  searchIcon: {
-    marginRight: 8,
+    paddingLeft: 14,
+    paddingRight: 8,
   },
   searchInput: {
     flex: 1,
-    height: 44,
-    fontSize: 14,
+    minWidth: 0,
+    height: '100%',
+    fontSize: 14.5,
     color: Colors.light.text,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
   },
-  quickActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: 20,
-    marginBottom: 24,
-  },
-  quickActionItem: {
+  clear: { width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(28,27,26,0.07)', alignItems: 'center', justifyContent: 'center' },
+
+  topics: { flexDirection: 'row', gap: 8, marginTop: 14, marginBottom: 2 },
+  topic: {
+    flex: 1,
     alignItems: 'center',
-  },
-  quickActionIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  quickActionText: {
-    fontSize: 12,
-    color: Colors.light.icon,
-  },
-  section: {
-    marginBottom: 24,
-    paddingHorizontal: 20,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.light.text,
-    marginBottom: 16,
-  },
-  issuesScroll: {
-    flexDirection: 'row',
-  },
-  issueCard: {
-    width: 160,
-    marginRight: 12,
-  },
-  issueIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: Colors.light.tint + '20',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  issueTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.light.text,
-    marginBottom: 4,
-  },
-  issueDescription: {
-    fontSize: 12,
-    color: Colors.light.icon,
-  },
-  faqCategory: {
-    marginBottom: 20,
-  },
-  categoryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  categoryIcon: {
-    width: 32,
-    height: 32,
+    gap: 6,
+    paddingTop: 12,
+    paddingBottom: 10,
     borderRadius: 16,
-    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    backgroundColor: '#FFFFFF',
+  },
+  topicOn: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  topicText: { fontSize: 11.5, fontWeight: '500', color: Colors.light.text },
+  topicTextOn: { color: '#fff' },
+
+  faq: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EEE7DD', borderRadius: 18, overflow: 'hidden' },
+  q: {},
+  qDivider: { borderBottomWidth: 1, borderBottomColor: '#F1EBE3' },
+  qButton: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 15, paddingHorizontal: 16 },
+  qText: { flex: 1, fontSize: 13.5, fontWeight: '500', color: Colors.light.text },
+  aText: { paddingHorizontal: 16, paddingBottom: 15, fontSize: 12.5, lineHeight: 20, color: Colors.light.icon },
+  mark: { backgroundColor: '#F6E7C9', color: Colors.light.text },
+  noResults: { paddingVertical: 22, paddingHorizontal: 16, textAlign: 'center', fontSize: 12.5, color: Colors.light.icon },
+
+  cta: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 8,
-  },
-  categoryName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  faqListCard: {
-    padding: 0,
+    gap: 12,
+    padding: 16,
+    borderRadius: 20,
+    backgroundColor: Colors.light.tint,
+    marginTop: 14,
     overflow: 'hidden',
   },
-  faqItem: {
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    padding: 16,
+  ctaRing: {
+    position: 'absolute',
+    right: -30,
+    top: -30,
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.2)',
   },
-  faqHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  faqQuestion: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.light.text,
-    marginRight: 12,
-  },
-  faqAnswer: {
-    marginTop: 12,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
-  },
-  faqAnswerText: {
-    fontSize: 13,
-    color: Colors.light.icon,
-    lineHeight: 20,
-  },
-  noResults: {
-    paddingVertical: 8,
-  },
-  contactSubtitle: {
-    fontSize: 14,
-    color: Colors.light.icon,
-    marginBottom: 16,
-    lineHeight: 20,
-  },
-  contactMethods: {
-    marginBottom: 16,
-  },
-  contactMethod: {
+  ctaTitle: { fontSize: 14.5, fontWeight: '600', color: '#fff' },
+  ctaSub: { fontSize: 12, color: 'rgba(255,255,255,0.85)', marginTop: 1 },
+
+  hours: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 18,
+    backgroundColor: Colors.light.text,
+    marginBottom: 10,
   },
-  contactMethodIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  contactMethodInfo: {
-    flex: 1,
-  },
-  contactMethodName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.light.text,
-    marginBottom: 2,
-  },
-  contactMethodValue: {
-    fontSize: 12,
-    color: Colors.light.icon,
-  },
-  divider: {
+  hoursTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.background, marginBottom: 2 },
+  hoursText: { fontSize: 11.5, color: '#BDB3A9' },
+  live: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 20,
+    gap: 6,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(143,163,125,0.2)',
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: Colors.light.border,
-  },
-  dividerText: {
-    marginHorizontal: 12,
-    fontSize: 12,
-    color: Colors.light.icon,
-  },
-  supportForm: {
-    marginTop: 8,
-  },
-  aboutOrder: {
-    marginTop: Spacing.md,
-  },
-  aboutOrderChips: {
+  liveOff: { backgroundColor: 'rgba(250,247,242,0.08)' },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#9DC08B' },
+  liveHalo: { position: 'absolute' },
+  liveDotOff: { backgroundColor: '#8B8178' },
+  liveText: { fontSize: 11.5, fontWeight: '600', color: '#CFE0BF' },
+  liveTextOff: { color: '#BDB3A9' },
+
+  channels: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  channel: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.sm,
-  },
-  // Same tinted-outline selection as the role picker in AdminUsersScreen:
-  // Clay fill is kept for the one primary action below, Send Message.
-  aboutOrderChip: {
-    minHeight: 36,
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.md,
-    borderRadius: Radius.pill,
+    alignItems: 'center',
+    gap: 10,
+    width: '48%',
+    flexGrow: 1,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
+    borderColor: '#EEE7DD',
   },
-  aboutOrderChipActive: {
-    backgroundColor: Colors.light.tint + '12',
-    borderColor: Colors.light.tint,
-  },
-  aboutOrderChipText: {
-    fontSize: 13,
-    color: Colors.light.text,
-  },
-  aboutOrderChipTextActive: {
-    color: Colors.light.tint,
-    fontWeight: '600',
-  },
-  aboutOrderHint: {
-    fontSize: 12,
-    color: Colors.light.icon,
-    marginTop: Spacing.sm,
-  },
-  formLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.light.text,
-    marginBottom: 8,
-  },
-  messageInput: {
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 12,
+  channelIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#F3EEE6', alignItems: 'center', justifyContent: 'center' },
+  channelName: { fontSize: 13, fontWeight: '600', color: Colors.light.text },
+  channelValue: { fontSize: 11, color: Colors.light.icon },
+  share: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14, marginTop: 6 },
+  shareText: { fontSize: 13, fontWeight: '500', color: Colors.light.text },
+
+  sheetTitle: { fontSize: 18, fontWeight: '600', color: Colors.light.text, marginBottom: 4 },
+  sheetSub: { fontSize: 13, lineHeight: 19, color: Colors.light.icon, marginBottom: 14 },
+  label: { fontSize: 12.5, fontWeight: '500', color: Colors.light.text, marginBottom: 6, marginLeft: 2 },
+  optional: { fontWeight: '400', color: Colors.light.icon },
+  labelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 4 },
+  count: { fontSize: 12, color: Colors.light.icon },
+  pills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 14 },
+  pill: {
+    minHeight: 34,
+    justifyContent: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 14,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    backgroundColor: '#FFFFFF',
+  },
+  pillOn: { backgroundColor: Colors.light.text, borderColor: Colors.light.text },
+  pillText: { fontSize: 12.5, fontWeight: '500', color: Colors.light.text },
+  pillTextOn: { color: Colors.light.background },
+  routeHint: { fontSize: 12, color: Colors.light.icon, marginTop: -8, marginBottom: 14, marginLeft: 2 },
+  textarea: {
+    height: 110,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 15,
+    paddingTop: 12,
+    paddingBottom: 12,
+    fontSize: 15,
+    lineHeight: 21,
     color: Colors.light.text,
-    backgroundColor: Colors.light.background,
-    minHeight: 100,
-    textAlignVertical: 'top',
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : null),
   },
-  submitButtonWrap: {
-    marginTop: 12,
-  },
-  hoursCard: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  hoursInfo: {
-    flex: 1,
-  },
-  hoursTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.light.text,
-    marginBottom: 8,
-  },
-  hoursText: {
-    fontSize: 12,
-    color: Colors.light.icon,
-    marginBottom: 4,
-  },
-  hoursNote: {
-    fontSize: 11,
-    color: Colors.light.success,
-    marginTop: 8,
-  },
-  footer: {
-    alignItems: 'center',
-    paddingVertical: 24,
-    paddingBottom: 40,
-  },
-  footerText: {
-    fontSize: 12,
-    color: Colors.light.icon,
-    marginBottom: 4,
-  },
-  footerVersion: {
-    fontSize: 11,
-    color: Colors.light.border,
-  },
+  sendWrap: { marginTop: 14 },
+
+  done: { alignItems: 'center', paddingTop: 10, paddingBottom: 4 },
+  doneIcon: { width: 72, height: 72, borderRadius: 22, backgroundColor: '#EEF0EA', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  doneTitle: { fontSize: 18, fontWeight: '600', color: Colors.light.text, marginBottom: 6 },
+  doneText: { fontSize: 13, lineHeight: 20, color: Colors.light.icon, textAlign: 'center', marginBottom: 18 },
+  doneButton: { alignSelf: 'stretch' },
 });

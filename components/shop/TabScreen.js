@@ -100,6 +100,38 @@ export function useAutoClear(value, clear, ms = 4000) {
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 }
 
+// The bar over a pushed screen (Delivery address, Help & Support): back
+// arrow and title, with a hairline once content scrolls under it.
+export function TopBar({ title, onBack, stuck, right }) {
+  return (
+    <View style={[styles.bar, stuck && styles.barStuck]}>
+      <Pressable
+        onPress={onBack}
+        style={({ pressed }) => [styles.barButton, pressed && styles.backPressed]}
+        hitSlop={4}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
+      >
+        <Ionicons name="chevron-back" size={22} color={Colors.light.text} />
+      </Pressable>
+      <Text style={styles.barTitle} numberOfLines={1} accessibilityRole="header">
+        {title}
+      </Text>
+      {right}
+    </View>
+  );
+}
+
+// "RECIPIENT ───────" — a small uppercase heading with a rule after it.
+export function GroupHeading({ children, style }) {
+  return (
+    <View style={[styles.groupHeading, style]}>
+      <Text style={styles.groupHeadingText}>{children}</Text>
+      <View style={styles.groupHeadingRule} />
+    </View>
+  );
+}
+
 export function OfflineNotice({ children }) {
   return (
     <View style={styles.offline} accessibilityRole="alert">
@@ -163,6 +195,23 @@ const styles = StyleSheet.create({
   },
   toastText: { flex: 1, fontSize: 13, color: Colors.light.background },
   toastUndo: { fontSize: 13, fontWeight: '600', color: '#E9A385' },
+
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 56,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.light.background,
+    zIndex: 8,
+  },
+  barStuck: { borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  barButton: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  barTitle: { flex: 1, fontSize: 17, fontWeight: '600', letterSpacing: -0.2, color: Colors.light.text },
+
+  groupHeading: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18, marginBottom: 10, marginHorizontal: 2 },
+  groupHeadingText: { fontSize: 11, fontWeight: '600', letterSpacing: 1.3, textTransform: 'uppercase', color: Colors.light.icon },
+  groupHeadingRule: { flex: 1, height: 1, backgroundColor: Colors.light.border },
 
   offline: {
     flexDirection: 'row',

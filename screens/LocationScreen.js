@@ -1,165 +1,144 @@
+// screens/LocationScreen.js — Delivery address
+//
+// The saved delivery address and phone, in the approved address/help/stores
+// preview's design: a "use my current location" card that fills the
+// address fields (and tints them Moss so it's clear what changed), the
+// recipient and address fields grouped under small headings, and Save held
+// at the bottom. What it saves, and where, is unchanged: one
+// `shippingAddress` on the user's document, which checkout copies onto each
+// order.
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
-import { showAppAlert } from '../utils/appAlert';
+import { View, Text, StyleSheet, ScrollView, Pressable, KeyboardAvoidingView } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  withRepeat,
   withTiming,
-  withSequence,
   useReducedMotion,
-  Easing,
   FadeIn,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 
 import { auth, db } from '../firebaseConfig';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { showAppAlert } from '../utils/appAlert';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { Colors, Spacing, Radius } from '../constants/theme';
-import Input from '../components/ui/Input';
+import { Colors } from '../constants/theme';
 import Button from '../components/ui/Button';
-import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import { Field, SuccessToast, useShakes } from '../components/auth/AuthKit';
+import Reveal from '../components/shop/Reveal';
+import { TopBar, GroupHeading, OfflineNotice } from '../components/shop/TabScreen';
+import { EASE_OUT_QUINT } from '../constants/motion';
 
-// Shaped like the real form (a button-sized block, then six label+field
-// pairs) so there's no layout jump once the saved address loads — same
-// reasoning as ProfileSkeleton/CheckoutScreen's skeleton card.
-function LocationFormSkeleton() {
+const FIELDS = ['fullName', 'phone', 'address', 'city', 'zipCode', 'province'];
+const SAVED_HOLD_MS = 1100;
+
+// "0917 123 4567", "+639171234567", "9171234567" → "917 123 4567". Anything
+// that isn't a PH mobile number is left as its digits, for the check to flag.
+const phoneDigits = (value) => {
+  let d = String(value || '').replace(/\D/g, '');
+  if (d.startsWith('63')) d = d.slice(2);
+  if (d.startsWith('0')) d = d.slice(1);
+  return d.slice(0, 10);
+};
+const formatPhone = (value) => {
+  const d = phoneDigits(value);
+  return [d.slice(0, 3), d.slice(3, 6), d.slice(6)].filter(Boolean).join(' ');
+};
+
+const RULES = {
+  fullName: (v) => (!v ? "Enter the recipient's full name." : ''),
+  phone: (v) =>
+    !v ? 'Enter a mobile number.' : !/^9\d{9}$/.test(phoneDigits(v)) ? 'Enter a valid PH mobile number, e.g. 917 123 4567.' : '',
+  address: (v) => (!v ? 'Enter your house number, street and barangay.' : ''),
+  city: (v) => (!v ? 'Enter a city or municipality.' : ''),
+  zipCode: (v) => (!v ? 'Enter a ZIP code.' : !/^\d{4}$/.test(v) ? 'ZIP codes in the Philippines have 4 digits.' : ''),
+  province: (v) => (!v ? 'Enter a province.' : ''),
+};
+
+function FormSkeleton() {
   return (
     <View>
-      <SkeletonBlock style={styles.skeletonLocationButton} />
-      {[0, 1, 2, 3, 4, 5].map((i) => (
-        <View key={i} style={styles.skeletonFieldGroup}>
-          <SkeletonBlock style={styles.skeletonLabel} />
-          <SkeletonBlock style={styles.skeletonField} />
+      <SkeletonBlock style={styles.skeletonCard} />
+      {[0, 1, 2, 3, 4].map((i) => (
+        <View key={i} style={{ marginTop: 18 }}>
+          <SkeletonBlock style={{ width: 90, height: 12, borderRadius: 6, marginBottom: 8 }} />
+          <SkeletonBlock style={{ height: 50, borderRadius: 14 }} />
         </View>
       ))}
     </View>
   );
 }
 
-// A thin ring that flashes over the address fields right after a
-// successful "Use Current Location" fill — same visual language as
-// Checkoutscreen.js's ValidationRing, generalized with a color prop so it
-// can flash moss (success) instead of rust (error) here.
-function FieldRing({ opacity, color }) {
-  const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  return (
-    <Animated.View pointerEvents="none" style={[styles.fieldRing, { borderColor: color }, animatedStyle]} />
-  );
+// The Clay tile's ring, pulsing outward while the location is found.
+function Ping({ active }) {
+  const reduceMotion = useReducedMotion();
+  const t = useSharedValue(0);
+  useEffect(() => {
+    if (active && !reduceMotion) {
+      t.value = 0;
+      t.value = withRepeat(withTiming(1, { duration: 1200, easing: EASE_OUT_QUINT }), -1, false);
+    } else {
+      t.value = 0;
+    }
+  }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+  const style = useAnimatedStyle(() => ({
+    opacity: active ? 0.8 * (1 - t.value) : 0,
+    transform: [{ scale: 1 + t.value * 0.6 }],
+  }));
+  return <Animated.View style={[styles.ping, style]} pointerEvents="none" />;
 }
 
-const emptyErrors = {
-  fullName: '',
-  phone: '',
-  address: '',
-  city: '',
-  province: '',
-  zipCode: '',
-};
-
 export default function LocationScreen({ navigation }) {
-  const [formData, setFormData] = useState({
-    fullName: '',
-    phone: '',
-    address: '',
-    city: '',
-    province: '',
-    zipCode: '',
-  });
-  const [errors, setErrors] = useState(emptyErrors);
+  const [formData, setFormData] = useState({ fullName: '', phone: '', address: '', city: '', province: '', zipCode: '' });
+  const [errors, setErrors] = useState({});
+  const [filled, setFilled] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [isLoadingLocation, setIsLoadingLocation] = useState(false);
+  const [saved, setSaved] = useState(false);
+  // idle | busy | ok | fail
+  const [locState, setLocState] = useState('idle');
   const [locationError, setLocationError] = useState('');
+  const [scrolled, setScrolled] = useState(false);
+  const [shakes, shake] = useShakes();
   const { isConnected } = useNetworkStatus();
+  const insets = useSafeAreaInsets();
   const reduceMotion = useReducedMotion();
 
-  const phoneRef = useRef(null);
-  const addressRef = useRef(null);
-  const cityRef = useRef(null);
-  const provinceRef = useRef(null);
-  const zipRef = useRef(null);
-
-  // Shake targets, one per field — same shake shape Login/Signup use for
-  // invalid or missing fields, applied here on a failed Save.
-  const fullNameShakeX = useSharedValue(0);
-  const phoneShakeX = useSharedValue(0);
-  const addressShakeX = useSharedValue(0);
-  const cityShakeX = useSharedValue(0);
-  const provinceShakeX = useSharedValue(0);
-  const zipShakeX = useSharedValue(0);
-  const fullNameShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: fullNameShakeX.value }] }));
-  const phoneShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: phoneShakeX.value }] }));
-  const addressShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: addressShakeX.value }] }));
-  const cityShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: cityShakeX.value }] }));
-  const provinceShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: provinceShakeX.value }] }));
-  const zipShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: zipShakeX.value }] }));
-
-  // Flashes moss around the address group right after a successful
-  // "Use Current Location" fill — confirms detection actually worked
-  // instead of leaving the field values to change silently.
-  const addressGroupHighlight = useSharedValue(0);
-
-  const triggerShake = (sharedValue) => {
-    if (reduceMotion) return;
-    sharedValue.value = withSequence(
-      withTiming(-6, { duration: 45, easing: Easing.linear }),
-      withTiming(6, { duration: 45, easing: Easing.linear }),
-      withTiming(-4, { duration: 45, easing: Easing.linear }),
-      withTiming(4, { duration: 45, easing: Easing.linear }),
-      withTiming(0, { duration: 45, easing: Easing.linear })
-    );
+  const refs = {
+    fullName: useRef(null),
+    phone: useRef(null),
+    address: useRef(null),
+    city: useRef(null),
+    zipCode: useRef(null),
+    province: useRef(null),
   };
-
-  const flashHighlight = (sharedValue) => {
-    if (reduceMotion) {
-      sharedValue.value = 1;
-      setTimeout(() => {
-        sharedValue.value = 0;
-      }, 900);
-      return;
-    }
-    sharedValue.value = withSequence(
-      withTiming(1, { duration: 150, easing: EASE_OUT_QUART }),
-      withTiming(0, { duration: 700, easing: EASE_OUT_QUART })
-    );
-  };
+  const savedTimer = useRef(null);
+  useEffect(() => () => clearTimeout(savedTimer.current), []);
 
   useEffect(() => {
     if (!auth.currentUser) {
-      // Delivery address is account-tied data, same as Cart/Favorites/Orders —
-      // a guest has nowhere to save it, so send them to Login first.
+      // Account-tied data, like Cart and Orders: a guest has nowhere to
+      // save it, so send them to Login first.
       navigation.replace('Login');
       return;
     }
-
-    const loadAddress = async () => {
+    (async () => {
       try {
-        const userDocRef = doc(db, 'users', auth.currentUser.uid);
-        const userDocSnap = await getDoc(userDocRef);
-        const savedAddress = userDocSnap.exists() ? userDocSnap.data().shippingAddress : null;
-        if (savedAddress) {
+        const snap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+        const a = snap.exists() ? snap.data().shippingAddress : null;
+        if (a) {
           setFormData({
-            fullName: savedAddress.fullName || '',
-            phone: savedAddress.phone || '',
-            address: savedAddress.address || '',
-            city: savedAddress.city || '',
-            province: savedAddress.province || '',
-            zipCode: savedAddress.zipCode || '',
+            fullName: a.fullName || '',
+            phone: a.phone ? formatPhone(a.phone) : '',
+            address: a.address || '',
+            city: a.city || '',
+            province: a.province || '',
+            zipCode: a.zipCode || '',
           });
         }
       } catch (error) {
@@ -167,465 +146,386 @@ export default function LocationScreen({ navigation }) {
       } finally {
         setLoading(false);
       }
-    };
-
-    loadAddress();
-  }, []);
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateField = (field, text) => {
-    setFormData((prev) => ({ ...prev, [field]: text }));
-    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: '' }));
+    const value = field === 'phone' ? formatPhone(text) : field === 'zipCode' ? text.replace(/\D/g, '').slice(0, 4) : text;
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    if (filled[field]) setFilled((prev) => ({ ...prev, [field]: false }));
+    if (errors[field]) setErrors((prev) => ({ ...prev, [field]: RULES[field](value.trim()) }));
   };
 
-  const useCurrentLocation = async () => {
+  // Checks a field when you leave it, once it has something in it.
+  const blurCheck = (field) => () => {
+    const value = formData[field].trim();
+    if (value) setErrors((prev) => ({ ...prev, [field]: RULES[field](value) }));
+  };
+
+  const handleUseLocation = async () => {
+    if (locState === 'busy') return;
     Haptics.selectionAsync();
     setLocationError('');
-    setIsLoadingLocation(true);
+    setLocState('busy');
+    const fail = (message) => {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      setLocationError(message);
+      setLocState('fail');
+    };
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        setLocationError('Allow location access for this app in your device settings to use this feature.');
-        setIsLoadingLocation(false);
+        fail('Allow location access for this app in your device settings to use this feature.');
         return;
       }
-
-      // requestForegroundPermissionsAsync only covers the app-level
-      // permission — the device's system-wide Location Services (GPS) toggle
-      // is separate and can still be off even after the user grants that
-      // permission. Checking it explicitly lets us say so directly instead
-      // of always blaming a failed GPS fix on the same generic message.
-      const servicesEnabled = await Location.hasServicesEnabledAsync();
-      if (!servicesEnabled) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        setLocationError(
-          'Location Services are turned off for this device. Turn them on in Settings (not just this app\'s permission), then try again.'
-        );
-        setIsLoadingLocation(false);
+      // The app permission and the device's Location Services switch are
+      // separate; checking the switch lets us say which one is off.
+      if (!(await Location.hasServicesEnabledAsync())) {
+        fail("Location Services are turned off for this device. Turn them on in Settings (not just this app's permission), then try again.");
         return;
       }
-
       let location;
       try {
-        location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
+        location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       } catch (fixError) {
-        // getCurrentPositionAsync can still fail here if it can't get a
-        // fresh GPS fix (weak signal, indoors, simulator with no location
-        // set). Try a cached last-known position before giving up
-        // entirely — it's stale but often close enough to be usable.
-        console.log('getCurrentPositionAsync failed, trying last known position:', fixError);
+        // No fresh fix (indoors, weak signal): a cached one is often close enough.
         location = await Location.getLastKnownPositionAsync();
-        if (!location) {
-          throw fixError;
-        }
+        if (!location) throw fixError;
       }
-
-      const reverseGeocode = await Location.reverseGeocodeAsync({
+      const places = await Location.reverseGeocodeAsync({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude,
       });
-
-      if (reverseGeocode.length > 0) {
-        const place = reverseGeocode[0];
-        setFormData((prev) => ({
-          ...prev,
-          address: `${place.street || ''} ${place.name || ''}`.trim(),
-          city: place.city || prev.city,
-          province: place.region || prev.province,
-          zipCode: place.postalCode || prev.zipCode,
-        }));
-        setErrors((prev) => ({ ...prev, address: '', city: '', province: '', zipCode: '' }));
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        flashHighlight(addressGroupHighlight);
-      } else {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        setLocationError('Could not determine an address for your current location. You can fill in the fields below manually.');
+      if (!places.length) {
+        fail('Could not determine an address for your current location. You can fill in the fields below manually.');
+        return;
       }
+      const place = places[0];
+      const next = {
+        address: `${place.street || ''} ${place.name || ''}`.trim(),
+        city: place.city || '',
+        province: place.region || '',
+        zipCode: (place.postalCode || '').replace(/\D/g, '').slice(0, 4),
+      };
+      const changed = Object.fromEntries(Object.entries(next).filter(([, v]) => v));
+      setFormData((prev) => ({ ...prev, ...changed }));
+      setFilled(Object.fromEntries(Object.keys(changed).map((k) => [k, true])));
+      setErrors((prev) => ({ ...prev, ...Object.fromEntries(Object.keys(changed).map((k) => [k, ''])) }));
+      setLocState('ok');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       console.error('Error getting location:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       setLocationError(
         "Couldn't detect your location. Make sure Location Services are turned on for this device in Settings, then try again — or fill in the address fields below manually."
       );
-    } finally {
-      setIsLoadingLocation(false);
+      setLocState('fail');
     }
-  };
-
-  // Client-side check before ever touching the network — every error
-  // renders right under its field instead of a chain of alerts, matching
-  // Loginscreen.js/Signupscreen.js's validate().
-  const validate = (trimmed) => {
-    const nextErrors = { ...emptyErrors };
-
-    if (!trimmed.fullName) nextErrors.fullName = "Enter the recipient's full name.";
-    if (!trimmed.phone) nextErrors.phone = 'Enter a phone number.';
-    if (!trimmed.address) nextErrors.address = 'Enter a street address.';
-    if (!trimmed.city) nextErrors.city = 'Enter a city.';
-    if (!trimmed.province) nextErrors.province = 'Enter a province or region.';
-    if (!trimmed.zipCode) nextErrors.zipCode = 'Enter a zip code.';
-
-    setErrors(nextErrors);
-
-    const hasErrors = Object.values(nextErrors).some(Boolean);
-    if (hasErrors) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      if (nextErrors.fullName) triggerShake(fullNameShakeX);
-      if (nextErrors.phone) triggerShake(phoneShakeX);
-      if (nextErrors.address) triggerShake(addressShakeX);
-      if (nextErrors.city) triggerShake(cityShakeX);
-      if (nextErrors.province) triggerShake(provinceShakeX);
-      if (nextErrors.zipCode) triggerShake(zipShakeX);
-    }
-    return !hasErrors;
   };
 
   const handleSave = async () => {
-    const trimmed = {
-      fullName: formData.fullName.trim(),
-      phone: formData.phone.trim(),
-      address: formData.address.trim(),
-      city: formData.city.trim(),
-      province: formData.province.trim(),
-      zipCode: formData.zipCode.trim(),
-    };
-
-    if (!validate(trimmed)) return;
+    if (saving || saved) return;
+    const trimmed = Object.fromEntries(FIELDS.map((f) => [f, formData[f].trim()]));
+    const nextErrors = Object.fromEntries(FIELDS.map((f) => [f, RULES[f](trimmed[f])]));
+    setErrors(nextErrors);
+    const bad = FIELDS.filter((f) => nextErrors[f]);
+    if (bad.length) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      bad.forEach(shake);
+      refs[bad[0]].current?.focus();
+      return;
+    }
+    if (!isConnected) return;
 
     setSaving(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      const userDocRef = doc(db, 'users', auth.currentUser.uid);
-      await updateDoc(userDocRef, {
+      await updateDoc(doc(db, 'users', auth.currentUser.uid), {
         shippingAddress: {
           ...trimmed,
+          phone: `+63 ${formatPhone(trimmed.phone)}`,
           updatedAt: serverTimestamp(),
         },
       });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert('Saved', 'Your delivery address has been saved.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
-      ]);
+      setSaved(true);
+      savedTimer.current = setTimeout(() => navigation.goBack(), SAVED_HOLD_MS);
     } catch (error) {
       console.error('Error saving address:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-
-      // Same check CheckoutScreen.js's handlePlaceOrder uses: our own
-      // NetInfo state, OR'd with Firestore's own 'unavailable' code in case
-      // connectivity dropped mid-write faster than the NetInfo event fired.
+      // Our own connection state, or Firestore's 'unavailable' if the
+      // connection dropped mid-write before NetInfo noticed.
       const isNetworkError = !isConnected || error.code === 'unavailable';
-      if (isNetworkError) {
-        showAppAlert(
-          'No Internet Connection',
-          'Network connection lost. Please check your connection and try again.'
-        );
-        return;
-      }
-
-      showAppAlert('Error', 'Could not save your address. Please try again.');
+      showAppAlert(
+        isNetworkError ? 'No Internet Connection' : 'Error',
+        isNetworkError
+          ? 'Network connection lost. Please check your connection and try again.'
+          : 'Could not save your address. Please try again.'
+      );
     } finally {
       setSaving(false);
     }
   };
 
+  const field = (name, props) => (
+    <Field
+      inputRef={refs[name]}
+      value={formData[name]}
+      onChangeText={(t) => updateField(name, t)}
+      onBlur={blurCheck(name)}
+      status={errors[name] ? 'bad' : null}
+      message={errors[name] || ''}
+      shakeKey={shakes[name]}
+      highlight={filled[name]}
+      {...props}
+    />
+  );
+
+  const locTitle = {
+    idle: 'Use my current location',
+    busy: 'Finding your location…',
+    ok: 'Location found',
+    fail: 'Location unavailable',
+  }[locState];
+  const locSub = {
+    idle: 'Fills in the fields below. You can still edit them.',
+    busy: 'This takes a few seconds.',
+    ok: 'Tap to refresh',
+    fail: 'Tap to try again',
+  }[locState];
+
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <AnimatedPressable
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </AnimatedPressable>
-        <Text style={styles.headerTitle}>Delivery Address</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — saving will be unavailable until you&apos;re back online.
-          </Text>
-        </View>
-      )}
-
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <TopBar title="Delivery address" onBack={() => navigation.goBack()} stuck={scrolled} />
+      <KeyboardAvoidingView behavior="padding" style={styles.flex}>
         <ScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.content}
+          onScroll={(e) => {
+            const past = e.nativeEvent.contentOffset.y > 4;
+            if (past !== scrolled) setScrolled(past);
+          }}
+          scrollEventThrottle={32}
         >
+          <Reveal delay={40}>
+            <Text style={styles.big} accessibilityRole="header">
+              Where should we deliver?
+            </Text>
+            <Text style={styles.lead}>This address is used at checkout and copied onto each order you place.</Text>
+          </Reveal>
+
+          {!isConnected ? (
+            <View style={styles.offlineWrap}>
+              <OfflineNotice>No internet connection — saving will be unavailable until you&apos;re back online.</OfflineNotice>
+            </View>
+          ) : null}
+
           {loading ? (
-            <LocationFormSkeleton />
+            <FormSkeleton />
           ) : (
-            <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(240).easing(EASE_OUT_QUART)}>
-              <AnimatedPressable
-                style={[styles.useLocationButton, isLoadingLocation && styles.useLocationButtonDisabled]}
-                onPress={useCurrentLocation}
-                disabled={isLoadingLocation}
-                accessibilityRole="button"
-                accessibilityLabel="Use current location"
-                accessibilityHint="Fills in the address fields below using your device's location"
-                accessibilityState={{ disabled: isLoadingLocation }}
-              >
-                {isLoadingLocation ? (
-                  <ActivityIndicator size="small" color={Colors.light.tint} />
-                ) : (
-                  <Ionicons name="locate-outline" size={20} color={Colors.light.tint} />
-                )}
-                <Text style={styles.useLocationButtonText}>
-                  {isLoadingLocation ? 'Detecting location...' : 'Use Current Location'}
-                </Text>
-              </AnimatedPressable>
-              {locationError ? (
-                <Animated.View
-                  style={styles.locationErrorBanner}
-                  entering={reduceMotion ? undefined : FadeIn.duration(180).easing(EASE_OUT_QUART)}
+            <>
+              <Reveal delay={110}>
+                <Pressable
+                  onPress={handleUseLocation}
+                  style={({ pressed }) => [
+                    styles.loc,
+                    locState === 'ok' && styles.locOk,
+                    locState === 'fail' && styles.locFail,
+                    pressed && { transform: [{ scale: 0.98 }] },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={locTitle}
+                  accessibilityHint="Fills in the address fields below using your device's location"
+                  accessibilityState={{ busy: locState === 'busy' }}
                 >
-                  <Ionicons name="alert-circle-outline" size={16} color={Colors.light.danger} />
-                  <Text style={styles.locationErrorText}>{locationError}</Text>
-                </Animated.View>
-              ) : (
-                <Text style={styles.locationHint}>
-                  We&apos;ll only use this to prefill the fields below.
-                </Text>
-              )}
+                  <View
+                    style={[
+                      styles.locIcon,
+                      locState === 'ok' && { backgroundColor: Colors.light.secondary },
+                      locState === 'fail' && { backgroundColor: DANGER_INK },
+                    ]}
+                  >
+                    <Ping active={locState === 'busy'} />
+                    <Ionicons name="locate-outline" size={22} color="#fff" />
+                  </View>
+                  <View style={styles.flex}>
+                    <Text style={styles.locTitle}>{locTitle}</Text>
+                    <Text style={styles.locSub}>{locSub}</Text>
+                  </View>
+                </Pressable>
+                {locState === 'ok' ? (
+                  <Animated.View style={[styles.note, styles.noteOk]} entering={reduceMotion ? undefined : FadeIn.duration(350)}>
+                    <Ionicons name="information-circle-outline" size={16} color="#37412F" />
+                    <Text style={[styles.noteText, { color: '#37412F' }]}>
+                      Filled from your location. Please check the details, especially your house number and street.
+                    </Text>
+                  </Animated.View>
+                ) : null}
+                {locState === 'fail' && locationError ? (
+                  <Animated.View style={[styles.note, styles.noteErr]} entering={reduceMotion ? undefined : FadeIn.duration(350)}>
+                    <Ionicons name="alert-circle-outline" size={16} color="#7A1B12" />
+                    <Text style={[styles.noteText, { color: '#7A1B12' }]}>{locationError}</Text>
+                  </Animated.View>
+                ) : null}
+              </Reveal>
 
-              <Text style={styles.sectionTitle}>Recipient</Text>
-              <Animated.View style={fullNameShakeStyle}>
-                <Input
-                  label="Full Name"
-                  placeholder="Recipient's full name"
-                  value={formData.fullName}
-                  onChangeText={(text) => updateField('fullName', text)}
-                  error={errors.fullName}
-                  returnKeyType="next"
-                  onSubmitEditing={() => phoneRef.current?.focus()}
-                  accessibilityLabel="Full name"
-                  accessibilityHint="Enter the recipient's full name"
-                />
-              </Animated.View>
+              <Reveal delay={170}>
+                <GroupHeading>Recipient</GroupHeading>
+              </Reveal>
+              <Reveal delay={200}>
+                {field('fullName', {
+                  label: 'Full name',
+                  placeholder: 'Who will receive the order?',
+                  autoComplete: 'name',
+                  textContentType: 'name',
+                  returnKeyType: 'next',
+                  submitBehavior: 'submit',
+                  onSubmitEditing: () => refs.phone.current?.focus(),
+                })}
+              </Reveal>
+              <Reveal delay={240}>
+                {field('phone', {
+                  label: 'Mobile number',
+                  prefix: '+63',
+                  placeholder: '917 123 4567',
+                  keyboardType: 'number-pad',
+                  autoComplete: 'tel',
+                  textContentType: 'telephoneNumber',
+                  maxLength: 12,
+                  returnKeyType: 'next',
+                  submitBehavior: 'submit',
+                  onSubmitEditing: () => refs.address.current?.focus(),
+                })}
+              </Reveal>
 
-              <Animated.View style={phoneShakeStyle}>
-                <Input
-                  ref={phoneRef}
-                  label="Phone Number"
-                  placeholder="+63 XXX XXX XXXX"
-                  value={formData.phone}
-                  onChangeText={(text) => updateField('phone', text)}
-                  keyboardType="phone-pad"
-                  error={errors.phone}
-                  returnKeyType="next"
-                  onSubmitEditing={() => addressRef.current?.focus()}
-                  accessibilityLabel="Phone number"
-                  accessibilityHint="Enter a contact number for the delivery"
-                />
-              </Animated.View>
-
-              <Text style={styles.sectionTitle}>Address</Text>
-              <View style={styles.fieldGroupWrap}>
-                <Animated.View style={addressShakeStyle}>
-                  <Input
-                    ref={addressRef}
-                    label="Street Address"
-                    placeholder="House number, street, barangay"
-                    value={formData.address}
-                    onChangeText={(text) => updateField('address', text)}
-                    multiline
-                    error={errors.address}
-                    accessibilityLabel="Street address"
-                    accessibilityHint="Enter the house number, street, and barangay"
-                  />
-                </Animated.View>
-
-                <Animated.View style={cityShakeStyle}>
-                  <Input
-                    ref={cityRef}
-                    label="City"
-                    placeholder="Enter city"
-                    value={formData.city}
-                    onChangeText={(text) => updateField('city', text)}
-                    error={errors.city}
-                    returnKeyType="next"
-                    onSubmitEditing={() => provinceRef.current?.focus()}
-                    accessibilityLabel="City"
-                  />
-                </Animated.View>
-
-                <Animated.View style={provinceShakeStyle}>
-                  <Input
-                    ref={provinceRef}
-                    label="Province/Region"
-                    placeholder="Enter province or region"
-                    value={formData.province}
-                    onChangeText={(text) => updateField('province', text)}
-                    error={errors.province}
-                    returnKeyType="next"
-                    onSubmitEditing={() => zipRef.current?.focus()}
-                    accessibilityLabel="Province or region"
-                  />
-                </Animated.View>
-
-                <Animated.View style={zipShakeStyle}>
-                  <Input
-                    ref={zipRef}
-                    label="Zip Code"
-                    placeholder="Enter zip code"
-                    value={formData.zipCode}
-                    onChangeText={(text) => updateField('zipCode', text)}
-                    keyboardType="numeric"
-                    error={errors.zipCode}
-                    returnKeyType="done"
-                    onSubmitEditing={handleSave}
-                    accessibilityLabel="Zip code"
-                  />
-                </Animated.View>
-
-                <FieldRing opacity={addressGroupHighlight} color={Colors.light.secondary} />
-              </View>
-
-              <View style={styles.saveButtonWrap}>
-                <Button
-                  variant="primary"
-                  label={!isConnected ? 'No Internet Connection' : 'Save Address'}
-                  onPress={handleSave}
-                  disabled={saving || !isConnected}
-                  loading={saving}
-                />
-              </View>
-              <View style={styles.trustRow}>
-                <Ionicons name="shield-checkmark-outline" size={13} color={Colors.light.icon} />
-                <Text style={styles.trustText}>Your address is only used for delivery</Text>
-              </View>
-            </Animated.View>
+              <Reveal delay={290}>
+                <GroupHeading>Address</GroupHeading>
+              </Reveal>
+              <Reveal delay={320}>
+                {field('address', {
+                  label: 'House no., street & barangay',
+                  placeholder: 'e.g. 12 Rizal St., Brgy. Poblacion',
+                  autoComplete: 'street-address',
+                  textContentType: 'fullStreetAddress',
+                  returnKeyType: 'next',
+                  submitBehavior: 'submit',
+                  onSubmitEditing: () => refs.city.current?.focus(),
+                })}
+              </Reveal>
+              <Reveal delay={360} style={styles.two}>
+                {field('city', {
+                  label: 'City / Municipality',
+                  placeholder: 'Toledo City',
+                  textContentType: 'addressCity',
+                  returnKeyType: 'next',
+                  submitBehavior: 'submit',
+                  onSubmitEditing: () => refs.zipCode.current?.focus(),
+                  style: { flex: 1.4 },
+                })}
+                {field('zipCode', {
+                  label: 'ZIP code',
+                  placeholder: '6038',
+                  keyboardType: 'number-pad',
+                  textContentType: 'postalCode',
+                  maxLength: 4,
+                  returnKeyType: 'next',
+                  submitBehavior: 'submit',
+                  onSubmitEditing: () => refs.province.current?.focus(),
+                  style: { flex: 1 },
+                })}
+              </Reveal>
+              <Reveal delay={400}>
+                {field('province', {
+                  label: 'Province',
+                  placeholder: 'Cebu',
+                  textContentType: 'addressState',
+                  returnKeyType: 'done',
+                  onSubmitEditing: handleSave,
+                })}
+              </Reveal>
+            </>
           )}
         </ScrollView>
+
+        <View style={[styles.foot, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]}>
+          <Button
+            variant={saved ? 'success' : 'primary'}
+            label={saved ? 'Address saved' : !isConnected ? 'No Internet Connection' : 'Save address'}
+            fontSize={16}
+            onPress={handleSave}
+            disabled={!saved && (saving || loading || !isConnected)}
+            loading={saving}
+          />
+          <View style={styles.trust}>
+            <Ionicons name="shield-checkmark-outline" size={13} color={Colors.light.icon} />
+            <Text style={styles.trustText}>Your address is only used for delivery.</Text>
+          </View>
+        </View>
       </KeyboardAvoidingView>
+      <SuccessToast text={saved ? 'Address saved. It will be used at checkout.' : ''} />
     </SafeAreaView>
   );
 }
+const DANGER_INK = '#B42318';
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: {
+  flex: { flex: 1 },
+  content: { paddingHorizontal: 20, paddingBottom: 24 },
+  big: { fontSize: 26, fontWeight: '600', letterSpacing: -0.5, color: Colors.light.text, marginTop: 4, marginBottom: 4 },
+  lead: { fontSize: 13.5, lineHeight: 20, color: Colors.light.icon, marginBottom: 18 },
+  offlineWrap: { marginHorizontal: -20 },
+
+  loc: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
+    gap: 12,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#D9B3A3',
+    backgroundColor: '#FBF1EC',
   },
-  backButton: { width: 40, height: 40, justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
-
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
-  },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-
-  content: { padding: 20, paddingBottom: 40 },
-
-  useLocationButton: {
-    flexDirection: 'row',
+  locOk: { borderStyle: 'solid', borderColor: '#C9D3BE', backgroundColor: '#F1F4EC' },
+  locFail: { borderStyle: 'solid', borderColor: '#F1CFCB', backgroundColor: '#FBEDEB' },
+  locIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: Colors.light.tint,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.light.tint,
-    backgroundColor: Colors.light.tint + '15',
   },
-  useLocationButtonDisabled: { opacity: 0.7 },
-  useLocationButtonText: {
-    fontSize: 14,
-    color: Colors.light.tint,
-    fontWeight: '600',
-  },
-  locationHint: {
-    fontSize: 12,
-    color: Colors.light.icon,
-    textAlign: 'center',
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.lg,
-  },
-  // Same treatment as the offline banner up in the header (danger tint +
-  // border, themed danger text) so this reads as one visual language
-  // instead of the OS's own un-themeable Alert.alert chrome.
-  locationErrorBanner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    backgroundColor: Colors.light.danger + '15',
-    borderWidth: 1,
-    borderColor: Colors.light.danger + '40',
-    borderRadius: Radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.lg,
-  },
-  locationErrorText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.light.danger,
-    lineHeight: 17,
-  },
-
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.light.text,
-    marginBottom: 12,
-    marginTop: 4,
-  },
-
-  // Position-relative wrap so the moss FieldRing can sit above the whole
-  // address block after a successful "Use Current Location" fill, the same
-  // shape Checkoutscreen.js uses for its own validation ring.
-  fieldGroupWrap: { position: 'relative' },
-  fieldRing: {
+  ping: {
     position: 'absolute',
-    top: -6,
-    left: -6,
-    right: -6,
-    bottom: -6,
-    borderRadius: Radius.md + 6,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 14,
     borderWidth: 2,
+    borderColor: Colors.light.tint,
   },
+  locTitle: { fontSize: 14.5, fontWeight: '600', color: Colors.light.text },
+  locSub: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
+  note: { flexDirection: 'row', gap: 8, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 12, marginTop: 10 },
+  noteOk: { backgroundColor: '#EEF0EA' },
+  noteErr: { backgroundColor: '#FBEDEB' },
+  noteText: { flex: 1, fontSize: 12, lineHeight: 17.5 },
 
-  saveButtonWrap: { marginTop: 8 },
-  trustRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 14,
+  two: { flexDirection: 'row', gap: 10 },
+
+  foot: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    backgroundColor: Colors.light.background,
+    borderTopWidth: 1,
+    borderTopColor: '#F1EBE3',
   },
-  trustText: { fontSize: 12, color: Colors.light.icon },
+  trust: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10 },
+  trustText: { fontSize: 11.5, color: Colors.light.icon },
 
-  // Loading skeleton — shaped like the real form (button block, then six
-  // label+field pairs) so nothing jumps once the saved address arrives.
-  skeletonLocationButton: { height: 48, borderRadius: Radius.md, marginBottom: Spacing.lg + Spacing.sm },
-  skeletonFieldGroup: { marginBottom: Spacing.md },
-  skeletonLabel: { width: 90, height: 12, borderRadius: 4, marginBottom: Spacing.xs + 2 },
-  skeletonField: { height: 46, borderRadius: Radius.md },
+  skeletonCard: { height: 74, borderRadius: 18 },
 });
