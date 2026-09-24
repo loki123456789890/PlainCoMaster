@@ -1749,6 +1749,50 @@ await test('PROFILE-3  a review may carry the author\'s photo', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// PayMongo checkouts and the gateway switch. Both are written only by
+// functions/index.js; these pin that no client can write either, and that
+// a checkout is readable by its own customer alone.
+
+async function seedCheckout() {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const admin = ctx.firestore();
+    await setDoc(doc(admin, 'checkouts/co1'), {
+      customerId: 'customer1', status: 'pending', total: 850, gateway: 'paymongo',
+    });
+    await setDoc(doc(admin, 'config/payments'), { gateway: 'paymongo' });
+  });
+}
+
+await test('PAY-1  a customer reads their own checkout, and nobody else can', async () => {
+  await seedCheckout();
+  await assertSucceeds(getDoc(doc(asCustomer(), 'checkouts/co1')));
+  await assertFails(getDoc(doc(asOtherCustomer(), 'checkouts/co1')));
+  await assertFails(getDoc(doc(asSeller(), 'checkouts/co1')));
+  await assertFails(getDoc(doc(asGuest(), 'checkouts/co1')));
+  // Get only: there is no screen that lists checkouts.
+  await assertFails(getDocs(query(collection(asCustomer(), 'checkouts'), where('customerId', '==', 'customer1'))));
+});
+
+await test('PAY-2  no client can mark a checkout paid, release it, or create one', async () => {
+  await seedCheckout();
+  await assertFails(updateDoc(doc(asCustomer(), 'checkouts/co1'), { status: 'paid' }));
+  await assertFails(updateDoc(doc(asCustomer(), 'checkouts/co1'), { status: 'released' }));
+  await assertFails(deleteDoc(doc(asCustomer(), 'checkouts/co1')));
+  await assertFails(setDoc(doc(asCustomer(), 'checkouts/co2'), { customerId: 'customer1', status: 'paid' }));
+  await assertFails(updateDoc(doc(asSeller(), 'checkouts/co1'), { status: 'paid' }));
+});
+
+await test('PAY-3  anyone signed in reads the gateway setting; nobody writes it', async () => {
+  await seedCheckout();
+  await assertSucceeds(getDoc(doc(asCustomer(), 'config/payments')));
+  await assertFails(getDoc(doc(asGuest(), 'config/payments')));
+  // Flipping it to 'sandbox' would let a customer pay with a pretend bank.
+  await assertFails(setDoc(doc(asCustomer(), 'config/payments'), { gateway: 'sandbox' }));
+  await assertFails(setDoc(doc(asAdmin(), 'config/payments'), { gateway: 'sandbox' }));
+  await assertFails(setDoc(doc(asSeller(), 'config/payments'), { gateway: 'sandbox' }));
+});
+
+// ---------------------------------------------------------------------------
 await testEnv.cleanup();
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);

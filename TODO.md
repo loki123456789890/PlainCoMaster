@@ -381,14 +381,70 @@ deployment:
       rewritten to say "sandbox", because a payment step that genuinely
       runs is the first place this app could overstate itself.
 
-- [ ] **Swap in a real gateway when there is a reason to.** PayMongo test
-      mode is free and covers GCash/Maya/Card. The order fields, the
-      status vocabulary and the "server decides" boundary are already
-      shaped for it; what is NOT built is the redirect return flow — a
-      deep link back into the app, and the customer who closes the
-      browser mid-payment. `paymentStatus: 'failed'` exists unused for
-      exactly that day, when a webhook arrives after the order is
-      written.
+- [x] **Swap in a real gateway.** PayMongo hosted checkout (GCash, Maya,
+      Card), built 2026-09-24 and switched by one document:
+      `config/payments.gateway` is `'sandbox'` (or missing) or
+      `'paymongo'`. Server and app both read it; only the console writes
+      it. The emulator has no such document, so it keeps the sandbox.
+
+      HOW IT WORKS. With PayMongo on, `placeOrder` prices the cart,
+      HOLDS the stock and writes `checkouts/{checkoutId}`, but NOT
+      orders; then it opens a PayMongo session and returns its URL.
+      `OnlinePaymentScreen` opens that page in an auth-session browser
+      (`expo-web-browser`). The orders are written only when the money
+      is confirmed: by `paymongoWebhook` (`checkout_session.payment.paid`,
+      signature checked against the raw body), or by `resolveCheckout`
+      asking PayMongo directly. Whichever comes first writes, and the
+      rest see `status: 'paid'` and do nothing. Backing out calls
+      `resolveCheckout` with `abandon`, which checks for a payment,
+      expires the session, then gives the stock back.
+      `expireUnpaidCheckouts` does the same every 5 minutes for holds
+      older than 30 minutes.
+
+      WHY ORDERS ARE NOT WRITTEN AS "UNPAID" FIRST. Every order consumer
+      (the confirmation email trigger, the manager's list, the status
+      rules, reviews) assumes an order is something to pack. Writing it
+      only once paid means none of them needed a guard. It also means
+      `paymentStatus: 'failed'` is still never written.
+
+      Tests: checkout 22 → 39 (PAY-1…17, with a fake PayMongo, so no
+      account is needed), rules 130 → 133.
+
+- [ ] **Go live with PayMongo.** In this order:
+      1. PayMongo dashboard → Developers: copy the test secret key.
+         `firebase functions:secrets:set PAYMONGO_SECRET_KEY`.
+      2. `firebase functions:secrets:set PAYMONGO_WEBHOOK_SECRET` with a
+         placeholder for now. `placeOrder`, `resolveCheckout`,
+         `expireUnpaidCheckouts` and `paymongoWebhook` bind these
+         secrets, so **`firebase deploy --only functions` refuses until
+         both exist.**
+      3. `npm run indexes:deploy` (new `checkouts` status + expiresAt
+         index; the scheduler's query fails without it), then
+         `npm run rules:deploy`, then deploy functions.
+      4. PayMongo → Webhooks: add
+         `https://asia-southeast1-plainco-c3edc.cloudfunctions.net/paymongoWebhook`
+         for `checkout_session.payment.paid`. Put the whsk_… secret it
+         shows into `PAYMONGO_WEBHOOK_SECRET` and redeploy the functions.
+      5. Ship an app build that has `expo-web-browser` (a new native
+         module: Expo Go has it, a dev or store build must be rebuilt).
+      6. Firestore console: create `config/payments` = `{ gateway: 'paymongo' }`.
+         Nothing a customer sees changes until this step, and setting it
+         back to `'sandbox'` undoes it.
+      7. Pay once with each of GCash, Maya and a test card, and back out
+         once. Check the webhook deliveries in PayMongo's dashboard.
+- [ ] **Not yet built for PayMongo:** refunds. A checkout marked
+      `needsReview: 'refund-owed'` (paid after its hold was released) or
+      `'amount-mismatch'` is only logged and flagged, so someone has to
+      refund it from the PayMongo dashboard. There is no admin screen
+      listing these yet.
+- [ ] **HelpScreen's FAQ still says "sandbox"** for the online methods.
+      That is correct until step 6 above; rewrite the two answers when
+      production switches. (Checkout's note under the methods already
+      follows the setting.)
+- [ ] **Not driven in the running app yet.** The server paths are
+      covered by tests, and the Android bundle compiles, but
+      OnlinePaymentScreen has not been opened against a real PayMongo
+      test session. Do that during step 7.
 
 ### Two bugs the sandbox flow only showed when the app was actually run ✅
 

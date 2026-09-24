@@ -26,7 +26,8 @@ import { db, auth, functions } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { PAYMENT_METHODS, PAYMENT_LOOK, isPayOnDelivery, requiresOnlinePayment, getPaymentLabel } from '../constants/payment';
+import { PAYMENT_METHODS, PAYMENT_LOOK, isPayOnDelivery, requiresOnlinePayment, getPaymentLabel, readGateway } from '../constants/payment';
+import { paymentReturnUrl } from '../utils/paymentReturn';
 import { Colors } from '../constants/theme';
 import SkeletonBlock from '../components/ui/Skeleton';
 import { TopBar, OfflineNotice } from '../components/shop/TabScreen';
@@ -81,6 +82,30 @@ const PAYMENT_PROBLEMS = {
     bg: '#F6EFE3',
     title: (method) => `We didn't hear back from ${method}`,
     text: () => "The payment gateway didn't respond in time, so we stopped waiting instead of leaving you stuck.",
+  },
+  // PayMongo's answers — see OnlinePaymentScreen and placeOrder. Each is
+  // true to "no money was taken": the server checks PayMongo for a payment
+  // before it releases anything.
+  cancelled: {
+    icon: 'arrow-undo-outline',
+    color: Colors.light.icon,
+    bg: '#F1ECE4',
+    title: () => 'Payment not completed',
+    text: (method) => `You left the ${method} page before paying.`,
+  },
+  expired: {
+    icon: 'time-outline',
+    color: '#8C6D0C',
+    bg: '#F6EFE3',
+    title: () => 'Payment timed out',
+    text: () => 'We held your items for 30 minutes, then put them back on sale. They may still be available.',
+  },
+  unavailable: {
+    icon: 'cloud-offline-outline',
+    color: '#8C6D0C',
+    bg: '#F6EFE3',
+    title: () => "We couldn't reach PayMongo",
+    text: () => 'The payment page could not be opened just now. Try again in a moment, or choose Cash on Delivery.',
   },
 };
 
@@ -161,6 +186,26 @@ export default function CheckoutScreen({ navigation, route }) {
   // a sheet with the next steps that fit that answer.
   const [paymentProblem, setPaymentProblem] = useState(null);
   const paymentY = useRef(0);
+  // Which gateway the online methods go through: 'sandbox' opens the
+  // simulated SandboxPayment screen, 'paymongo' the real hosted page. Read
+  // from config/payments, which placeOrder also reads, so the two agree;
+  // if they ever don't, placeOrder answers 'gateway-changed' and this
+  // re-reads it.
+  const [gateway, setGateway] = useState('sandbox');
+  const loadGateway = useCallback(async () => {
+    try {
+      const snap = await getDoc(doc(db, 'config', 'payments'));
+      const next = readGateway(snap.exists() ? snap.data() : null);
+      setGateway(next);
+      return next;
+    } catch (error) {
+      console.warn('Could not read the payment setting:', error);
+      return null;
+    }
+  }, []);
+  useEffect(() => {
+    loadGateway();
+  }, [loadGateway]);
   // Opened from the cart (lines carry a cart productId) or from a
   // product's Buy Now (a raw product with no productId).
   const fromCart = orderItems.length > 0 && orderItems.every((item) => item.productId);
@@ -327,6 +372,13 @@ export default function CheckoutScreen({ navigation, route }) {
     // The order is NOT placed here for online methods. SandboxPayment
     // returns its result as a route param, and the effect below picks it
     // up and calls submitOrder. COD skips all of it.
+    // The real gateway: placeOrder holds the stock and opens a PayMongo
+    // session, and OnlinePayment takes the customer there.
+    if (requiresOnlinePayment(selectedPayment) && gateway === 'paymongo') {
+      submitOrder(null, selectedPayment);
+      return;
+    }
+
     if (requiresOnlinePayment(selectedPayment)) {
       // `total` here is the client's own arithmetic, shown for display
       // only — the same number already on the footer. The server prices
@@ -379,6 +431,19 @@ export default function CheckoutScreen({ navigation, route }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.params?.sandboxResult]);
 
+  // Back from OnlinePayment without an order: the customer backed out, or
+  // the hold ran out. Nothing was charged (the server checked with
+  // PayMongo before releasing), the cart is intact, and the sheet offers
+  // the next steps. `at` does the same job as on sandboxResult.
+  useEffect(() => {
+    const result = route.params?.onlineResult;
+    if (!result) return;
+    navigation.setParams({ onlineResult: undefined });
+    setSelectedPayment(result.paymentMethod);
+    setPaymentProblem({ outcome: result.outcome, method: result.paymentMethod });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.params?.onlineResult]);
+
   const submitOrder = async (sandboxOutcome, paymentMethod) => {
     // What the server needs, and deliberately nothing more: which product,
     // how many, and the chosen size/colour. Prices, the subtotal, the total
@@ -416,11 +481,29 @@ export default function CheckoutScreen({ navigation, route }) {
       // null — the function refuses a COD order that carries one, because
       // a client confused about which methods are paid online is a bug
       // worth failing loudly rather than absorbing.
+      // returnUrl only for the real gateway, which needs somewhere to send
+      // the browser afterwards; the server refuses it otherwise.
+      const live = requiresOnlinePayment(paymentMethod) && !sandboxOutcome;
       const { data: placedOrder } = await placeOrder({
         items,
         paymentMethod,
         ...(sandboxOutcome ? { sandboxOutcome } : {}),
+        ...(live ? { returnUrl: paymentReturnUrl() } : {}),
       });
+
+      // No order yet — the stock is held and PayMongo's page is waiting.
+      // Checkout stays underneath, so backing out lands here again.
+      if (placedOrder?.awaitingPayment) {
+        navigation.navigate('OnlinePayment', {
+          checkoutId: placedOrder.checkoutId,
+          checkoutUrl: placedOrder.checkoutUrl,
+          total: placedOrder.total,
+          expiresAt: placedOrder.expiresAt,
+          paymentMethod,
+          orderItems,
+        });
+        return;
+      }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
@@ -470,6 +553,21 @@ export default function CheckoutScreen({ navigation, route }) {
       // for different next steps and the customer knows which they had.
       if (reason === 'payment-declined') {
         setPaymentProblem({ outcome: error.details?.outcome, method: paymentMethod });
+        return;
+      }
+
+      // PayMongo could not open a session. The server has already given
+      // the held stock back.
+      if (reason === 'gateway-unavailable') {
+        setPaymentProblem({ outcome: 'unavailable', method: paymentMethod });
+        return;
+      }
+
+      // The gateway setting changed while checkout was open. Nothing was
+      // written; re-read it so the next tap takes the right path.
+      if (reason === 'gateway-changed') {
+        await loadGateway();
+        showAppAlert('Payments Updated', 'Online payments were just updated. Please tap Place order again.');
         return;
       }
 
@@ -561,6 +659,8 @@ export default function CheckoutScreen({ navigation, route }) {
   // nothing is collected and no money moves. COD says what to have ready.
   const methodNote = isPayOnDelivery(selectedPayment)
     ? 'Pay in cash when your order arrives. Please prepare the exact amount if you can.'
+    : gateway === 'paymongo'
+    ? "You'll pay on PayMongo's secure page. PlainCo never sees your card or wallet details."
     : 'Online payments are in test mode (sandbox). No money is charged and no card details are collected.';
 
   const footerMessage = !isConnected

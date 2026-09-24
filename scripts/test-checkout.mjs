@@ -25,6 +25,8 @@
  * cart.
  */
 import { createRequire } from 'node:module';
+import { createHmac } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 
 process.env.GCLOUD_PROJECT = process.env.GCLOUD_PROJECT || 'plainco-checkout-test';
 if (!process.env.FIRESTORE_EMULATOR_HOST) {
@@ -32,10 +34,15 @@ if (!process.env.FIRESTORE_EMULATOR_HOST) {
   process.exit(1);
 }
 
+// Read by defineSecret().value() in functions/paymongo.js, which falls back
+// to the environment outside a deployed function.
+const WEBHOOK_SECRET = 'whsk_test_plainco';
+process.env.PAYMONGO_WEBHOOK_SECRET = WEBHOOK_SECRET;
+
 const require = createRequire(import.meta.url);
 const functions = require('../functions/index.js');
 const requireFromFunctions = createRequire(new URL('../functions/package.json', import.meta.url));
-const { getFirestore, FieldValue } = requireFromFunctions('firebase-admin/firestore');
+const { getFirestore, FieldValue, Timestamp } = requireFromFunctions('firebase-admin/firestore');
 
 const db = getFirestore();
 const placeOrder = functions._handlePlaceOrder;
@@ -61,7 +68,7 @@ const request = (items, overrides = {}) => ({
 });
 
 async function wipe() {
-  for (const path of ['products', 'stores', 'rateLimits', 'mailLog']) {
+  for (const path of ['products', 'stores', 'rateLimits', 'mailLog', 'checkouts', 'config']) {
     const snapshot = await db.collection(path).get();
     await Promise.all(snapshot.docs.map((d) => d.ref.delete()));
   }
@@ -483,6 +490,355 @@ await test('CHECKOUT-22  a product with no store cannot be ordered', async () =>
   assert(error.details.productIds.includes('p1'), 'the unassigned product is named');
   assertEqual(await orderCount(), 0, 'no order');
 });
+
+console.log('\nCheckout — the PayMongo gateway (faked, no account needed)');
+
+// Stands in for PayMongo. Sessions live in a Map; each test decides what
+// the "customer" did on the hosted page by editing one. Everything on
+// PlainCo's side — the transaction, the hold, the release, the webhook
+// handler and its signature check — is the real code.
+function fakePaymongo({ failCreate = false, failExpire = false } = {}) {
+  const sessions = new Map();
+  const calls = [];
+  return {
+    sessions,
+    calls,
+    async createCheckoutSession(args) {
+      calls.push(['create', args]);
+      if (failCreate) throw new Error('PayMongo is down');
+      const id = `cs_${args.checkoutId}`;
+      const amount = args.lines.reduce((sum, l) => sum + Math.round(l.price * 100) * l.quantity, 0)
+        + Math.round((args.shipping || 0) * 100);
+      sessions.set(id, { id, status: 'active', amount, checkoutId: args.checkoutId, paid: null });
+      return { id, checkoutUrl: `https://checkout.paymongo.test/${id}`, livemode: false, status: 'active', paid: null };
+    },
+    async retrieveCheckoutSession(id) {
+      calls.push(['retrieve', id]);
+      const s = sessions.get(id);
+      return { id, status: s.status, livemode: false, checkoutId: s.checkoutId, paid: s.paid };
+    },
+    async expireCheckoutSession(id) {
+      calls.push(['expire', id]);
+      const s = sessions.get(id);
+      if (failExpire || s.paid) throw new Error('cannot expire');
+      s.status = 'expired';
+      return { id, status: 'expired', livemode: false, paid: null };
+    },
+    // What the customer paying on the hosted page amounts to.
+    pay(checkoutId, { amount } = {}) {
+      const s = sessions.get(`cs_${checkoutId}`);
+      s.paid = { paymentId: `pay_${checkoutId.slice(0, 8)}`, amountCentavos: amount ?? s.amount, source: 'gcash' };
+      return s;
+    },
+  };
+}
+
+const RETURN_URL = 'plainco://payment-return';
+const payRequest = (items, overrides = {}) =>
+  request(items, { paymentMethod: 'gcash', returnUrl: RETURN_URL, ...overrides });
+
+async function usePaymongo(fake) {
+  await db.collection('config').doc('payments').set({ gateway: 'paymongo' });
+  functions._setGatewayForTests(fake);
+}
+
+const checkoutOf = async (id) => (await db.collection('checkouts').doc(id).get()).data();
+
+// A webhook delivery as PayMongo sends it: the event JSON, signed over
+// `<t>.<raw body>` with the endpoint's secret.
+async function deliverWebhook(session, { secret = WEBHOOK_SECRET, type = 'checkout_session.payment.paid', sessionId } = {}) {
+  const body = {
+    data: {
+      id: 'evt_test',
+      type: 'event',
+      attributes: {
+        type,
+        livemode: false,
+        data: {
+          id: sessionId || session.id,
+          type: 'checkout_session',
+          attributes: {
+            livemode: false,
+            status: 'active',
+            reference_number: session.checkoutId,
+            metadata: { checkoutId: session.checkoutId },
+            payments: session.paid
+              ? [{ id: session.paid.paymentId, type: 'payment', attributes: { amount: session.paid.amountCentavos, status: 'paid', source: { type: 'gcash' } } }]
+              : [],
+          },
+        },
+      },
+    },
+  };
+  const raw = JSON.stringify(body);
+  const t = Math.floor(Date.now() / 1000);
+  const sig = createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex');
+
+  const res = { statusCode: null, payload: null };
+  res.status = (code) => { res.statusCode = code; return res; };
+  res.json = (payload) => { res.payload = payload; return res; };
+  await functions._handlePaymongoWebhook({
+    method: 'POST',
+    rawBody: Buffer.from(raw),
+    body,
+    get: (name) => (name.toLowerCase() === 'paymongo-signature' ? `t=${t},te=${sig},li=` : undefined),
+  }, res);
+  return res;
+}
+
+const resolve = (checkoutId, data = {}, uid = 'customer1') =>
+  functions._handleResolveCheckout({ auth: { uid }, data: { checkoutId, ...data } });
+
+try {
+  await test('PAY-1  an online order HOLDS stock and writes a checkout, not orders', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    await db.collection('users').doc('customer1').collection('cart').doc('c1').set({ productId: 'p1', quantity: 2 });
+
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 2, cartItemId: 'c1' }]));
+
+    assert(placed.awaitingPayment === true, 'the app is told to go and pay');
+    assert(placed.checkoutUrl.startsWith('https://checkout.paymongo.test/'), 'with PayMongo\'s page to open');
+    assertEqual(await orderCount(), 0, 'no order exists before the money does');
+    assertEqual(await stockOf('p1'), 3, 'but the pieces are held');
+    assertEqual((await db.collection('users').doc('customer1').collection('cart').get()).size, 1, 'and the cart is untouched');
+
+    const checkout = await checkoutOf(placed.checkoutId);
+    assertEqual(checkout.status, 'pending', 'checkout status');
+    assertEqual(checkout.sessionId, `cs_${placed.checkoutId}`, 'the session is recorded against it');
+    assertEqual(checkout.total, 1000, 'the server-priced total');
+
+    const [, args] = fake.calls.find(([name]) => name === 'create');
+    assertEqual(args.lines[0].price, 500, 'PayMongo is asked for the catalogue price');
+    assert(args.successUrl.includes('/paymentReturn?c='), 'and returns through paymentReturn, not straight to the app');
+  });
+
+  await test('PAY-2  a signed webhook turns the checkout into paid orders, once', async () => {
+    await seed({ stock: 10, price: 850 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    await db.collection('users').doc('customer1').collection('cart').doc('c1').set({ productId: 'p1', quantity: 1 });
+
+    const placed = await placeOrder(payRequest([
+      { productId: 'p1', quantity: 1, cartItemId: 'c1' },
+      { productId: 'p3', quantity: 1 },
+    ]));
+    const session = fake.pay(placed.checkoutId);
+
+    const res = await deliverWebhook(session);
+    assertEqual(res.statusCode, 200, 'webhook acknowledged');
+    assertEqual(res.payload.outcome, 'paid', 'webhook outcome');
+
+    const orders = await ordersOf();
+    assertEqual(orders.length, 2, 'one order per store, as with every other method');
+    for (const order of orders) {
+      assertEqual(order.paymentStatus, 'paid', 'paid');
+      assertEqual(order.paymentProvider, 'paymongo', 'provider');
+      assertEqual(order.paymentRef, session.paid.paymentId, 'PayMongo\'s payment id is the reference');
+      assertEqual(order.paymentSandbox, true, 'a test-mode payment is still marked as not real money');
+      assertEqual(order.checkoutId, placed.checkoutId, 'orders share the checkout');
+    }
+    assertEqual((await db.collection('users').doc('customer1').collection('cart').get()).size, 0, 'the cart clears on payment');
+    assertEqual(await stockOf('p1'), 9, 'the held stock is now sold — not decremented twice');
+
+    const checkout = await checkoutOf(placed.checkoutId);
+    assertEqual(checkout.status, 'paid', 'checkout closed');
+    assertEqual(checkout.receipt.orders.length, 2, 'with a receipt the app can render');
+
+    // PayMongo retries; a second delivery must change nothing.
+    const again = await deliverWebhook(session);
+    assertEqual(again.statusCode, 200, 'duplicate acknowledged');
+    assertEqual(await orderCount(), 2, 'and writes no second set of orders');
+  });
+
+  await test('PAY-3  an unsigned or mis-signed webhook is refused and writes nothing', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+    const session = fake.pay(placed.checkoutId);
+
+    const res = await deliverWebhook(session, { secret: 'whsk_someone_else' });
+    assertEqual(res.statusCode, 401, 'forged signature refused');
+    assertEqual(await orderCount(), 0, 'a forged "paid" buys nothing');
+    assertEqual((await checkoutOf(placed.checkoutId)).status, 'pending', 'checkout unchanged');
+  });
+
+  await test('PAY-4  a webhook for another session cannot pay for this checkout', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+    const session = fake.pay(placed.checkoutId);
+
+    await deliverWebhook(session, { sessionId: 'cs_somebody_elses' });
+    assertEqual(await orderCount(), 0, 'no orders');
+  });
+
+  await test('PAY-5  backing out releases the hold at once, and only once', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 2 }]));
+    assertEqual(await stockOf('p1'), 3, 'held');
+
+    const result = await resolve(placed.checkoutId, { abandon: true });
+    assertEqual(result.status, 'released', 'released');
+    assertEqual(await stockOf('p1'), 5, 'stock is back');
+    assert(fake.calls.some(([name]) => name === 'expire'), 'PayMongo was told to stop taking payment first');
+    assertEqual(await orderCount(), 0, 'no orders');
+
+    await resolve(placed.checkoutId, { abandon: true });
+    assertEqual(await stockOf('p1'), 5, 'a second cancel restores nothing twice');
+  });
+
+  await test('PAY-6  backing out after actually paying still places the order', async () => {
+    // The customer paid, then closed the browser before it came back —
+    // the app reads that as a cancel. The payment must win.
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+    fake.pay(placed.checkoutId);
+
+    const result = await resolve(placed.checkoutId, { abandon: true });
+    assertEqual(result.status, 'paid', 'paid, not released');
+    assert(result.receipt && result.receipt.paymentStatus === 'paid', 'with the receipt to show');
+    assertEqual(await orderCount(), 1, 'order written');
+    assertEqual(await stockOf('p1'), 4, 'stock stays sold');
+  });
+
+  await test('PAY-7  checking without abandoning leaves an unpaid checkout alone', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+
+    const result = await resolve(placed.checkoutId);
+    assertEqual(result.status, 'pending', 'still waiting');
+    assertEqual(await stockOf('p1'), 4, 'hold kept');
+  });
+
+  await test('PAY-8  another customer cannot look up or cancel my checkout', async () => {
+    await seed({ stock: 5, price: 500 });
+    await usePaymongo(fakePaymongo());
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+
+    await expectRefusal(resolve(placed.checkoutId, { abandon: true }, 'customer2'));
+    assertEqual(await stockOf('p1'), 4, 'the hold is untouched');
+  });
+
+  await test('PAY-9  an expired hold is released by the scheduler; a fresh one is not', async () => {
+    await seed({ stock: 10, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const old = await placeOrder(payRequest([{ productId: 'p1', quantity: 2 }]));
+    const fresh = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+    await db.collection('checkouts').doc(old.checkoutId).update({
+      expiresAt: Timestamp.fromMillis(Date.now() - 1000),
+    });
+
+    await functions._expireUnpaidCheckouts();
+    assertEqual((await checkoutOf(old.checkoutId)).status, 'released', 'the lapsed one is released');
+    assertEqual((await checkoutOf(old.checkoutId)).releaseReason, 'expired', 'and says why');
+    assertEqual((await checkoutOf(fresh.checkoutId)).status, 'pending', 'the fresh one keeps its hold');
+    assertEqual(await stockOf('p1'), 9, 'only the lapsed hold came back');
+  });
+
+  await test('PAY-10  if PayMongo cannot be told to stop, the hold is kept', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo({ failExpire: true });
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+
+    const result = await resolve(placed.checkoutId, { abandon: true });
+    assertEqual(result.status, 'pending', 'not released');
+    assertEqual(await stockOf('p1'), 4, 'a payment could still land, so the piece stays held');
+  });
+
+  await test('PAY-11  PayMongo down at checkout: refused, and the hold given back', async () => {
+    await seed({ stock: 5, price: 500 });
+    await usePaymongo(fakePaymongo({ failCreate: true }));
+
+    await expectRefusal(placeOrder(payRequest([{ productId: 'p1', quantity: 1 }])), 'gateway-unavailable');
+    assertEqual(await stockOf('p1'), 5, 'stock restored');
+    assertEqual(await orderCount(), 0, 'no order');
+  });
+
+  await test('PAY-12  a payment that does not match the total ships nothing', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+    const session = fake.pay(placed.checkoutId, { amount: 100 });
+
+    await deliverWebhook(session);
+    assertEqual(await orderCount(), 0, 'no order for a ₱1 payment on a ₱500 checkout');
+    assertEqual((await checkoutOf(placed.checkoutId)).status, 'needs-review', 'flagged for a person');
+  });
+
+  await test('PAY-13  paid after the hold was released: flagged for refund, no order', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+    const placed = await placeOrder(payRequest([{ productId: 'p1', quantity: 1 }]));
+    await resolve(placed.checkoutId, { abandon: true });
+    const session = fake.pay(placed.checkoutId);
+
+    await deliverWebhook(session);
+    assertEqual(await orderCount(), 0, 'the stock may be someone else\'s now');
+    const checkout = await checkoutOf(placed.checkoutId);
+    assertEqual(checkout.status, 'paid-after-release', 'status');
+    assertEqual(checkout.needsReview, 'refund-owed', 'marked for refund');
+  });
+
+  await test('PAY-14  with PayMongo on, a sandbox "approved" is refused', async () => {
+    // Otherwise the sandbox would be a way to get a free "paid" order
+    // from production.
+    await seed({ stock: 5, price: 500 });
+    await usePaymongo(fakePaymongo());
+
+    await expectRefusal(
+      placeOrder(request([{ productId: 'p1', quantity: 1 }], { paymentMethod: 'gcash', sandboxOutcome: 'approved' })),
+      'gateway-changed'
+    );
+    assertEqual(await orderCount(), 0, 'no order');
+    assertEqual(await stockOf('p1'), 5, 'no hold');
+  });
+
+  await test('PAY-15  the return address must lead back into the app', async () => {
+    await seed({ stock: 5, price: 500 });
+    await usePaymongo(fakePaymongo());
+
+    for (const returnUrl of ['https://evil.example/steal', 'javascript:alert(1)', '', undefined]) {
+      await expectRefusal(placeOrder(payRequest([{ productId: 'p1', quantity: 1 }], { returnUrl })));
+    }
+    assertEqual(await stockOf('p1'), 5, 'nothing held for any of them');
+  });
+
+  await test('PAY-16  with the sandbox on, an app expecting PayMongo is told to reload', async () => {
+    await seed({ stock: 5, price: 500 });
+    functions._setGatewayForTests(fakePaymongo());
+    // No config document: the sandbox, as on every emulator.
+
+    await expectRefusal(placeOrder(payRequest([{ productId: 'p1', quantity: 1 }])), 'gateway-changed');
+    assertEqual(await orderCount(), 0, 'no order');
+  });
+
+  await test('PAY-17  COD is untouched by the gateway setting', async () => {
+    await seed({ stock: 5, price: 500 });
+    const fake = fakePaymongo();
+    await usePaymongo(fake);
+
+    const placed = await placeOrder(request([{ productId: 'p1', quantity: 1 }]));
+    assertEqual(placed.paymentStatus, 'unpaid', 'COD still places at once');
+    assertEqual(await orderCount(), 1, 'order written');
+    assertEqual(fake.calls.length, 0, 'PayMongo never hears about it');
+  });
+} finally {
+  functions._setGatewayForTests(null);
+}
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {

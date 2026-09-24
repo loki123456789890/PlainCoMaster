@@ -1022,5 +1022,27 @@ service cloud.firestore {
     match /mailLog/{entryId} {
       allow read: if handlesSupport(resource.data.get('storeId', null));
     }
+
+    // ONLINE CHECKOUTS awaiting PayMongo — see placeOrder and applyPayment
+    // in functions/index.js. The customer reads their own, which is how
+    // the app's "finish paying" screen learns the webhook arrived. Nobody
+    // writes: a client that could set status to 'paid' would have bought
+    // the order, and a client that could set it to 'released' would get
+    // held stock back without the gateway being told to stop.
+    //
+    // Read as a single document only. The app never lists checkouts, and
+    // a list query would have to filter on customerId to pass anyway.
+    match /checkouts/{checkoutId} {
+      allow get: if request.auth != null &&
+        resource.data.customerId == request.auth.uid;
+    }
+
+    // Settings the app and the functions both read. payments.gateway says
+    // whether online methods open the sandbox or PayMongo. Written from
+    // the console only — a customer who could flip it back to 'sandbox'
+    // could pay with a pretend bank.
+    match /config/{docId} {
+      allow get: if request.auth != null;
+    }
   }
 }

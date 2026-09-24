@@ -317,6 +317,10 @@ export default function OrdersScreen({ navigation }) {
             shippingAddress: data.shippingAddress || null,
             paymentMethod: data.paymentMethod || null,
             paymentStatus: data.paymentStatus || null,
+            // For OrderDetails' payment note (getPaymentNote).
+            paymentRef: data.paymentRef || null,
+            paymentSandbox: data.paymentSandbox === true,
+            paymentProvider: data.paymentProvider || null,
             // For the "New message" line here and the chat button on
             // OrderDetails — as millis, since Timestamps don't survive
             // navigation params.

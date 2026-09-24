@@ -44,7 +44,7 @@ import SkeletonBlock from '../../components/ui/Skeleton';
 import ProductImage from '../../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { logStoreActivity, ACTIONS } from '../../utils/activityLog';
-import { getPaymentLabel, getPaymentIcon, getPaymentStatusLabel } from '../../constants/payment';
+import { getPaymentLabel, getPaymentIcon, getPaymentStatusLabel, getPaymentNote } from '../../constants/payment';
 import { chatFields, hasUnread } from '../../utils/orderChat';
 
 const STATUS_OPTIONS = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
@@ -253,6 +253,7 @@ export default function AdminOrdersScreen({ navigation }) {
             paymentStatus: data.paymentStatus || null,
             paymentRef: data.paymentRef || null,
             paymentSandbox: data.paymentSandbox === true,
+            paymentProvider: data.paymentProvider || null,
             items,
             // The order lives at users/{uid}/orders/{id}; the chat lives
             // under it, so the path is the customer's id to trust — not
@@ -851,12 +852,10 @@ export default function AdminOrdersScreen({ navigation }) {
                       this screen as if money had arrived, so the order's
                       simulated origin is stated here rather than inferred
                       from a "Paid" badge that looks like every other one. */}
-                  {selectedOrder.paymentSandbox ? (
+                  {getPaymentNote(selectedOrder) ? (
                     <View style={styles.infoRow}>
                       <Text style={styles.infoLabel}>Reference:</Text>
-                      <Text style={styles.sandboxRefText}>
-                        {selectedOrder.paymentRef || '—'} · sandbox, no real money moved
-                      </Text>
+                      <Text style={styles.sandboxRefText}>{getPaymentNote(selectedOrder)}</Text>
                     </View>
                   ) : null}
                 </View>

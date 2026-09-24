@@ -27,6 +27,7 @@ import ProductScreen from './screens/Productscreen';
 import CartScreen from './screens/Cartscreen';
 import CheckoutScreen from './screens/Checkoutscreen';
 import SandboxPaymentScreen from './screens/SandboxPaymentScreen';
+import OnlinePaymentScreen from './screens/OnlinePaymentScreen';
 import ProfileScreen from './screens/Profilescreen';
 import FavoritesScreen from './screens/Favoritescreen';
 import LocationScreen from './screens/LocationScreen';
@@ -179,6 +180,12 @@ export default function App() {
                     {/* The simulated payment step. Reached only from Checkout,
                         and only for the online methods — COD never opens it. */}
                     <Stack.Screen name="SandboxPayment" component={SandboxPaymentScreen} />
+
+                    {/* The real payment step, through PayMongo's hosted page.
+                        Used instead of SandboxPayment once config/payments
+                        says 'paymongo'. No swipe-back: leaving has to cancel
+                        through the server, which the screen asks about. */}
+                    <Stack.Screen name="OnlinePayment" component={OnlinePaymentScreen} options={{ gestureEnabled: false }} />
 
                     {/* iPhone 16 Pro Max - 13 */}
                     <Stack.Screen name="Profile" component={ProfileScreen} options={tabFade} />

@@ -29,7 +29,7 @@ import AnimatedPressable from '../components/ui/AnimatedPressable';
 import StarRating from '../components/ui/StarRating';
 import ProductImage from '../components/ui/ProductImage';
 import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
-import { getPaymentLabel, getPaymentIcon, getPaymentStatus } from '../constants/payment';
+import { getPaymentLabel, getPaymentIcon, getPaymentStatus, getPaymentNote } from '../constants/payment';
 import { formatOrderNumber } from '../utils/orderNumber';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 import { orderRef, chatFields, hasUnread } from '../utils/orderChat';
@@ -320,9 +320,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
   // Shown only where it is true, and stated plainly rather than softened.
   // An order carrying a simulated authorisation must say so on the screen
   // a customer or a Store Manager would point at as proof of payment.
-  const sandboxNote = order.paymentSandbox
-    ? `Sandbox payment${order.paymentRef ? ` · ${order.paymentRef}` : ''} — simulated, no real money moved`
-    : '';
+  const sandboxNote = getPaymentNote(order);
 
   return (
     <SafeAreaView style={styles.container}>

@@ -147,11 +147,10 @@ export const requiresOnlinePayment = (method) =>
 // and not more — 'unpaid' is COD's resting state and NOT a failure, so the
 // two must never share a colour or a label.
 //
-// 'failed' is currently unreachable by design: a declined payment refuses
-// the order outright rather than writing one. It exists because a future
-// real gateway authorises asynchronously (a webhook arrives after the
-// order is written), and the screens that render payment status should
-// already know the word when that day comes.
+// 'failed' is still unreachable by design, now with PayMongo too: an
+// online checkout that is never paid becomes a released CHECKOUT
+// (functions/index.js), and its orders are never written at all. The
+// word stays so the screens already know it if that ever changes.
 export const PAYMENT_STATUSES = {
   paid: { label: 'Paid', tone: 'success', icon: 'checkmark-circle' },
   unpaid: { label: 'Unpaid', tone: 'neutral', icon: 'cube-outline' },
@@ -177,6 +176,31 @@ export const getPaymentStatusLabel = (order) => {
   if (status === 'unpaid' && isPayOnDelivery(order?.paymentMethod)) return 'Pay on delivery';
   return PAYMENT_STATUSES[status].label;
 };
+
+// The line under an online order's payment status: which gateway took it,
+// its reference, and — whenever it is true — that no real money moved.
+// A Store Manager reads this before packing, so a test payment must never
+// look like a real one.
+//
+// paymentProvider is absent on orders from before PayMongo existed; those
+// are all sandbox orders, and paymentSandbox already says so.
+export const getPaymentNote = (order) => {
+  if (!order || isPayOnDelivery(order.paymentMethod)) return '';
+  const ref = order.paymentRef ? ` · ${order.paymentRef}` : '';
+  if (order.paymentProvider === 'paymongo') {
+    return order.paymentSandbox
+      ? `PayMongo test payment${ref} — test mode, no real money moved`
+      : `Paid through PayMongo${ref}`;
+  }
+  if (order.paymentSandbox) return `Sandbox payment${ref} — simulated, no real money moved`;
+  return '';
+};
+
+// Which gateway the online methods use, from config/payments — the same
+// document placeOrder reads. A missing document, or one this version of the
+// app does not recognise, means the sandbox, as it does on the server.
+export const GATEWAYS = ['sandbox', 'paymongo'];
+export const readGateway = (data) => (GATEWAYS.includes(data?.gateway) ? data.gateway : 'sandbox');
 
 export const getPaymentStatusTone = (order) => PAYMENT_STATUSES[getPaymentStatus(order)].tone;
 export const getPaymentStatusIcon = (order) => PAYMENT_STATUSES[getPaymentStatus(order)].icon;
