@@ -9,13 +9,12 @@
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Pressable, Modal, KeyboardAvoidingView, ScrollView, useWindowDimensions } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, runOnJS, useReducedMotion } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/theme';
 import { EASE_OUT_QUINT } from '../../constants/motion';
 
 export default function Sheet({ visible, onClose, locked, dark, footer, children }) {
   const reduceMotion = useReducedMotion();
-  const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const [mounted, setMounted] = useState(visible);
   const progress = useSharedValue(0);
@@ -36,9 +35,6 @@ export default function Sheet({ visible, onClose, locked, dark, footer, children
     }
   }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const scrim = useAnimatedStyle(() => ({ opacity: progress.value }));
-  const sheet = useAnimatedStyle(() => ({ transform: [{ translateY: (1 - progress.value) * height }] }));
-
   if (!mounted) return null;
   const close = () => !locked && onClose();
   return (
@@ -53,6 +49,30 @@ export default function Sheet({ visible, onClose, locked, dark, footer, children
       navigationBarTranslucent
       onRequestClose={close}
     >
+      {/* A Modal is its own window, so it gets its own provider: the app's
+          insets are measured for the main window and can read 0 in here,
+          which put the last row under the navigation controls. */}
+      <SafeAreaProvider>
+        <SheetFrame progress={progress} height={height} dark={dark} footer={footer} close={close}>
+          {children}
+        </SheetFrame>
+      </SafeAreaProvider>
+    </Modal>
+  );
+}
+
+// Everything that sits inside the Modal, so its insets come from the
+// Modal's provider rather than the app's.
+function SheetFrame({ progress, height, dark, footer, close, children }) {
+  const insets = useSafeAreaInsets();
+  const scrim = useAnimatedStyle(() => ({ opacity: progress.value }));
+  const sheet = useAnimatedStyle(() => ({ transform: [{ translateY: (1 - progress.value) * height }] }));
+  // The inset clears the navigation controls; the extra 20 is breathing
+  // room above them, so the last line of text never sits on the bar.
+  const bottom = insets.bottom + 20;
+
+  return (
+    <>
       <Animated.View style={[StyleSheet.absoluteFill, styles.scrim, dark && styles.scrimDark, scrim]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={close} accessibilityLabel="Close" />
       </Animated.View>
@@ -62,16 +82,14 @@ export default function Sheet({ visible, onClose, locked, dark, footer, children
           <ScrollView
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: footer ? 16 : Math.max(insets.bottom, 16) + 12 }}
+            contentContainerStyle={{ paddingBottom: footer ? 16 : bottom }}
           >
             {children}
           </ScrollView>
-          {footer ? (
-            <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]}>{footer}</View>
-          ) : null}
+          {footer ? <View style={[styles.footer, { paddingBottom: bottom }]}>{footer}</View> : null}
         </Animated.View>
       </KeyboardAvoidingView>
-    </Modal>
+    </>
   );
 }
 
