@@ -25,6 +25,28 @@ export const REVIEW_TEXT_MAX = 1000;
 export const MIN_RATING = 1;
 export const MAX_RATING = 5;
 
+// What "Not quite" can say was different, in display order. The keys are
+// what firestore.rules accepts in `mismatchReasons` — change both together.
+export const MISMATCH_REASONS = [
+  ['condition', 'Condition'],
+  ['size', 'Size / fit'],
+  ['colour', 'Colour'],
+  ['quality', 'Fabric quality'],
+  ['photos', 'Not like the photos'],
+];
+const MISMATCH_KEYS = MISMATCH_REASONS.map(([key]) => key);
+
+export function mismatchReasonLabel(key) {
+  return MISMATCH_REASONS.find(([k]) => k === key)?.[1] || '';
+}
+
+// Known keys only, once each, in display order — so a stored list reads the
+// same everywhere, and two lists can be compared by joining them.
+export function normalizeMismatchReasons(reasons) {
+  const list = Array.isArray(reasons) ? reasons : [];
+  return MISMATCH_KEYS.filter((key) => list.includes(key));
+}
+
 // How many reviews a store's seller rating is computed from. Bounded
 // on purpose: this is a phone on mobile data, and the number it produces
 // ("9 in 10 said the item matched") is a recent-behaviour signal, not a
@@ -64,6 +86,8 @@ export function mapReviewDoc(docSnap) {
     // of the feature, and a missing one must not quietly become "did not
     // match the description" on a review that never said so.
     matchedDescription: data.matchedDescription === true,
+    // Only meaningful on a "Not quite"; older reviews have none.
+    mismatchReasons: data.matchedDescription === true ? [] : normalizeMismatchReasons(data.mismatchReasons),
     text: data.text || '',
     hidden: data.hidden === true,
     createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null,

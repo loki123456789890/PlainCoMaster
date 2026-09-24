@@ -33,6 +33,7 @@ import {
   mapReviewDoc,
   summarizeReviews,
   formatAverage,
+  mismatchReasonLabel,
 } from '../../utils/reviews';
 
 const INK = Colors.light.text;
@@ -459,6 +460,11 @@ export default function AdminReviewsScreen({ navigation }) {
                           ) : (
                             <Chip tone="bad">Didn&apos;t match description</Chip>
                           )}
+                          {review.mismatchReasons.map((key) => (
+                            <Chip key={key} tone="bad">
+                              {mismatchReasonLabel(key)}
+                            </Chip>
+                          ))}
                           {review.hidden ? <Chip tone="hidden">Hidden</Chip> : null}
                           {review.updatedAt ? <Chip tone="plain">Edited</Chip> : null}
                         </View>

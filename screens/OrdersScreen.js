@@ -377,7 +377,12 @@ export default function OrdersScreen({ navigation }) {
   const reviewOrder = (order) => {
     Haptics.selectionAsync();
     if (order.reviewableItems.length === 1) {
-      navigation.navigate('WriteReview', { orderId: order.id, item: order.reviewableItems[0], storeId: order.storeId });
+      navigation.navigate('WriteReview', {
+        orderId: order.id,
+        item: order.reviewableItems[0],
+        storeId: order.storeId,
+        storeName: order.storeName || '',
+      });
     } else {
       openOrder(order);
     }

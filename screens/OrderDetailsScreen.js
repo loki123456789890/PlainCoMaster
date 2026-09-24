@@ -272,7 +272,12 @@ export default function OrderDetailsScreen({ navigation, route }) {
 
   const handleWriteReview = (item) => {
     Haptics.selectionAsync();
-    navigation.navigate('WriteReview', { orderId: order.id, item, storeId: order.storeId });
+    navigation.navigate('WriteReview', {
+      orderId: order.id,
+      item,
+      storeId: order.storeId,
+      storeName: order.storeName || '',
+    });
   };
 
   const header = (

@@ -1442,6 +1442,44 @@ await test('REVIEW-18  any signed-in shopper can read reviews; a guest cannot', 
   await assertFails(getDocs(collection(asGuest(), 'reviews')));
 });
 
+await test('REVIEW-19  "Not quite" may say what was different, from the known list', async () => {
+  await assertSucceeds(
+    setDoc(
+      doc(asCustomer(), 'reviews/delivered1_p1'),
+      reviewDoc({ matchedDescription: false, mismatchReasons: ['quality', 'photos'] })
+    )
+  );
+  await assertSucceeds(
+    updateDoc(doc(asCustomer(), 'reviews/delivered1_p3'), {
+      rating: 2,
+      matchedDescription: false,
+      mismatchReasons: ['colour'],
+      text: 'Darker than the photos.',
+      updatedAt: serverTimestamp(),
+    })
+  );
+});
+
+await test('REVIEW-20  mismatch reasons must be known keys, and absent when it matched', async () => {
+  const db = asCustomer();
+  await assertFails(
+    setDoc(doc(db, 'reviews/delivered1_p1'), reviewDoc({ matchedDescription: false, mismatchReasons: ['smell'] }))
+  );
+  await assertFails(
+    setDoc(doc(db, 'reviews/delivered1_p1'), reviewDoc({ matchedDescription: false, mismatchReasons: 'quality' }))
+  );
+  // Matched, yet something was different — contradicts itself.
+  await assertFails(
+    setDoc(doc(db, 'reviews/delivered1_p1'), reviewDoc({ matchedDescription: true, mismatchReasons: ['size'] }))
+  );
+  await assertFails(
+    updateDoc(doc(db, 'reviews/delivered1_p3'), {
+      mismatchReasons: ['size'],
+      updatedAt: serverTimestamp(),
+    })
+  );
+});
+
 // ---------------------------------------------------------------------------
 console.log('\nStore scoping — each manager sees only their own store');
 // ---------------------------------------------------------------------------

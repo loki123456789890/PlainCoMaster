@@ -65,6 +65,7 @@ import {
   formatAverage,
   matchedDescriptionSentence,
   reviewCountLabel,
+  mismatchReasonLabel,
 } from '../utils/reviews';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
@@ -785,7 +786,13 @@ export default function ProductScreen({ navigation, route }) {
                     style={styles.review}
                     accessible
                     accessibilityLabel={`${review.rating} stars from ${review.userName}. ${
-                      review.matchedDescription ? 'Matched the description.' : "Didn't match the description."
+                      review.matchedDescription
+                        ? 'Matched the description.'
+                        : `Didn't match the description${
+                            review.mismatchReasons.length
+                              ? `: ${review.mismatchReasons.map(mismatchReasonLabel).join(', ').toLowerCase()}`
+                              : ''
+                          }.`
                     } ${review.text}`}
                   >
                     <View style={styles.reviewHead}>
@@ -796,20 +803,31 @@ export default function ProductScreen({ navigation, route }) {
                         </Text>
                         <StarRating rating={review.rating} size={12} />
                       </View>
-                      <Text style={styles.reviewDate}>{formatReviewDate(review.createdAt)}</Text>
+                      <Text style={styles.reviewDate}>
+                        {formatReviewDate(review.createdAt)}
+                        {review.updatedAt ? ' · Edited' : ''}
+                      </Text>
                     </View>
                     {/* Shown on every review, not only the negative ones:
                         an answer that appears only when it's bad turns its
-                        absence into a second, unlabelled signal. */}
-                    <View style={[styles.matchPill, !review.matchedDescription && styles.matchPillNo]}>
-                      <Ionicons
-                        name={review.matchedDescription ? 'checkmark' : 'close'}
-                        size={12}
-                        color={review.matchedDescription ? MOSS : ERR}
-                      />
-                      <Text style={[styles.matchPillText, !review.matchedDescription && { color: ERR }]}>
-                        {review.matchedDescription ? 'Matched the description' : "Didn't match the description"}
-                      </Text>
+                        absence into a second, unlabelled signal. A mismatch
+                        is Clay, not error red: it's feedback, not a fault. */}
+                    <View style={styles.matchRow}>
+                      <View style={[styles.matchPill, !review.matchedDescription && styles.matchPillNo]}>
+                        <Ionicons
+                          name={review.matchedDescription ? 'checkmark' : 'alert-circle-outline'}
+                          size={12}
+                          color={review.matchedDescription ? MOSS : CLAY}
+                        />
+                        <Text style={[styles.matchPillText, !review.matchedDescription && { color: CLAY }]}>
+                          {review.matchedDescription ? 'Matched the description' : "Didn't match the description"}
+                        </Text>
+                      </View>
+                      {review.mismatchReasons.map((key) => (
+                        <View key={key} style={[styles.matchPill, styles.matchPillNo]}>
+                          <Text style={[styles.matchPillText, { color: CLAY }]}>{mismatchReasonLabel(key)}</Text>
+                        </View>
+                      ))}
                     </View>
                     {review.text ? <Text style={styles.reviewText}>{review.text}</Text> : null}
                   </View>
@@ -1119,7 +1137,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#EEF0EA',
   },
-  matchPillNo: { backgroundColor: '#FBEDEB' },
+  matchPillNo: { backgroundColor: '#FCF3EE' },
+  matchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
   matchPillText: { fontSize: 11, fontWeight: '600', color: MOSS },
   reviewText: { fontSize: 13.5, color: INK, lineHeight: 20 },
   showAll: { alignSelf: 'flex-start', paddingVertical: 12 },

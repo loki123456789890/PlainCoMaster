@@ -19,6 +19,9 @@ interface StarRatingProps {
   /** Describes what is being rated, for the accessibility label — e.g.
    * "Denim Jacket". Falls back to a generic phrasing. */
   label?: string;
+  /** Defaults to Gold. The review composer passes Clay: there the row is
+   * the customer's own answer, a selected state, not a figure to read. */
+  color?: string;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -47,6 +50,7 @@ export default function StarRating({
   editable = false,
   onChange,
   label,
+  color = STAR_COLOR,
   style,
 }: StarRatingProps) {
   const isInteractive = editable && typeof onChange === 'function';
@@ -86,7 +90,7 @@ export default function StarRating({
         }
       >
         {STARS.map((star) => (
-          <Ionicons key={star} name={iconFor(star)} size={size} color={STAR_COLOR} />
+          <Ionicons key={star} name={iconFor(star)} size={size} color={color} />
         ))}
       </View>
     );
@@ -103,7 +107,7 @@ export default function StarRating({
           accessibilityState={{ selected: rating === star }}
           accessibilityLabel={`${star} ${star === 1 ? 'star' : 'stars'}${subject}`}
         >
-          <Ionicons name={iconFor(star)} size={size} color={STAR_COLOR} />
+          <Ionicons name={iconFor(star)} size={size} color={color} />
         </Pressable>
       ))}
     </View>

@@ -735,6 +735,17 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)/orders/$(orderId))
           .data.get('storeId', null) == storeId;
     }
+    // What a "Not quite" says was different: optional, known keys only (the
+    // list in utils/reviews.js MISMATCH_REASONS), and empty when the item
+    // matched — "it matched, but the colour was off" contradicts itself.
+    function validMismatchReasons(data) {
+      let reasons = data.get('mismatchReasons', []);
+      return reasons is list &&
+        reasons.size() <= 5 &&
+        reasons.hasOnly(['condition', 'size', 'colour', 'quality', 'photos']) &&
+        (data.matchedDescription == false || reasons.size() == 0);
+    }
+
     match /reviews/{reviewId} {
       // Any signed-in user, matching /products — a review the next shopper
       // cannot read does not do the one job it has.
@@ -769,8 +780,9 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly(
           ['orderId', 'productId', 'productName', 'userId', 'userName',
            'rating', 'matchedDescription', 'text', 'hidden', 'createdAt',
-           'storeId', 'userPhotoUrl']
+           'storeId', 'userPhotoUrl', 'mismatchReasons']
         ) &&
+        validMismatchReasons(request.resource.data) &&
         // The author's profile photo, copied at write time like userName,
         // because /users is unreadable to other shoppers.
         request.resource.data.get('userPhotoUrl', '') is string &&
@@ -822,7 +834,8 @@ service cloud.firestore {
           isActiveUser() &&
           resource.data.userId == request.auth.uid &&
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['rating', 'matchedDescription', 'text', 'updatedAt']) &&
+            .hasOnly(['rating', 'matchedDescription', 'mismatchReasons', 'text', 'updatedAt']) &&
+          validMismatchReasons(request.resource.data) &&
           request.resource.data.rating is int &&
           request.resource.data.rating >= 1 &&
           request.resource.data.rating <= 5 &&
