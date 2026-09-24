@@ -4,8 +4,14 @@
 // Log In's form on ink, under the same lockup (its wordmark in cream). The
 // account's own role decides where it lands; this screen only says who it
 // is for, and refuses in the form, not in a pop-up, anyone it can't let in.
+//
+// THERE IS NO STAFF SIGN-UP, on purpose — staff accounts are granted by a
+// Platform Admin, never self-registered (SRS_UPDATE_NOTES.md §3, enforced
+// in firestore.rules). What was missing was saying so where people look:
+// "How do I get a staff account?" opens a sheet with the three steps, so
+// someone new to PlainCo is not left hunting for a Register button.
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useReducedMotion } from 'react-native-reanimated';
@@ -27,6 +33,8 @@ import { doc, getDoc } from 'firebase/firestore';
 import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import Button from '../../components/ui/Button';
+import Sheet from '../../components/shop/Sheet';
+import { Colors } from '../../constants/theme';
 import { getHomeRouteForRole, ROLE_SELLER, ROLE_PLATFORM_ADMIN } from '../../constants/roles';
 
 const RULES = {
@@ -81,6 +89,67 @@ function AccessNote() {
 const NOTE_INK = '#8B8178';
 const FOOT_INK = '#BDB3A9';
 
+const STAFF_STEPS = [
+  {
+    title: 'Create a customer account',
+    body: 'Sign up on the main PlainCo sign-up screen, with the email you want to use for work.',
+  },
+  {
+    title: 'Ask a Platform Admin for a role',
+    body: 'They find your email in Manage Users and make you a Store Manager (with your store) or a Platform Admin.',
+  },
+  {
+    title: 'Sign in here',
+    body: 'Use the same email and password. The Staff Portal opens your dashboard.',
+  },
+];
+
+// The sheet behind "How do I get a staff account?". Drawn on canvas like
+// every other sheet, not on this screen's ink.
+function StaffAccountSheet({ visible, onClose, onSignUp }) {
+  return (
+    <Sheet visible={visible} onClose={onClose}>
+      <Text style={styles.sheetTitle} accessibilityRole="header">
+        Getting a staff account
+      </Text>
+      <Text style={styles.sheetSub}>
+        Staff accounts can manage stores, orders and other people&apos;s accounts, so they&apos;re given by a Platform
+        Admin instead of signed up for.
+      </Text>
+
+      <View style={styles.steps}>
+        {STAFF_STEPS.map((step, index) => (
+          <View key={step.title} style={[styles.step, index < STAFF_STEPS.length - 1 && styles.stepDivider]}>
+            <View style={styles.stepNum}>
+              <Text style={styles.stepNumText}>{index + 1}</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.stepTitle}>{step.title}</Text>
+              <Text style={styles.stepBody}>{step.body}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.sheetNote}>
+        <Ionicons name="key-outline" size={15} color={Colors.light.secondary} style={{ marginTop: 1 }} />
+        <Text style={styles.sheetNoteText}>
+          You keep your own password — the Platform Admin never sees it.
+        </Text>
+      </View>
+
+      <Button label="Create a customer account" fontSize={15.5} onPress={onSignUp} fullWidth />
+      <Pressable
+        onPress={onClose}
+        style={({ pressed }) => [styles.ghost, pressed && { opacity: 0.6 }]}
+        accessibilityRole="button"
+      >
+        <Text style={styles.ghostText}>Close</Text>
+      </Pressable>
+    </Sheet>
+  );
+}
+
 export default function AdminLoginScreen({ navigation, route }) {
   const reduceMotion = useReducedMotion();
   const { isConnected } = useNetworkStatus();
@@ -92,6 +161,7 @@ export default function AdminLoginScreen({ navigation, route }) {
   const [alert, setAlert] = useState(null);
   const [loading, setLoading] = useState(false);
   const [welcome, setWelcome] = useState(null);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [shakes, shake] = useShakes();
 
   const passwordInputRef = useRef(null);
@@ -232,7 +302,10 @@ export default function AdminLoginScreen({ navigation, route }) {
       </FadeUp>
       <RiseTitle delay={T.title} skip={skip}>Staff sign in</RiseTitle>
       <FadeUp delay={T.sub} skip={skip}>
-        <Subtitle>For Store Managers and Platform Admins. Staff accounts are created by a Platform Admin.</Subtitle>
+        <Subtitle>For Store Managers and Platform Admins.</Subtitle>
+        <AuthLink accent onPress={() => setHelpOpen(true)} style={styles.helpLink}>
+          How do I get a staff account?
+        </AuthLink>
       </FadeUp>
 
       <AuthAlert alert={alert} />
@@ -300,6 +373,14 @@ export default function AdminLoginScreen({ navigation, route }) {
           Not staff? <AuthLink onPress={() => goToCustomerLogin()}>Back to customer log in</AuthLink>
         </Text>
       </FadeUp>
+      <StaffAccountSheet
+        visible={helpOpen}
+        onClose={() => setHelpOpen(false)}
+        onSignUp={() => {
+          setHelpOpen(false);
+          navigation.navigate('Signup');
+        }}
+      />
     </AuthScaffold>
   );
 }
@@ -325,4 +406,36 @@ const styles = StyleSheet.create({
   note: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   noteText: { fontSize: 11.5, color: NOTE_INK },
   footText: { fontSize: 13, color: FOOT_INK, textAlign: 'center' },
+  // The pill's light terracotta rather than Clay: Clay on ink is too dim
+  // to read comfortably at this size.
+  helpLink: { alignSelf: 'flex-start', color: PILL_INK, fontSize: 13.5, marginTop: -6, marginBottom: 18, paddingVertical: 4 },
+
+  sheetTitle: { fontSize: 18, fontWeight: '600', color: Colors.light.text, marginBottom: 4 },
+  sheetSub: { fontSize: 13, lineHeight: 19, color: Colors.light.icon, marginBottom: 14 },
+  steps: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+  },
+  step: { flexDirection: 'row', gap: 12, paddingVertical: 12 },
+  stepDivider: { borderBottomWidth: 1, borderBottomColor: Colors.light.border },
+  stepNum: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: Colors.light.tint,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  stepNumText: { fontSize: 12.5, fontWeight: '700', color: '#fff' },
+  stepTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 2 },
+  stepBody: { fontSize: 12.5, lineHeight: 18, color: Colors.light.icon },
+  sheetNote: { flexDirection: 'row', gap: 8, paddingHorizontal: 4, marginBottom: 16 },
+  sheetNoteText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: Colors.light.icon },
+  ghost: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  ghostText: { fontSize: 15.5, fontWeight: '600', color: Colors.light.icon },
 });
