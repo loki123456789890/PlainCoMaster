@@ -1,38 +1,40 @@
+// The Store Manager's home, from the approved store-manager preview: the
+// store's logo and name, a greeting, an ink card with the store's delivered
+// sales and a week of orders, "Needs your attention" (only what is actually
+// waiting), and a grid of everything the manager can open.
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  Platform,
-  ScrollView,
-} from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { showAppAlert } from '../../utils/appAlert';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  useReducedMotion,
-  FadeIn,
-  FadeInDown,
-} from 'react-native-reanimated';
 import { signOut } from 'firebase/auth';
-import { collection, collectionGroup, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, collectionGroup, doc, getDoc, onSnapshot, query, where } from 'firebase/firestore';
 import { auth, db } from '../../firebaseConfig';
 import { useAdmin } from '../../context/AdminContext';
 import { useProducts } from '../../context/ProductContext';
+import { useStores } from '../../context/StoreContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
-import { Colors, Spacing, Radius } from '../../constants/theme';
+import { Colors } from '../../constants/theme';
 import { MAIL_PROBLEM_STATUSES } from '../../constants/mail';
 import { stockLevel, parseStockLimit } from '../../utils/stock';
-import Card from '../../components/ui/Card';
-import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
-import ConfirmDialog from '../../components/ui/ConfirmDialog';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
+import Button from '../../components/ui/Button';
+import Sheet from '../../components/shop/Sheet';
+import Reveal from '../../components/shop/Reveal';
+import StoreLogo from '../../components/shop/StoreLogo';
+import { OfflineNotice } from '../../components/shop/TabScreen';
+
+const INK = Colors.light.text;
+const MUTED = Colors.light.icon;
+const CLAY = Colors.light.tint;
+const MOSS = Colors.light.secondary;
+const DANGER = Colors.light.danger;
+const CARD_LINE = '#EEE7DD';
+const ON_INK_MUTED = '#BDB3A9';
+const ON_INK_GOLD = '#F1D98A';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const getTimeGreeting = () => {
   const hour = new Date().getHours();
@@ -51,7 +53,110 @@ const formatCurrency = (value) => {
   return `${groupThousands(intPart)}.${decPart}`;
 };
 
-const formatCount = (value) => groupThousands(String(Number(value) || 0));
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+const startOfDay = (date) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+};
+
+// "Oldest waiting 2 days" — how long the longest-waiting open order has sat.
+const waitingLabel = (date) => {
+  if (!date) return null;
+  const days = Math.floor((Date.now() - date.getTime()) / DAY_MS);
+  if (days < 1) return 'Oldest came in today';
+  return `Oldest waiting ${plural(days, 'day', 'days')}`;
+};
+
+// Everything the dashboard reads from one store's orders, summed once per
+// snapshot rather than per render.
+//
+// "Delivered sales" is the confirmed figure: an order counts once it has
+// been delivered, which for Cash on Delivery is when the money is actually
+// collected. Everything placed but not yet delivered or cancelled is "still
+// open", and the unpaid-COD part of that is shown separately, because it is
+// money the store hasn't got and may never get.
+function summarizeOrders(docs) {
+  const today = startOfDay(Date.now());
+  const week = Array.from({ length: 7 }, (_, i) => {
+    const day = today - (6 - i) * DAY_MS;
+    return {
+      day,
+      label: i === 6 ? 'Today' : DAY_NAMES[new Date(day).getDay()],
+      count: 0,
+    };
+  });
+  const summary = {
+    total: docs.length,
+    deliveredValue: 0,
+    deliveredCount: 0,
+    openValue: 0,
+    unpaidCodValue: 0,
+    toPrepare: 0,
+    oldestToPrepare: null,
+    week,
+  };
+  docs.forEach((docSnap) => {
+    const data = docSnap.data();
+    const status = data.status || 'pending';
+    const total = Number(data.total || 0);
+    const created = data.createdAt?.toDate ? data.createdAt.toDate() : null;
+    if (status === 'cancelled') return;
+    if (status === 'delivered') {
+      summary.deliveredValue += total;
+      summary.deliveredCount += 1;
+    } else {
+      summary.openValue += total;
+      if (data.paymentMethod === 'cod' && data.paymentStatus !== 'paid') summary.unpaidCodValue += total;
+    }
+    if (status === 'pending' || status === 'processing') {
+      summary.toPrepare += 1;
+      if (created && (!summary.oldestToPrepare || created < summary.oldestToPrepare)) summary.oldestToPrepare = created;
+    }
+    if (created) {
+      const slot = week.find((w) => w.day === startOfDay(created));
+      if (slot) slot.count += 1;
+    }
+  });
+  return summary;
+}
+
+const EMPTY_SUMMARY = summarizeOrders([]);
+
+// One row of "Needs your attention": a tinted count, what it is, a detail.
+function TodoRow({ count, tone, title, detail, onPress, delay }) {
+  return (
+    <Reveal delay={delay}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [styles.todo, pressed && styles.pressedCard]}
+        accessibilityRole="button"
+        accessibilityLabel={`${count} ${title}${detail ? `. ${detail}` : ''}`}
+      >
+        <View style={[styles.todoCount, { backgroundColor: tone.bg }]}>
+          <Text style={[styles.todoCountText, { color: tone.ink }]}>{count > 99 ? '99+' : count}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.todoTitle}>{title}</Text>
+          {detail ? (
+            <Text style={styles.todoDetail} numberOfLines={1}>
+              {detail}
+            </Text>
+          ) : null}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color="#B3AAA0" />
+      </Pressable>
+    </Reveal>
+  );
+}
+
+const TONES = {
+  gold: { bg: '#F6EFE3', ink: '#6B5A2E' },
+  clay: { bg: '#F6E6DE', ink: '#A94F2F' },
+  danger: { bg: '#FBEDEB', ink: '#B42318' },
+  moss: { bg: '#EEF0EA', ink: '#37412F' },
+};
 
 export default function StoreManagerDashboardScreen({ navigation }) {
   const { logoutAsAdmin, storeId } = useAdmin();
@@ -62,20 +167,18 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     error: productsError,
     retryFetchProducts,
   } = useProducts();
+  const { getStore } = useStores();
+  const store = getStore(storeId);
   const { isConnected } = useNetworkStatus();
-  const reduceMotion = useReducedMotion();
+  const { width } = useWindowDimensions();
 
-  const [orderCount, setOrderCount] = useState(0);
+  const [managerName, setManagerName] = useState('');
+  const [orders, setOrders] = useState(EMPTY_SUMMARY);
   const [ordersLoading, setOrdersLoading] = useState(true);
   const [ordersError, setOrdersError] = useState(false);
 
-  // "Total Order Value" — deliberately not "Revenue"/"Sales". COD is the
-  // primary payment method and there's no payment gateway integration
-  // (per SRS), so an order's total isn't confirmed money collected, just
-  // the value of what was ordered.
-  const [totalOrderValue, setTotalOrderValue] = useState(0);
-
   const [openSupportCount, setOpenSupportCount] = useState(0);
+  const [latestSupport, setLatestSupport] = useState('');
   const [supportLoading, setSupportLoading] = useState(true);
   const [supportError, setSupportError] = useState(false);
   const [mailProblemCount, setMailProblemCount] = useState(0);
@@ -91,13 +194,22 @@ export default function StoreManagerDashboardScreen({ navigation }) {
   // leave a stat silently stuck on an unrecoverable listener.
   const [retryToken, setRetryToken] = useState(0);
 
+  // The manager's first name for the greeting. Read once: it's a greeting,
+  // not something to keep live, and a failure just leaves it off.
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    getDoc(doc(db, 'users', uid))
+      .then((snap) => setManagerName((snap.data()?.name || '').trim().split(/\s+/)[0] || ''))
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     // Every count on this screen is one store's, and a manager with no
     // store has none. Zeros rather than error states: the listeners would
     // be refused, and retrying cannot fix an unassigned account.
     if (!storeId) {
-      setOrderCount(0);
-      setTotalOrderValue(0);
+      setOrders(EMPTY_SUMMARY);
       setOpenSupportCount(0);
       setMailProblemCount(0);
       setOrdersLoading(false);
@@ -114,46 +226,32 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     // Same collectionGroup shape AdminOrdersScreen uses to read orders
     // across every user's subcollection, filtered to this manager's store
     // — the rules refuse any query that could return another store's
-    // order. No orderBy here since only the count and total are needed;
-    // the equality filter alone uses the single-field collection-group
-    // index on storeId declared in firestore.indexes.json.
+    // order. No orderBy: the equality filter alone uses the single-field
+    // collection-group index on storeId declared in firestore.indexes.json.
     const unsubscribeOrders = onSnapshot(
       query(collectionGroup(db, 'orders'), where('storeId', '==', storeId)),
       (snapshot) => {
-        setOrderCount(snapshot.size);
-
-        // Same calculation AdminOrdersScreen uses for its totalRevenue
-        // stat: sum of order totals, excluding cancelled orders. Reused
-        // here from the same snapshot rather than a second listener.
-        const value = snapshot.docs.reduce((sum, docSnap) => {
-          const data = docSnap.data();
-          if (data.status === 'cancelled') return sum;
-          return sum + Number(data.total || 0);
-        }, 0);
-        setTotalOrderValue(value);
-
+        setOrders(summarizeOrders(snapshot.docs));
         setOrdersLoading(false);
       },
       (error) => {
-        console.error('Error fetching order count:', error);
+        console.error('Error fetching orders:', error);
         setOrdersError(true);
         setOrdersLoading(false);
       }
     );
 
-    // Filtered server-side to only "open" requests — a dashboard count
-    // card only needs the number, so there's no reason to also download
-    // every already-resolved request just to filter them out client-side.
-    // And to this store's queue: questions about its own orders. The rules
-    // refuse any other request, so that filter is required, not tidy.
+    // Filtered server-side to only "open" requests, and to this store's
+    // queue: the rules refuse any other request, so that filter is
+    // required, not tidy. The newest one's message is quoted on the row.
     const unsubscribeSupport = onSnapshot(
-      query(
-        collection(db, 'supportRequests'),
-        where('storeId', '==', storeId),
-        where('status', '==', 'open')
-      ),
+      query(collection(db, 'supportRequests'), where('storeId', '==', storeId), where('status', '==', 'open')),
       (snapshot) => {
         setOpenSupportCount(snapshot.size);
+        const newest = snapshot.docs
+          .map((d) => d.data())
+          .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0))[0];
+        setLatestSupport((newest?.message || '').trim());
         setSupportLoading(false);
       },
       (error) => {
@@ -163,24 +261,13 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       }
     );
 
-    // Undelivered transactional email. Filtered server-side to the three
-    // statuses that mean something went wrong, for the same reason as the
-    // support query above: the card needs a count, not the history.
-    //
-    // The status list is MAIL_PROBLEM_STATUSES and not a literal, because
-    // this card links to AdminMailLogScreen, which filters by the same
-    // definition. Written out twice they drifted, and the failure is
-    // quiet and confusing: a card saying one email did not send, opening
-    // a screen that says everything sent.
-    //
-    // This store's mail only, like everything else here. Uses the
+    // Undelivered transactional email. The status list is
+    // MAIL_PROBLEM_STATUSES and not a literal, because the row links to
+    // AdminMailLogScreen, which filters by the same definition — written
+    // out twice they drifted. This store's mail only. Uses the
     // (storeId, status) index in firestore.indexes.json.
     const unsubscribeMail = onSnapshot(
-      query(
-        collection(db, 'mailLog'),
-        where('storeId', '==', storeId),
-        where('status', 'in', MAIL_PROBLEM_STATUSES)
-      ),
+      query(collection(db, 'mailLog'), where('storeId', '==', storeId), where('status', 'in', MAIL_PROBLEM_STATUSES)),
       (snapshot) => {
         setMailProblemCount(snapshot.size);
         setMailLoading(false);
@@ -202,21 +289,9 @@ export default function StoreManagerDashboardScreen({ navigation }) {
   const handleRetry = () => setRetryToken((t) => t + 1);
 
   // Which products need restocking, derived from the catalog this screen
-  // already holds — no extra listener, no extra read.
-  //
-  // Worth having at all because the customer-facing app has known this
-  // longer than the shop has: Productscreen renders "Only N left in stock"
-  // and an Out of Stock badge to shoppers, while this dashboard showed a
-  // bare product count. The shopkeeper found out an item had run out after
-  // the shopper did.
-  //
-  // Sold-out items sort ahead of merely low ones because they are the ones
-  // actively costing sales, and within each group the smallest number
-  // first. Products with no recorded stock are excluded by stockLevel()
-  // rather than counted as zero — see its note there.
-  //
-  // Declared above gridItems because that list reads restockItems for its
-  // badge.
+  // already holds. Sold-out items sort ahead of merely low ones because
+  // they are the ones actively costing sales. Products with no recorded
+  // stock are excluded by stockLevel() rather than counted as zero.
   const restockItems = products
     .map((product) => ({ product, level: stockLevel(product.stock) }))
     .filter(({ level }) => level === 'out' || level === 'low')
@@ -224,90 +299,11 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       if (a.level !== b.level) return a.level === 'out' ? -1 : 1;
       return parseStockLimit(a.product.stock) - parseStockLimit(b.product.stock);
     });
-
   const outOfStockCount = restockItems.filter(({ level }) => level === 'out').length;
 
-  // Neutral icon tiles by design: none of Products/Orders/Support map to an
-  // existing semantic color (Clay = actions, Moss = success, Gold = money,
-  // Rust = danger), so coloring them arbitrarily would be decoration, not
-  // meaning. The Support tile still gets a real signal — a Rust count
-  // badge when requests are open — reusing the same overlay pattern as the
-  // customer tab bar's cart-count badge, rather than inventing a new one.
-  //
-  // No "Users" tile: this dashboard is guarded to sellers only, and user
-  // account management is a platformAdmin-only screen per firestore.rules
-  // — a seller navigating there would just be bounced by the guard.
-  const gridItems = [
-    {
-      title: 'Products',
-      icon: 'cube-outline',
-      screen: 'AdminProducts',
-      count: products.length,
-      loading: productsLoading,
-      error: Boolean(productsError),
-      onRetry: retryFetchProducts,
-      // Reuses the same overlay dot the Support tile uses for its open
-      // queue, so "this needs attention" reads the same way in both
-      // places rather than inventing a second signal for one idea.
-      badge: restockItems.length > 0,
-    },
-    {
-      title: 'Orders',
-      icon: 'cart-outline',
-      screen: 'AdminOrders',
-      count: orderCount,
-      loading: ordersLoading,
-      error: ordersError,
-      onRetry: handleRetry,
-    },
-    {
-      title: 'Support',
-      icon: 'chatbubble-ellipses-outline',
-      screen: 'AdminSupport',
-      count: openSupportCount,
-      loading: supportLoading,
-      error: supportError,
-      onRetry: handleRetry,
-      badge: openSupportCount > 0,
-    },
-    {
-      // No count, deliberately, even though a "didn't match" tally would fit
-      // the badge pattern above: producing it means reading every recent
-      // review on dashboard load, and this dashboard opens on mobile data
-      // many times a shift. The queue itself sorts that out on arrival — it
-      // opens on the mismatch tab.
-      title: 'Reviews',
-      icon: 'star-outline',
-      screen: 'AdminReviews',
-      caption: 'Moderate',
-      loading: false,
-      error: false,
-    },
-    {
-      // No count: the other tiles count things needing attention, while an
-      // activity log only ever grows. A number here would read as a queue
-      // to clear rather than a history to consult.
-      title: 'Activity',
-      icon: 'time-outline',
-      screen: 'AdminActivity',
-      caption: 'View log',
-      loading: false,
-      error: false,
-    },
-    {
-      // What shoppers see about the store: its logo and description.
-      title: 'Store Profile',
-      icon: 'storefront-outline',
-      screen: 'AdminStoreProfile',
-      caption: 'Logo & about',
-      loading: false,
-      error: false,
-    },
-  ];
-
-  const handleLogout = () => {
+  const handleNavigate = (screen, params) => {
     Haptics.selectionAsync();
-    setLogoutVisible(true);
+    navigation.navigate(screen, params);
   };
 
   const confirmLogout = async () => {
@@ -317,10 +313,7 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       logoutAsAdmin();
       // Reset the nav stack so "back" can't return to admin screens
       // after the session is gone.
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'AdminLogin' }],
-      });
+      navigation.reset({ index: 0, routes: [{ name: 'AdminLogin' }] });
     } catch (error) {
       console.error('Error signing out:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -330,508 +323,575 @@ export default function StoreManagerDashboardScreen({ navigation }) {
     }
   };
 
-  const handleNavigate = (screen, params) => {
-    Haptics.selectionAsync();
-    navigation.navigate(screen, params);
-  };
+  // "Needs your attention": only what is actually waiting, most pressing
+  // first. A row for something at zero would be furniture the eye learns to
+  // skip. Reviews aren't counted here: producing that number means reading
+  // every recent review on each dashboard load, and the Reviews queue
+  // already opens on its "didn't match" tab.
+  const todos = [];
+  if (!ordersLoading && !ordersError && orders.toPrepare > 0) {
+    todos.push({
+      key: 'orders',
+      count: orders.toPrepare,
+      tone: TONES.gold,
+      title: orders.toPrepare === 1 ? 'Order to prepare' : 'Orders to prepare',
+      detail: waitingLabel(orders.oldestToPrepare),
+      onPress: () => handleNavigate('AdminOrders'),
+    });
+  }
+  if (!supportLoading && !supportError && openSupportCount > 0) {
+    todos.push({
+      key: 'support',
+      count: openSupportCount,
+      tone: TONES.clay,
+      title: openSupportCount === 1 ? 'Open support request' : 'Open support requests',
+      detail: latestSupport ? `“${latestSupport}”` : null,
+      onPress: () => handleNavigate('AdminSupport'),
+    });
+  }
+  if (!productsLoading && !productsError && restockItems.length > 0) {
+    todos.push({
+      key: 'stock',
+      count: restockItems.length,
+      tone: TONES.danger,
+      title: outOfStockCount === restockItems.length ? 'Sold out' : 'Low on stock',
+      detail:
+        outOfStockCount > 0 && outOfStockCount < restockItems.length
+          ? `${outOfStockCount} sold out, ${restockItems.length - outOfStockCount} running low`
+          : restockItems
+              .slice(0, 2)
+              .map(({ product }) => product.name)
+              .join(', ') + (restockItems.length > 2 ? ` +${restockItems.length - 2} more` : ''),
+      onPress: () => handleNavigate('AdminProducts', { filter: 'restock' }),
+    });
+  }
+  if (!mailLoading && !mailError && mailProblemCount > 0) {
+    todos.push({
+      key: 'mail',
+      count: mailProblemCount,
+      tone: TONES.danger,
+      title: mailProblemCount === 1 ? "Email didn't send" : "Emails didn't send",
+      detail: 'Receipts or support alerts that never reached anyone',
+      onPress: () => handleNavigate('AdminMailLog', { problemsOnly: true }),
+    });
+  }
+  const todosLoading = ordersLoading || supportLoading || productsLoading || mailLoading;
+  const anyError = ordersError || supportError || Boolean(productsError) || mailError;
 
-  const heroAccessibilityLabel = ordersLoading
-    ? 'Total order value, loading'
-    : ordersError
-    ? 'Total order value, unavailable'
-    : `Total order value, ₱${formatCurrency(totalOrderValue)}`;
+  const tileWidth = (Math.min(width, 520) - 32 - 20) / 3;
+  const tiles = [
+    {
+      title: 'Products',
+      icon: 'cube-outline',
+      screen: 'AdminProducts',
+      caption: productsLoading ? null : productsError ? 'Tap to retry' : `${products.length} listed`,
+      dot: restockItems.length,
+      onPress: productsError ? retryFetchProducts : null,
+    },
+    {
+      title: 'Orders',
+      icon: 'cart-outline',
+      screen: 'AdminOrders',
+      caption: ordersLoading ? null : ordersError ? 'Tap to retry' : `${orders.total} total`,
+      dot: orders.toPrepare,
+    },
+    {
+      title: 'Support',
+      icon: 'chatbubble-ellipses-outline',
+      screen: 'AdminSupport',
+      caption: supportLoading ? null : supportError ? 'Tap to retry' : `${openSupportCount} open`,
+      dot: openSupportCount,
+    },
+    {
+      title: 'Reviews',
+      icon: 'star-outline',
+      screen: 'AdminReviews',
+      caption: 'Moderate',
+    },
+    {
+      title: 'Activity',
+      icon: 'time-outline',
+      screen: 'AdminActivity',
+      caption: 'View log',
+    },
+    {
+      title: 'Store profile',
+      icon: 'storefront-outline',
+      screen: 'AdminStoreProfile',
+      caption: 'Logo & about',
+    },
+  ];
+
+  const weekMax = Math.max(1, ...orders.week.map((w) => w.count));
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ConfirmDialog
-        visible={logoutVisible}
-        onClose={() => setLogoutVisible(false)}
-        title="Log Out"
-        confirmLabel="Log Out"
-        confirmVariant="primary"
-        onConfirm={confirmLogout}
-        loading={loggingOut}
-        confirmDisabled={loggingOut}
-        cancelDisabled={loggingOut}
-      >
-        <Text style={styles.modalMessage}>Are you sure you want to log out of the Store Manager portal?</Text>
-      </ConfirmDialog>
-
-      <View style={styles.header}>
-        {/* "Admin Dashboard" named a role that no longer exists. This
-            screen is guarded to sellers only (App.js), so it says so —
-            and the subtitle states the boundary, which is the fastest
-            answer to "where did user management go?" for anyone who
-            remembers the old combined portal. */}
-        <View>
-          <Text style={styles.headerTitle}>Store Manager</Text>
-          <Text style={styles.headerSubtitle}>Products, orders, and support</Text>
-        </View>
-        <AnimatedPressable
-          onPress={handleLogout}
-          style={styles.logoutButton}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <Sheet visible={logoutVisible} onClose={() => setLogoutVisible(false)} locked={loggingOut}>
+        <Text style={styles.sheetTitle} accessibilityRole="header">
+          Log out of the Staff Portal?
+        </Text>
+        <Text style={styles.sheetText}>
+          Your store keeps running while you&apos;re away. Orders and messages will be waiting when you log back in.
+        </Text>
+        <Button label="Log out" fontSize={15.5} onPress={confirmLogout} loading={loggingOut} fullWidth />
+        <Pressable
+          onPress={() => setLogoutVisible(false)}
+          disabled={loggingOut}
+          style={({ pressed }) => [styles.ghost, pressed && { opacity: 0.6 }]}
           accessibilityRole="button"
-          accessibilityLabel="Log out"
         >
-          <Ionicons name="log-out-outline" size={22} color={Colors.light.danger} />
-        </AnimatedPressable>
-      </View>
-
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — dashboard numbers may be out of date.
-          </Text>
-        </View>
-      )}
+          <Text style={styles.ghostText}>Stay logged in</Text>
+        </Pressable>
+      </Sheet>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220)}>
-          {/* Just the greeting — the header two lines up already says
-              "Store Manager", so naming the role again here would repeat
-              it rather than tell anyone anything. */}
-          <Text style={styles.welcomeText}>{getTimeGreeting()}</Text>
-          <Text style={styles.subtext}>Manage your store from here</Text>
-        </Animated.View>
-
-        <Animated.View
-          entering={
-            reduceMotion ? undefined : FadeInDown.duration(240).delay(40).easing(EASE_OUT_QUART)
-          }
-        >
-          <AnimatedPressable
-            onPress={() => handleNavigate('AdminOrders')}
+        <Reveal delay={20} style={styles.head}>
+          <StoreLogo uri={store?.logoUrl} size={46} radius={14} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <View style={styles.roleRow}>
+              <View style={styles.roleDot} />
+              <Text style={styles.role}>Store Manager</Text>
+            </View>
+            <Text style={styles.storeName} numberOfLines={1}>
+              {store?.name || (storeId ? ' ' : 'No store assigned')}
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              setLogoutVisible(true);
+            }}
+            style={({ pressed }) => [styles.logout, pressed && { backgroundColor: '#F3EEE6' }]}
+            hitSlop={4}
             accessibilityRole="button"
-            accessibilityLabel={heroAccessibilityLabel}
+            accessibilityLabel="Log out"
+          >
+            <Ionicons name="log-out-outline" size={21} color={DANGER} />
+          </Pressable>
+        </Reveal>
+
+        {!isConnected ? (
+          <View style={styles.offlineWrap}>
+            <OfflineNotice>No internet connection. These numbers may be out of date.</OfflineNotice>
+          </View>
+        ) : null}
+
+        <Reveal delay={80} style={styles.greet}>
+          <Text style={styles.greetTitle} accessibilityRole="header">
+            {getTimeGreeting()}
+            {managerName ? `, ${managerName}` : ''}
+          </Text>
+          <Text style={styles.greetSub}>Here&apos;s what&apos;s happening in your store today.</Text>
+        </Reveal>
+
+        <Reveal delay={140}>
+          <Pressable
+            onPress={() => handleNavigate('AdminOrders')}
+            style={({ pressed }) => [styles.hero, pressed && { transform: [{ scale: 0.99 }] }]}
+            accessibilityRole="button"
+            accessibilityLabel={
+              ordersLoading
+                ? 'Delivered sales, loading'
+                : ordersError
+                  ? 'Delivered sales, unavailable'
+                  : `Delivered sales, ₱${formatCurrency(orders.deliveredValue)} from ${plural(orders.deliveredCount, 'order', 'orders')}`
+            }
             accessibilityHint="Opens order management"
           >
-            <Card variant="flat" style={styles.heroCard}>
-              <View style={styles.heroIcon}>
-                <Ionicons name="cash-outline" size={26} color={Colors.light.highlight} />
+            <View style={[styles.ring, styles.ringBig]} pointerEvents="none" />
+            <View style={[styles.ring, styles.ringSmall]} pointerEvents="none" />
+            <View style={styles.heroLabelRow}>
+              <Text style={styles.heroLabel}>Delivered sales · all time</Text>
+              <Text style={styles.heroPill}>Confirmed</Text>
+            </View>
+            {ordersLoading ? (
+              <SkeletonBlock style={styles.heroSkeleton} />
+            ) : ordersError ? (
+              <View style={styles.heroError}>
+                <Ionicons name="alert-circle-outline" size={16} color="#F2A99F" />
+                <Text style={styles.heroErrorText}>Couldn&apos;t load orders.</Text>
+                <Pressable onPress={handleRetry} hitSlop={8} accessibilityRole="button">
+                  <Text style={styles.heroRetry}>Retry</Text>
+                </Pressable>
               </View>
-              <View style={styles.heroTextGroup}>
-                <Text style={styles.heroLabel}>Total Order Value</Text>
-                {ordersLoading ? (
-                  <SkeletonBlock style={styles.heroSkeleton} />
-                ) : ordersError ? (
-                  <View style={styles.errorRow}>
-                    <Ionicons name="alert-circle-outline" size={16} color={Colors.light.danger} />
-                    <Text style={styles.errorText}>Couldn&apos;t load</Text>
-                    <Pressable
-                      onPress={handleRetry}
-                      hitSlop={8}
-                      accessibilityRole="button"
-                      accessibilityLabel="Retry loading order value"
-                    >
-                      {({ pressed }) => (
-                        <Text style={[styles.retryText, pressed && styles.retryTextPressed]}>
-                          Retry
-                        </Text>
-                      )}
-                    </Pressable>
-                  </View>
-                ) : (
-                  <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
-                    ₱{formatCurrency(totalOrderValue)}
-                  </Text>
-                )}
-                <Text style={styles.heroCaption}>
-                  Includes pending &amp; unpaid COD orders — not confirmed revenue
-                </Text>
+            ) : (
+              <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
+                ₱{formatCurrency(orders.deliveredValue)}
+              </Text>
+            )}
+            <Text style={styles.heroSub}>
+              From <Text style={styles.heroSubStrong}>{orders.deliveredCount}</Text> delivered{' '}
+              {orders.deliveredCount === 1 ? 'order' : 'orders'}
+            </Text>
+            <View style={styles.split}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.splitLabel}>Still open</Text>
+                <Text style={styles.splitValue}>₱{formatCurrency(orders.openValue)}</Text>
               </View>
-            </Card>
-          </AnimatedPressable>
-        </Animated.View>
-
-        {/* Restocking. Renders only when there is something to act on —
-            a permanent "0 items need restocking" card would be furniture
-            the eye learns to skip, which is exactly what this must not
-            become. Named items rather than a bare count, because "what do
-            I need to restock today" is answered by names, and a number
-            alone would just start a hunt through the product list. */}
-        {!productsLoading && !productsError && restockItems.length > 0 && (
-          <Animated.View
-            entering={
-              reduceMotion ? undefined : FadeInDown.duration(240).delay(60).easing(EASE_OUT_QUART)
-            }
-          >
-            <AnimatedPressable
-              onPress={() => handleNavigate('AdminProducts', { filter: 'restock' })}
-              accessibilityRole="button"
-              accessibilityLabel={
-                `${restockItems.length} ${restockItems.length === 1 ? 'product needs' : 'products need'} restocking` +
-                (outOfStockCount > 0 ? `, ${outOfStockCount} sold out` : '')
-              }
-              accessibilityHint="Opens the product list filtered to these items"
-            >
-              <Card variant="flat" style={styles.restockCard}>
-                <View style={styles.restockHeader}>
-                  <Ionicons
-                    name="alert-circle-outline"
-                    size={18}
-                    color={outOfStockCount > 0 ? Colors.light.danger : Colors.light.highlight}
-                  />
-                  <Text style={styles.restockTitle}>
-                    {restockItems.length} {restockItems.length === 1 ? 'item needs' : 'items need'} restocking
-                  </Text>
-                  <Ionicons name="chevron-forward" size={18} color={Colors.light.icon} />
-                </View>
-
-                {restockItems.slice(0, 3).map(({ product, level }) => (
-                  <View key={product.id} style={styles.restockRow}>
-                    <Text style={styles.restockName} numberOfLines={1}>
-                      {product.name}
-                    </Text>
-                    <Text
+              <View style={{ flex: 1 }}>
+                <Text style={styles.splitLabel}>Incl. unpaid COD</Text>
+                <Text style={styles.splitValue}>₱{formatCurrency(orders.unpaidCodValue)}</Text>
+              </View>
+            </View>
+            <Text style={styles.sparkLabel}>Orders, last 7 days</Text>
+            <View style={styles.spark} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              {orders.week.map((w, i) => {
+                const today = i === orders.week.length - 1;
+                return (
+                  <View key={w.day} style={styles.sparkCol}>
+                    <View
                       style={[
-                        styles.restockCount,
-                        level === 'out' ? styles.restockCountOut : styles.restockCountLow,
+                        styles.sparkBar,
+                        { height: (w.count / weekMax) * 34 + 4 },
+                        today && { backgroundColor: CLAY },
                       ]}
-                    >
-                      {level === 'out' ? 'Sold out' : `${parseStockLimit(product.stock)} left`}
-                    </Text>
+                    />
+                    <Text style={[styles.sparkDay, today && styles.sparkToday]}>{w.label}</Text>
                   </View>
-                ))}
+                );
+              })}
+            </View>
+          </Pressable>
+        </Reveal>
 
-                {restockItems.length > 3 && (
-                  <Text style={styles.restockMore}>
-                    +{restockItems.length - 3} more
-                  </Text>
-                )}
-              </Card>
-            </AnimatedPressable>
-          </Animated.View>
-        )}
-
-        {/* Undelivered email. Same rule as the restocking card above:
-            appears only when there is something to act on, because a
-            standing "0 emails failed" row is furniture the eye learns to
-            skip — and this one has to be noticed the one time it matters.
-            Links straight into the filtered view, since a card that counts
-            problems should not land you in a list where you have to find
-            them again. */}
-        {!mailLoading && !mailError && mailProblemCount > 0 && (
-          <Animated.View
-            entering={
-              reduceMotion ? undefined : FadeInDown.duration(240).delay(80).easing(EASE_OUT_QUART)
-            }
-          >
-            <AnimatedPressable
-              onPress={() => handleNavigate('AdminMailLog', { problemsOnly: true })}
-              accessibilityRole="button"
-              accessibilityLabel={
-                `${mailProblemCount} ${mailProblemCount === 1 ? 'email' : 'emails'} did not send`
-              }
-              accessibilityHint="Opens the email delivery list, filtered to these"
-            >
-              <Card variant="flat" style={styles.mailCard}>
-                <View style={styles.mailHeader}>
-                  <Ionicons name="mail-unread-outline" size={18} color={Colors.light.danger} />
-                  <Text style={styles.mailTitle}>
-                    {mailProblemCount} {mailProblemCount === 1 ? 'email' : 'emails'} didn&apos;t send
-                  </Text>
-                  <Ionicons name="chevron-forward" size={18} color={Colors.light.icon} />
-                </View>
-                <Text style={styles.mailBlurb}>
-                  Order receipts or support alerts that never reached anyone.
-                </Text>
-              </Card>
-            </AnimatedPressable>
-          </Animated.View>
-        )}
-
-        <View style={styles.grid}>
-          {gridItems.map((item, index) => {
-            const statusLabel = item.error
-              ? 'unavailable'
-              : item.loading
-              ? 'loading'
-              : item.caption ?? item.count;
-            return (
-              <Animated.View
-                key={item.title}
-                style={styles.gridItemWrap}
-                entering={
-                  reduceMotion
-                    ? undefined
-                    : FadeInDown.duration(240)
-                        .delay(80 + index * 40)
-                        .easing(EASE_OUT_QUART)
-                }
-              >
-                <AnimatedPressable
-                  onPress={() => handleNavigate(item.screen)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${item.title}, ${statusLabel}`}
-                  accessibilityHint={`Opens ${item.title} management`}
-                >
-                  <Card variant="flat" style={styles.gridCard}>
-                    <View style={styles.gridIconWrap}>
-                      <Ionicons name={item.icon} size={20} color={Colors.light.icon} />
-                      {item.badge && (
-                        <View style={styles.badgeDot}>
-                          <Text style={styles.badgeDotText} numberOfLines={1}>
-                            {item.count > 99 ? '99+' : item.count}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                    <View style={styles.gridTextGroup}>
-                      <Text style={styles.gridTitle} numberOfLines={1}>{item.title}</Text>
-                      {item.loading ? (
-                        <SkeletonBlock style={styles.gridSkeleton} />
-                      ) : item.error ? (
-                        <Pressable
-                          onPress={item.onRetry}
-                          hitSlop={8}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Retry loading ${item.title}`}
-                          style={styles.errorRowCompact}
-                        >
-                          {({ pressed }) => (
-                            <>
-                              <Ionicons name="alert-circle-outline" size={13} color={Colors.light.danger} />
-                              <Text
-                                style={[styles.retryTextCompact, pressed && styles.retryTextPressed]}
-                              >
-                                Retry
-                              </Text>
-                            </>
-                          )}
-                        </Pressable>
-                      ) : item.caption ? (
-                        // A tile can carry a caption instead of a number
-                        // when counting isn't meaningful — formatCount()
-                        // would render a missing count as "0", which reads
-                        // as "nothing here" rather than "not a count".
-                        <Text style={styles.gridCaption}>{item.caption}</Text>
-                      ) : (
-                        <Text style={styles.gridCount}>{formatCount(item.count)}</Text>
-                      )}
-                    </View>
-                  </Card>
-                </AnimatedPressable>
-              </Animated.View>
-            );
-          })}
+        <Reveal delay={200} style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>Needs your attention</Text>
+          {!todosLoading && todos.length > 0 ? (
+            <Text style={styles.sectionMeta}>{plural(todos.length, 'thing', 'things')}</Text>
+          ) : null}
+        </Reveal>
+        <View style={styles.todos}>
+          {todosLoading && todos.length === 0 ? (
+            <SkeletonBlock style={styles.todoSkeleton} />
+          ) : todos.length > 0 ? (
+            todos.map(({ key, ...todo }, i) => <TodoRow key={key} {...todo} delay={230 + i * 40} />)
+          ) : anyError ? (
+            <Pressable onPress={handleRetry} style={styles.allClear} accessibilityRole="button">
+              <Ionicons name="alert-circle-outline" size={20} color={DANGER} />
+              <Text style={styles.allClearText}>Some of this couldn&apos;t load. Tap to try again.</Text>
+            </Pressable>
+          ) : (
+            <Reveal delay={230} style={styles.allClear}>
+              <View style={styles.allClearIcon}>
+                <Ionicons name="checkmark" size={16} color="#fff" />
+              </View>
+              <Text style={styles.allClearText}>All caught up. Nothing is waiting on you right now.</Text>
+            </Reveal>
+          )}
         </View>
 
-        <View style={styles.bottomPadding} />
+        <Reveal delay={400} style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>Manage</Text>
+        </Reveal>
+        <View style={styles.grid}>
+          {tiles.map((tile, i) => (
+            <Reveal key={tile.title} delay={420 + i * 30} style={{ width: tileWidth }}>
+              <Pressable
+                onPress={tile.onPress || (() => handleNavigate(tile.screen))}
+                style={({ pressed }) => [styles.tile, pressed && styles.pressedCard]}
+                accessibilityRole="button"
+                accessibilityLabel={`${tile.title}${tile.caption ? `, ${tile.caption}` : ''}`}
+              >
+                {tile.dot > 0 ? (
+                  <View style={styles.tileDot}>
+                    <Text style={styles.tileDotText}>{tile.dot > 99 ? '99+' : tile.dot}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.tileIcon}>
+                  <Ionicons name={tile.icon} size={19} color={INK} />
+                </View>
+                <View>
+                  <Text style={styles.tileTitle} numberOfLines={1}>
+                    {tile.title}
+                  </Text>
+                  {tile.caption ? (
+                    <Text style={styles.tileCaption} numberOfLines={1}>
+                      {tile.caption}
+                    </Text>
+                  ) : (
+                    <SkeletonBlock style={styles.tileSkeleton} />
+                  )}
+                </View>
+              </Pressable>
+            </Reveal>
+          ))}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.light.background,
+  container: { flex: 1, backgroundColor: Colors.light.background },
+  content: {
+    paddingBottom: 30,
+    maxWidth: 520,
+    width: '100%',
+    alignSelf: 'center',
   },
-  header: {
+
+  head: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+  },
+  roleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  roleDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: MOSS },
+  role: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: MOSS,
+  },
+  storeName: { fontSize: 16, fontWeight: '600', color: INK, marginTop: 1 },
+  logout: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  offlineWrap: { paddingHorizontal: 16, paddingTop: 14 },
+
+  greet: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 14 },
+  greetTitle: {
+    fontSize: 26,
+    fontWeight: '600',
+    letterSpacing: -0.5,
+    lineHeight: 32,
+    color: INK,
+  },
+  greetSub: { fontSize: 13, color: MUTED, marginTop: 4 },
+
+  hero: {
+    marginHorizontal: 16,
+    marginBottom: 4,
+    borderRadius: 26,
+    backgroundColor: INK,
+    padding: 18,
+    paddingBottom: 16,
+    overflow: 'hidden',
+  },
+  ring: {
+    position: 'absolute',
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'rgba(250,247,242,0.08)',
+  },
+  ringBig: { right: -60, top: -70, width: 220, height: 220 },
+  ringSmall: { right: -20, top: -30, width: 140, height: 140 },
+  heroLabelRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    marginTop: Platform.OS === 'ios' ? 0 : 30,
   },
-  headerTitle: {
-    fontSize: 17,
+  heroLabel: { fontSize: 12, color: ON_INK_MUTED },
+  heroPill: {
+    fontSize: 10.5,
     fontWeight: '600',
-    color: Colors.light.text,
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: Colors.light.icon,
-    marginTop: 2,
-  },
-  logoutButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
-  },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-  modalMessage: { fontSize: 15, color: Colors.light.icon, textAlign: 'center', marginBottom: Spacing.lg },
-  content: {
-    padding: Spacing.md,
-  },
-  welcomeText: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: Colors.light.text,
-    marginBottom: Spacing.xs,
-  },
-  subtext: {
-    fontSize: 14,
-    color: Colors.light.icon,
-    marginBottom: Spacing.lg,
-  },
-  heroCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    marginBottom: Spacing.md,
-  },
-  heroIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: Colors.light.highlight + '15',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  heroTextGroup: { flex: 1 },
-  heroLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.light.icon,
-    marginBottom: 2,
+    color: '#CFE0BF',
+    backgroundColor: 'rgba(143,163,125,0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
   heroValue: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: Colors.light.highlight,
+    fontSize: 32,
+    fontWeight: '600',
+    letterSpacing: -0.6,
+    color: ON_INK_GOLD,
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
   },
   heroSkeleton: {
-    width: 150,
-    height: 26,
-    marginTop: 2,
+    width: 170,
+    height: 32,
+    marginVertical: 4,
+    borderRadius: 8,
+    opacity: 0.25,
   },
-  heroCaption: {
-    fontSize: 11,
-    color: Colors.light.icon,
-    marginTop: 4,
-    lineHeight: 15,
-  },
-  errorRow: {
+  heroError: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.xs,
+    gap: 6,
+    marginVertical: 10,
   },
-  errorText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.light.danger,
-  },
-  retryText: {
+  heroErrorText: { fontSize: 13, fontWeight: '600', color: '#F2A99F' },
+  heroRetry: {
     fontSize: 13,
     fontWeight: '700',
-    color: Colors.light.tint,
-    marginLeft: Spacing.xs,
+    color: '#E9A385',
+    marginLeft: 4,
   },
-  retryTextPressed: {
-    opacity: 0.6,
+  heroSub: { fontSize: 12, color: ON_INK_MUTED, marginTop: 2 },
+  heroSubStrong: { color: Colors.light.background, fontWeight: '600' },
+  split: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(250,247,242,0.1)',
   },
-  restockCard: { marginBottom: Spacing.md, gap: Spacing.sm },
-  restockHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  restockTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: Colors.light.text },
-  restockRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  restockName: { flex: 1, fontSize: 13, color: Colors.light.icon },
-  restockCount: { fontSize: 12, fontWeight: '600' },
-  // Rust for sold out, Gold for merely low. Sold out is the one actively
-  // costing sales; low is a heads-up, and giving both the danger color
-  // would flatten the difference the sort order exists to express.
-  restockCountOut: { color: Colors.light.danger },
-  restockCountLow: { color: Colors.light.highlight },
-  restockMore: { fontSize: 12, color: Colors.light.icon },
-  // Deliberately the same shape as the restocking card — both say "this
-  // needs attention", and giving them two different treatments would imply
-  // a difference in kind that isn't there.
-  mailCard: { marginBottom: Spacing.md, gap: Spacing.sm },
-  mailHeader: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  mailTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: Colors.light.text },
-  mailBlurb: { fontSize: 12, color: Colors.light.icon },
+  splitLabel: { fontSize: 11, color: ON_INK_MUTED },
+  splitValue: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.light.background,
+    marginTop: 1,
+  },
+  sparkLabel: { fontSize: 11, color: '#8B8178', marginTop: 14 },
+  spark: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 6,
+    height: 52,
+    marginTop: 6,
+  },
+  sparkCol: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 4,
+    height: '100%',
+  },
+  sparkBar: {
+    width: '100%',
+    borderTopLeftRadius: 5,
+    borderTopRightRadius: 5,
+    borderBottomLeftRadius: 2,
+    borderBottomRightRadius: 2,
+    backgroundColor: 'rgba(250,247,242,0.16)',
+  },
+  sparkDay: { fontSize: 9.5, color: '#8B8178' },
+  sparkToday: { color: Colors.light.background, fontWeight: '600' },
+
+  sectionHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginHorizontal: 22,
+    marginTop: 18,
+    marginBottom: 10,
+  },
+  sectionTitle: { fontSize: 15, fontWeight: '600', color: INK },
+  sectionMeta: { fontSize: 12, color: MUTED },
+
+  todos: { gap: 8, marginHorizontal: 16 },
+  todo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+  },
+  pressedCard: { transform: [{ scale: 0.98 }] },
+  todoCount: {
+    minWidth: 40,
+    height: 40,
+    paddingHorizontal: 6,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todoCountText: { fontSize: 16, fontWeight: '600' },
+  todoTitle: { fontSize: 13.5, fontWeight: '600', color: INK },
+  todoDetail: { fontSize: 11.5, color: MUTED, marginTop: 1 },
+  todoSkeleton: { height: 64, borderRadius: 18 },
+  allClear: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+  },
+  allClearIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: MOSS,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  allClearText: { flex: 1, fontSize: 13, color: MUTED, lineHeight: 18 },
+
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: Spacing.md,
+    gap: 10,
+    marginHorizontal: 16,
   },
-  gridItemWrap: {
-    width: '47%',
-    flexGrow: 1,
-  },
-  gridCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-  },
-  gridIconWrap: {
-    width: 40,
-    height: 40,
+  tile: {
+    paddingTop: 14,
+    paddingHorizontal: 10,
+    paddingBottom: 12,
     borderRadius: 20,
-    backgroundColor: Colors.light.border,
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+    gap: 10,
   },
-  badgeDot: {
+  tileIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: '#F3EEE6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileTitle: { fontSize: 12.5, fontWeight: '600', color: INK },
+  tileCaption: { fontSize: 10.5, color: MUTED, marginTop: 1 },
+  tileSkeleton: { width: 44, height: 10, borderRadius: 4, marginTop: 3 },
+  tileDot: {
     position: 'absolute',
-    top: -4,
-    right: -6,
+    top: 10,
+    right: 10,
     minWidth: 18,
     height: 18,
-    borderRadius: Radius.pill,
-    backgroundColor: Colors.light.danger,
-    borderWidth: 2,
-    borderColor: Colors.light.background,
-    paddingHorizontal: 4,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    backgroundColor: CLAY,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
+    zIndex: 1,
   },
-  badgeDotText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  gridTextGroup: { flex: 1 },
-  gridTitle: {
-    fontSize: 14,
+  tileDotText: { fontSize: 10, fontWeight: '600', color: '#fff' },
+
+  sheetTitle: {
+    fontSize: 19,
     fontWeight: '600',
-    color: Colors.light.text,
-    marginBottom: 2,
+    color: INK,
+    textAlign: 'center',
+    marginTop: 4,
   },
-  gridCount: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: Colors.light.text,
+  sheetText: {
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: MUTED,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 18,
   },
-  // Sits where a count would so tiles keep a common baseline, but at body
-  // weight — it's a label, not a figure, and shouldn't compete with the
-  // real numbers beside it.
-  gridCaption: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: Colors.light.icon,
-    paddingVertical: 3,
-  },
-  gridSkeleton: {
-    width: 40,
-    height: 20,
-    marginTop: 2,
-  },
-  errorRowCompact: {
-    flexDirection: 'row',
+  ghost: {
+    height: 46,
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    marginTop: 4,
   },
-  retryTextCompact: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.light.tint,
-  },
-  bottomPadding: { height: Spacing.xl },
+  ghostText: { fontSize: 15.5, fontWeight: '600', color: MUTED },
 });

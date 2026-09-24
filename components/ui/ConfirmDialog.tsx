@@ -19,9 +19,9 @@ interface ConfirmDialogProps {
   loading?: boolean;
   confirmDisabled?: boolean;
   cancelDisabled?: boolean;
-  /** An icon in a tile above the title; `danger` tints it red. */
+  /** An icon in a tile above the title; `danger` tints it red, `warning` gold. */
   icon?: keyof typeof Ionicons.glyphMap;
-  iconTone?: 'neutral' | 'danger';
+  iconTone?: 'neutral' | 'danger' | 'warning';
 }
 
 /**
@@ -67,8 +67,18 @@ export default function ConfirmDialog({
           entering={reduceMotion ? undefined : FadeIn.duration(200).easing(EASE_OUT_QUART)}
         >
           {icon ? (
-            <View style={[styles.iconTile, iconTone === 'danger' && styles.iconTileDanger]}>
-              <Ionicons name={icon} size={26} color={iconTone === 'danger' ? DANGER_INK : Colors.light.text} />
+            <View
+              style={[
+                styles.iconTile,
+                iconTone === 'danger' && styles.iconTileDanger,
+                iconTone === 'warning' && styles.iconTileWarning,
+              ]}
+            >
+              <Ionicons
+                name={icon}
+                size={26}
+                color={iconTone === 'danger' ? DANGER_INK : iconTone === 'warning' ? WARNING_INK : Colors.light.text}
+              />
             </View>
           ) : null}
           <Text style={styles.title}>{title}</Text>
@@ -86,6 +96,7 @@ export default function ConfirmDialog({
 }
 
 const DANGER_INK = '#B42318';
+const WARNING_INK = '#8C6D0C';
 
 const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
@@ -107,5 +118,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   iconTileDanger: { backgroundColor: '#FBEDEB' },
+  iconTileWarning: { backgroundColor: '#F6EFE3' },
   title: { textAlign: 'center', fontSize: 18, fontWeight: '700', marginBottom: 10, color: Colors.light.text },
 });
