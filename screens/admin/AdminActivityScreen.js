@@ -1,29 +1,75 @@
+// Store Activity (and, for the Platform Admin, Account Activity), from the
+// approved store-tools preview: a read-only notice, search, type chips, and
+// the log as a timeline grouped by day. An order's status change shows as
+// "from → to" pills; tapping any entry opens its server time and id.
 import React, { useState, useEffect, useMemo } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TextInput,
-  Platform,
-  Pressable,
-} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { useReducedMotion, FadeIn, FadeInDown } from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
+import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
-import { db } from '../../firebaseConfig';
+import { auth, db } from '../../firebaseConfig';
 import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
-import { Colors, Spacing, Radius } from '../../constants/theme';
-import { getPortalLabel } from '../../constants/roles';
+import { Colors } from '../../constants/theme';
 import { STORE_ACTIVITY, ACCOUNT_ACTIVITY, ACTIONS } from '../../utils/activityLog';
-import Card from '../../components/ui/Card';
-import EmptyState from '../../components/ui/EmptyState';
-import Button from '../../components/ui/Button';
-import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
-import { EASE_OUT_QUART } from '../../constants/motion';
+import Reveal from '../../components/shop/Reveal';
+import { TopBar, OfflineNotice, BigEmpty } from '../../components/shop/TabScreen';
+import StoreChip from '../../components/admin/StoreChip';
+import { EASE_OUT_QUINT } from '../../constants/motion';
+
+const INK = Colors.light.text;
+const MUTED = Colors.light.icon;
+const CLAY = Colors.light.tint;
+const MOSS = Colors.light.secondary;
+const GOLD = '#8C6D0C';
+const ERR = '#B42318';
+const LINE = Colors.light.border;
+const CARD_LINE = '#EEE7DD';
+
+// Types, each with the actions it covers, a color and an icon. Deletion and
+// deactivation are drawn in red: those are the entries someone scanning for
+// "what went wrong" is looking for.
+const STORE_TYPES = [
+  { key: 'order', label: 'Orders', one: 'Order', color: CLAY, icon: 'cube-outline', actions: [ACTIONS.ORDER_STATUS] },
+  {
+    key: 'product',
+    label: 'Products',
+    one: 'Product',
+    color: MOSS,
+    icon: 'pricetag-outline',
+    actions: [ACTIONS.PRODUCT_CREATED, ACTIONS.PRODUCT_UPDATED, ACTIONS.PRODUCT_DELETED],
+  },
+  {
+    key: 'review',
+    label: 'Reviews',
+    one: 'Review',
+    color: GOLD,
+    icon: 'star-outline',
+    actions: [ACTIONS.REVIEW_MODERATED],
+  },
+];
+const ACCOUNT_TYPES = [
+  {
+    key: 'role',
+    label: 'Roles',
+    one: 'Role',
+    color: CLAY,
+    icon: 'shield-checkmark-outline',
+    actions: [ACTIONS.USER_ROLE],
+  },
+  {
+    key: 'status',
+    label: 'Accounts',
+    one: 'Account',
+    color: MOSS,
+    icon: 'person-outline',
+    actions: [ACTIONS.USER_STATUS],
+  },
+];
+const DANGER_ACTIONS = [ACTIONS.PRODUCT_DELETED];
 
 // One screen, two disjoint data sources. Which log you see follows from
 // your role and nothing else: a Store Manager reads store operations, a
@@ -36,61 +82,152 @@ const VIEWS = {
   seller: {
     collectionName: STORE_ACTIVITY,
     title: 'Store Activity',
-    subtitle: 'Product and order changes',
+    notice:
+      "A read-only record of product, order and review actions in your store. Entries can't be edited or deleted by anyone.",
     emptyTitle: 'No activity yet',
-    emptySubtitle: 'Product edits and order status changes will appear here.',
-    searchPlaceholder: 'Search activity...',
+    emptyText: 'Product edits, order status changes and hidden reviews will appear here.',
+    types: STORE_TYPES,
   },
   platformAdmin: {
     collectionName: ACCOUNT_ACTIVITY,
     title: 'Account Activity',
-    subtitle: 'Role and status changes',
+    notice: "A read-only record of role and account changes. Entries can't be edited or deleted by anyone.",
     emptyTitle: 'No account changes yet',
-    emptySubtitle: 'Role grants and account activations will appear here.',
-    searchPlaceholder: 'Search account changes...',
+    emptyText: 'Role grants and account activations will appear here.',
+    types: ACCOUNT_TYPES,
   },
 };
 
-// Neutral icons throughout except deletion and deactivation, which get
-// Rust: those are the two entries someone scanning this list for "what
-// went wrong" is actually looking for.
-const ACTION_META = {
-  [ACTIONS.PRODUCT_CREATED]: { icon: 'add-circle-outline', tone: 'neutral' },
-  [ACTIONS.PRODUCT_UPDATED]: { icon: 'create-outline', tone: 'neutral' },
-  [ACTIONS.PRODUCT_DELETED]: { icon: 'trash-outline', tone: 'danger' },
-  [ACTIONS.ORDER_STATUS]: { icon: 'cube-outline', tone: 'neutral' },
-  // Neutral, not danger: this one action covers hiding a review AND
-  // restoring it, and half of that is not a destructive act.
-  [ACTIONS.REVIEW_MODERATED]: { icon: 'eye-off-outline', tone: 'neutral' },
-  [ACTIONS.USER_ROLE]: { icon: 'shield-checkmark-outline', tone: 'neutral' },
-  [ACTIONS.USER_STATUS]: { icon: 'person-outline', tone: 'neutral' },
+// Colors for the actor's initial, picked by a hash of the email so the same
+// person keeps the same color down the whole list.
+const AVATAR_COLORS = [MOSS, CLAY, GOLD, '#2F4B6B', '#6B5A2E'];
+const avatarColor = (email) => {
+  let h = 0;
+  for (let i = 0; i < email.length; i += 1) h = (h * 31 + email.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
 };
 
-// Reads as "how long ago" up to a week, then as a date. A log is usually
-// consulted about something recent ("what changed this morning?"), and an
-// exact timestamp is less useful than an elapsed one for that question.
-function formatWhen(date) {
-  if (!date) return 'Just now';
-  const diffMs = Date.now() - date.getTime();
-  const minutes = Math.floor(diffMs / 60000);
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+function dayLabel(date) {
+  if (!date) return 'Today';
+  const days = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
+}
+const timeLabel = (date) =>
+  date ? date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : 'Just now';
+const fullTime = (date) =>
+  date
+    ? `${date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}, ${date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`
+    : 'Waiting for the server';
+
+// The summaries are free text written by utils/activityLog.js's callers.
+// Two shapes carry structure worth drawing, so they're split here:
+//   "Order #X — status Pending → Processing, 2 item(s) returned to stock"
+//   "Ana Cruz — role Customer → Store Manager" (AdminUsersScreen)
+//   "Edited "Jacket" — changed price, stock"
+// Anything else is shown as written.
+function parseSummary(summary) {
+  const status = summary.match(/^(.*?)\s+—\s+(?:status|role)\s+(.+?)\s+→\s+(.+?)(?:,\s*(.+))?$/);
+  if (status) return { head: status[1], from: status[2], to: status[3], extra: status[4] || '' };
+  const changed = summary.match(/^(.*?)\s+—\s+changed\s+(.+)$/);
+  if (changed) return { head: changed[1], extra: `Changed: ${changed[2]}` };
+  return { head: summary };
+}
+
+// Draws quoted names ("Knit Poncho") and order numbers in semibold.
+function Emphasized({ text }) {
+  const parts = text.split(/("[^"]+"|#[A-Za-z0-9]+)/);
+  return (
+    <Text style={styles.evText}>
+      {parts.map((part, i) =>
+        /^("[^"]+"|#[A-Za-z0-9]+)$/.test(part) ? (
+          <Text key={i} style={styles.b}>
+            {part.startsWith('"') ? part.slice(1, -1) : part}
+          </Text>
+        ) : (
+          part
+        )
+      )}
+    </Text>
+  );
 }
 
 function EntrySkeleton() {
   return (
-    <Card variant="flat" style={styles.entryCard}>
-      <SkeletonBlock style={styles.iconSkeleton} />
-      <View style={styles.entryBody}>
-        <SkeletonBlock style={{ width: '80%', height: 13, borderRadius: Radius.sm, marginBottom: 8 }} />
-        <SkeletonBlock style={{ width: '45%', height: 11, borderRadius: Radius.sm }} />
-      </View>
-    </Card>
+    <View style={[styles.ev, { marginLeft: 28 }]}>
+      <SkeletonBlock style={{ width: 70, height: 11, borderRadius: 6, marginBottom: 10 }} />
+      <SkeletonBlock style={{ width: '85%', height: 13, borderRadius: 6, marginBottom: 8 }} />
+      <SkeletonBlock style={{ width: '45%', height: 11, borderRadius: 6 }} />
+    </View>
+  );
+}
+
+function Entry({ entry, type, isYou, open, onToggle, delay }) {
+  const reduceMotion = useReducedMotion();
+  const parsed = parseSummary(entry.summary);
+  const danger = DANGER_ACTIONS.includes(entry.action);
+  const color = danger ? ERR : type?.color || MUTED;
+  return (
+    <Reveal delay={delay}>
+      <Pressable
+        onPress={onToggle}
+        style={({ pressed }) => [styles.ev, pressed && { transform: [{ scale: 0.985 }] }]}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${type?.one || 'Entry'}, ${timeLabel(entry.createdAt)}. ${entry.summary}. By ${entry.actorEmail}${isYou ? ', you' : ''}.`}
+        accessibilityHint={open ? 'Hides the entry details' : 'Shows the entry details'}
+      >
+        <View style={[styles.dot, { backgroundColor: color }]} />
+        <View style={styles.evTop}>
+          <Ionicons name={danger ? 'trash-outline' : type?.icon || 'ellipse-outline'} size={13} color={color} />
+          <Text style={[styles.evType, { color }]}>{danger ? 'Deleted' : type?.one || 'Other'}</Text>
+          <Text style={styles.evTime}>{timeLabel(entry.createdAt)}</Text>
+        </View>
+
+        <View style={styles.evBody}>
+          <Emphasized text={parsed.head} />
+          {parsed.from ? (
+            <View style={styles.pills}>
+              <Text style={[styles.pill, styles.pillFrom]}>{parsed.from}</Text>
+              <Text style={{ color: CLAY }}>→</Text>
+              <Text style={[styles.pill, styles.pillTo]}>{parsed.to}</Text>
+            </View>
+          ) : null}
+          {parsed.extra ? <Text style={styles.evExtra}>{parsed.extra}</Text> : null}
+        </View>
+
+        <View style={styles.who}>
+          <View style={[styles.av, { backgroundColor: avatarColor(entry.actorEmail) }]}>
+            <Text style={styles.avText}>{entry.actorEmail.charAt(0).toUpperCase()}</Text>
+          </View>
+          <Text style={styles.whoText} numberOfLines={1}>
+            {entry.actorEmail}
+            {isYou ? ' (you)' : ''}
+          </Text>
+        </View>
+
+        {open ? (
+          <Animated.View
+            style={styles.more}
+            entering={reduceMotion ? undefined : FadeIn.duration(250).easing(EASE_OUT_QUINT)}
+          >
+            <Text style={styles.dt}>Server time</Text>
+            <Text style={styles.dd} selectable>
+              {fullTime(entry.createdAt)}
+            </Text>
+            <Text style={styles.dt}>Entry ID</Text>
+            <Text style={styles.dd} selectable>
+              {entry.id}
+            </Text>
+            <Text style={styles.dt}>Status</Text>
+            <Text style={styles.dd}>Append-only · can&apos;t be changed</Text>
+          </Animated.View>
+        ) : null}
+      </Pressable>
+    </Reveal>
   );
 }
 
@@ -105,9 +242,13 @@ export default function AdminActivityScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [typeKey, setTypeKey] = useState('all');
+  const [openId, setOpenId] = useState(null);
   const [retryToken, setRetryToken] = useState(0);
+  const [stuck, setStuck] = useState(false);
   const { isConnected } = useNetworkStatus();
-  const reduceMotion = useReducedMotion();
+  const myEmail = auth.currentUser?.email || '';
 
   useEffect(() => {
     // A manager with no store has no store log to read.
@@ -161,124 +302,170 @@ export default function AdminActivityScreen({ navigation }) {
     return () => unsubscribe();
   }, [view.collectionName, retryToken, scopedToStore, storeId]);
 
+  const typeOf = (action) => view.types.find((t) => t.actions.includes(action));
+
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return entries;
+    const type = view.types.find((t) => t.key === typeKey);
     return entries.filter(
       (entry) =>
-        entry.summary.toLowerCase().includes(q) ||
-        entry.actorEmail.toLowerCase().includes(q) ||
-        entry.targetLabel.toLowerCase().includes(q)
+        (!type || type.actions.includes(entry.action)) &&
+        (!q ||
+          entry.summary.toLowerCase().includes(q) ||
+          entry.actorEmail.toLowerCase().includes(q) ||
+          entry.targetLabel.toLowerCase().includes(q))
     );
-  }, [entries, searchQuery]);
+  }, [entries, searchQuery, typeKey, view.types]);
+
+  // Consecutive entries under one day heading. The list is already newest
+  // first, so a new heading starts whenever the day changes.
+  const days = useMemo(() => {
+    const out = [];
+    filtered.forEach((entry) => {
+      const label = dayLabel(entry.createdAt);
+      if (!out.length || out[out.length - 1].label !== label) out.push({ label, entries: [] });
+      out[out.length - 1].entries.push(entry);
+    });
+    return out;
+  }, [filtered]);
+
+  const chips = [{ key: 'all', label: 'All', color: '#B3AAA0' }, ...view.types];
+  const searching = Boolean(searchQuery.trim()) || typeKey !== 'all';
+  let index = 0;
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <AnimatedPressable
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
-        </AnimatedPressable>
-        <View style={styles.headerTitleGroup}>
-          <Text style={styles.headerTitle} accessibilityRole="header">{view.title}</Text>
-          <Text style={styles.headerRole}>{getPortalLabel(role)}</Text>
-        </View>
-        <View style={styles.placeholder} />
-      </View>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <TopBar
+        title={view.title}
+        onBack={() => navigation.goBack()}
+        stuck={stuck}
+        right={scopedToStore ? <StoreChip /> : null}
+      />
 
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — this list may be out of date.
-          </Text>
-        </View>
-      )}
-
-      <Animated.View
-        style={styles.searchContainer}
-        entering={reduceMotion ? undefined : FadeInDown.duration(240).delay(40).easing(EASE_OUT_QUART)}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}
+        onScroll={(e) => setStuck(e.nativeEvent.contentOffset.y > 4)}
+        scrollEventThrottle={32}
+        keyboardShouldPersistTaps="handled"
       >
-        <Ionicons name="search-outline" size={20} color={Colors.light.icon} style={styles.searchIcon} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder={view.searchPlaceholder}
-          placeholderTextColor={Colors.light.icon}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          accessibilityLabel="Search activity"
-        />
-        {searchQuery.length > 0 && (
-          <Pressable
-            onPress={() => setSearchQuery('')}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Clear search"
-          >
-            <Ionicons name="close-circle" size={20} color={Colors.light.icon} />
-          </Pressable>
-        )}
-      </Animated.View>
+        {!isConnected ? <OfflineNotice>No internet connection. This list may be out of date.</OfflineNotice> : null}
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContainer}>
-        {loading ? (
-          <>
-            <EntrySkeleton />
-            <EntrySkeleton />
-            <EntrySkeleton />
-          </>
-        ) : loadError ? (
-          <View style={styles.emptyStateWrap}>
-            <EmptyState
+        <View style={styles.pad}>
+          <Reveal delay={20} style={styles.lock}>
+            <Ionicons name="lock-closed-outline" size={16} color={MUTED} />
+            <Text style={styles.lockText}>{view.notice}</Text>
+          </Reveal>
+
+          <Reveal delay={60}>
+            <View style={[styles.search, searchFocused && styles.searchFocused]}>
+              <Ionicons name="search-outline" size={18} color={MUTED} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search activity"
+                placeholderTextColor={MUTED}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
+                accessibilityLabel="Search activity"
+                returnKeyType="search"
+              />
+              {searchQuery ? (
+                <Pressable
+                  onPress={() => setSearchQuery('')}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
+                >
+                  <Ionicons name="close-circle" size={18} color={MUTED} />
+                </Pressable>
+              ) : null}
+            </View>
+          </Reveal>
+
+          <Reveal delay={100}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chips}
+              accessibilityRole="tablist"
+            >
+              {chips.map((chip) => {
+                const on = typeKey === chip.key;
+                return (
+                  <Pressable
+                    key={chip.key}
+                    onPress={() => {
+                      if (on) return;
+                      Haptics.selectionAsync();
+                      setTypeKey(chip.key);
+                    }}
+                    style={[styles.chip, on && styles.chipOn]}
+                    accessibilityRole="tab"
+                    accessibilityState={{ selected: on }}
+                  >
+                    <View style={[styles.chipDot, { backgroundColor: chip.color }]} />
+                    <Text style={[styles.chipText, on && { color: Colors.light.background }]}>{chip.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </Reveal>
+
+          {loading ? (
+            <>
+              <EntrySkeleton />
+              <EntrySkeleton />
+              <EntrySkeleton />
+            </>
+          ) : scopedToStore && !storeId ? (
+            <BigEmpty
+              icon="storefront-outline"
+              title="No store assigned"
+              text="Your account isn't assigned to a store yet. Ask a Platform Admin to assign you one in Manage Users."
+            />
+          ) : loadError ? (
+            <BigEmpty
               icon="cloud-offline-outline"
               title="Couldn't load activity"
-              subtitle="Check your connection and try again."
+              text="Check your connection and try again."
+              actionLabel="Try again"
+              onAction={() => setRetryToken((t) => t + 1)}
             />
-            <View style={styles.emptyStateAction}>
-              <Button variant="outline" label="Retry" onPress={() => setRetryToken((t) => t + 1)} />
-            </View>
-          </View>
-        ) : filtered.length > 0 ? (
-          filtered.map((entry, index) => {
-            const meta = ACTION_META[entry.action] ?? { icon: 'ellipse-outline', tone: 'neutral' };
-            const tint = meta.tone === 'danger' ? Colors.light.danger : Colors.light.icon;
-            return (
-              <Animated.View
-                key={entry.id}
-                entering={
-                  reduceMotion
-                    ? undefined
-                    : FadeIn.duration(200).delay(Math.min(index, 8) * 25)
-                }
-              >
-                <Card variant="flat" style={styles.entryCard}>
-                  <View style={[styles.iconCircle, { backgroundColor: tint + '15' }]}>
-                    <Ionicons name={meta.icon} size={18} color={tint} />
-                  </View>
-                  <View style={styles.entryBody}>
-                    <Text style={styles.entrySummary}>{entry.summary}</Text>
-                    <Text style={styles.entryMeta}>
-                      {entry.actorEmail} · {formatWhen(entry.createdAt)}
-                    </Text>
-                  </View>
-                </Card>
-              </Animated.View>
-            );
-          })
-        ) : (
-          <View style={styles.emptyStateWrap}>
-            <EmptyState
-              icon={searchQuery ? 'search-outline' : 'time-outline'}
-              title={searchQuery ? 'No matches' : view.emptyTitle}
-              subtitle={searchQuery ? 'Try a different search term.' : view.emptySubtitle}
+          ) : days.length === 0 ? (
+            <BigEmpty
+              icon={searching ? 'search-outline' : 'time-outline'}
+              title={searching ? 'No matching activity' : view.emptyTitle}
+              text={searching ? 'Try another filter or search.' : view.emptyText}
             />
-          </View>
-        )}
+          ) : (
+            days.map((day) => (
+              <View key={day.label}>
+                <Text style={styles.day} accessibilityRole="header">
+                  {day.label}
+                </Text>
+                <View style={styles.tl}>
+                  <View style={styles.rail} />
+                  {day.entries.map((entry) => (
+                    <Entry
+                      key={entry.id}
+                      entry={entry}
+                      type={typeOf(entry.action)}
+                      isYou={Boolean(myEmail) && entry.actorEmail === myEmail}
+                      open={openId === entry.id}
+                      onToggle={() => {
+                        Haptics.selectionAsync();
+                        setOpenId((id) => (id === entry.id ? null : entry.id));
+                      }}
+                      delay={Math.min(index++, 8) * 45}
+                    />
+                  ))}
+                </View>
+              </View>
+            ))
+          )}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -286,75 +473,118 @@ export default function AdminActivityScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
-  header: {
+  scroll: { paddingBottom: 40 },
+  pad: { paddingHorizontal: 16 },
+
+  lock: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    marginTop: Platform.OS === 'ios' ? 0 : 30,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitleGroup: { alignItems: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
-  headerRole: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-    color: Colors.light.icon,
-    marginTop: 2,
-  },
-  placeholder: { width: 40 },
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: Spacing.md,
+    gap: 10,
     paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: '#F3EEE6',
+    marginBottom: 12,
   },
-  offlineBannerText: { flex: 1, fontSize: 12, color: Colors.light.danger },
-  searchContainer: {
+  lockText: { flex: 1, fontSize: 11.5, lineHeight: 16, color: MUTED },
+
+  search: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.light.background,
-    margin: 16,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-  },
-  searchIcon: { marginRight: 8 },
-  searchInput: { flex: 1, height: 44, fontSize: 14, color: Colors.light.text },
-  listContainer: { padding: 16, paddingTop: 0 },
-  entryCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: Spacing.sm,
-    padding: 12,
+    gap: 10,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: LINE,
+    paddingHorizontal: 14,
     marginBottom: 10,
   },
-  iconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+  searchFocused: { borderColor: CLAY },
+  searchInput: { flex: 1, fontSize: 14, color: INK, paddingVertical: 0, outlineStyle: 'none' },
+
+  chips: { gap: 6, paddingBottom: 2 },
+  chip: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 6,
+    height: 34,
+    paddingLeft: 10,
+    paddingRight: 12,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: LINE,
+    backgroundColor: '#fff',
   },
-  iconSkeleton: { width: 34, height: 34, borderRadius: 17 },
-  entryBody: { flex: 1 },
-  entrySummary: { fontSize: 14, lineHeight: 19, color: Colors.light.text },
-  entryMeta: { fontSize: 11, color: Colors.light.icon, marginTop: 4 },
-  emptyStateWrap: { paddingHorizontal: Spacing.md },
-  emptyStateAction: { marginTop: -Spacing.sm, marginBottom: Spacing.md, paddingHorizontal: Spacing.xl },
+  chipOn: { backgroundColor: INK, borderColor: INK },
+  chipDot: { width: 8, height: 8, borderRadius: 4 },
+  chipText: { fontSize: 12, fontWeight: '500', color: INK },
+
+  day: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1.3,
+    textTransform: 'uppercase',
+    color: MUTED,
+    marginTop: 16,
+    marginBottom: 8,
+    marginHorizontal: 4,
+  },
+  tl: { paddingLeft: 28 },
+  rail: { position: 'absolute', left: 11, top: 8, bottom: 16, width: 2, borderRadius: 2, backgroundColor: '#E9E1D6' },
+  ev: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  dot: {
+    position: 'absolute',
+    left: -24,
+    top: 16,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 3,
+    borderColor: Colors.light.background,
+  },
+  evTop: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  evType: { fontSize: 10.5, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
+  evTime: { marginLeft: 'auto', fontSize: 11, color: MUTED },
+  evBody: { marginTop: 6, marginBottom: 8, gap: 5 },
+  evText: { fontSize: 13.5, lineHeight: 19.5, color: INK },
+  b: { fontWeight: '600' },
+  pills: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  pill: {
+    fontSize: 11,
+    fontWeight: '600',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  pillFrom: { backgroundColor: '#F3EEE6', color: '#A89F97', textDecorationLine: 'line-through' },
+  pillTo: { backgroundColor: '#F6E6DE', color: '#A94F2F' },
+  evExtra: { fontSize: 12, color: MUTED },
+  who: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  av: { width: 20, height: 20, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  avText: { fontSize: 9.5, fontWeight: '600', color: '#fff' },
+  whoText: { flex: 1, fontSize: 11.5, color: MUTED },
+  more: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: LINE,
+    borderStyle: 'dashed',
+  },
+  dt: { fontSize: 11, color: MUTED, marginTop: 2 },
+  dd: {
+    fontSize: 11.5,
+    color: INK,
+    fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
+    marginBottom: 4,
+  },
 });

@@ -167,12 +167,13 @@ function OrderCardSkeleton() {
   );
 }
 
-export default function AdminOrdersScreen({ navigation }) {
+export default function AdminOrdersScreen({ navigation, route }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [ordersError, setOrdersError] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  // Support's "Order #…" link arrives with the order number as `search`.
+  const [searchQuery, setSearchQuery] = useState(route?.params?.search || '');
   const [activeTab, setActiveTab] = useState('all');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showOrderModal, setShowOrderModal] = useState(false);
