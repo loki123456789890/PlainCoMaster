@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 16):
+- **New use case — Reset Password** (fills the gap listed in section 18):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -1329,7 +1329,206 @@ sheet; the Deactivate confirmation; and logging out to Landing.
 
 ---
 
-## 16. Still outstanding — SRS-side only, no code changes needed
+## 16. Delivery Address, Help & Support and store page redesign
+
+> **Status (24 Sep 2026):** built and tested against the local emulators;
+> reaches production with the next release (web app and APK). No
+> database, security-rule or Cloud Function changes. Support requests are
+> stored in the same fields as before.
+
+### What changed — suggested wording
+
+> **Delivery Address** opens with a "Use my current location" card that
+> shows whether it is searching, has found the address, or could not
+> (for example, when location permission or Location Services is off).
+> Fields filled from the location are tinted until the customer edits
+> them. The form is grouped under **Recipient** (full name, mobile
+> number) and **Address** (street, city, ZIP code, province). The mobile
+> number is entered after a fixed "+63" and must be a Philippine mobile
+> number; the ZIP code must be four digits. Saving shows a confirmation
+> and returns to the previous screen. The saved address is the one
+> checkout copies onto each order.
+>
+> **Help & Support** has a search that highlights matching words in the
+> questions and answers and opens the best match, and four topic tiles
+> (Orders, Shipping, Returns, Account) that narrow the questions. It
+> shows the support hours with a live "Open now" or "Closed now" label,
+> the four contact channels (Email, Call, WhatsApp, Messenger), and a
+> "Share PlainCo" action. "Still stuck? Send us a request" opens a form
+> in a sheet: the customer picks a topic, says whether the request is
+> about an order, and writes a message. A request about an order goes to
+> the store that sold it; any other goes to the PlainCo team.
+>
+> **A store's page** (opened from "Shop by store" or a product's "Sold
+> by") has a banner in the store's category colour, an ID card with the
+> logo, what the store sells, the month it joined, and three figures
+> (items, rating, and how many buyers said items were as described), the
+> store's description, its rating and review summary, and its items.
+> The search, and the category tabs for a store selling both kinds, stay
+> pinned under the header as the page scrolls.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-A1 | The Delivery Address screen can fill the address from the device's location, and states when it cannot (permission denied, Location Services off, no address found). |
+| FR-A2 | The mobile number must be ten digits starting with 9 after "+63", and is saved as "+63 9XX XXX XXXX". A number saved in an older format (e.g. "09171234567") is converted when the screen opens. |
+| FR-A3 | The ZIP code must be four digits. Full name, street, city and province are required. |
+| FR-A4 | Help's search matches question and answer text, highlights the matches and opens the best one; topic tiles narrow the list to one category. |
+| FR-A5 | A support request needs a topic and a message of 10–500 characters. The topic is stored at the start of the message ("Wrong item received: …"). |
+| FR-A6 | A support request about an order is routed to the store that sold that order; any other request to the PlainCo team. The confirmation names who will reply. |
+| FR-A7 | Help shows whether support is open now, from the published hours (Mon–Fri 9 AM–8 PM, Sat 9 AM–6 PM, Sun closed). |
+| FR-A8 | A store's page shows its item count, its rating (or "New store" for a store under 30 days old with no reviews), and the share of reviews saying items matched the description. |
+
+### Differences from the previous version
+
+- **Delivery Address:** the phone field now requires a PH mobile number
+  and the ZIP code four digits; neither was checked before.
+- **Help:** two FAQ answers were out of date and are corrected — profile
+  editing is now possible, and a password is changed through "Forgot
+  password?" on Log In. Categories are shortened to four tiles. The
+  request form moved into a sheet and gained a topic.
+- **Store page:** it is now its own screen rather than a filtered view of
+  Shop.
+- **Where the app differs from the approved preview, and why:**
+  - The request topic is written into the message, because the security
+    rules accept only the existing support-request fields.
+  - The "Request sent" screen shows no reference number; nothing in the
+    app could look one up.
+  - Under Save, the address screen says "Your address is only used for
+    delivery", not "Only you and the store can see this": a Platform
+    Admin can also read user records.
+  - The contact channels and support hours are the app's existing ones
+    (no SMS).
+  - Store ratings use the app's existing gold stars and print whole
+    averages as "3", not "3.0".
+
+### Screens — module list (section 7)
+
+**Store page** is a new screen (previously part of Shop). **Delivery
+Address** and **Help & Support** are redesigned.
+
+### Limitations
+
+- Filling the address from location needs permission and a network
+  connection; the result should be checked before saving.
+- The "Open now" label uses the device's clock, not Philippine time.
+
+### Verification
+
+Compared with the approved preview in a browser, then run against the
+local emulators with a customer account: an invalid mobile number and an
+empty ZIP code rejected; "09181234567" formatted as "+63 918 123 4567"
+and saved, shown back on Profile; a search for "refund" opening the
+matching answer; the Shipping tile filtering the questions; a request
+sent with the "Wrong item received" topic; and a store page opened from
+Shop, scrolled, and searched.
+
+---
+
+## 17. Product details, size guide, add to cart, checkout and order confirmation redesign
+
+> **Status (24 Sep 2026):** built and tested against the local emulators
+> (see Verification for what could not be tested locally); reaches
+> production with the next release (web app and APK). No database,
+> security-rule or Cloud Function changes. Prices, stock and the order
+> itself are still checked and written by the server (section 4).
+
+### What changed — suggested wording
+
+> **Product details** opens on a large photo, with the category, name,
+> price, rating, and a "Sold by" card for the store below it, then the
+> colour, size and quantity choices, the description and the reviews.
+> When the store has recorded measurements, a **Size guide** link opens
+> a sheet with them for every size; tapping a row chooses that size.
+> After a size is chosen, its measurements are shown under the size
+> buttons. The quantity line states the stock ("Only 3 left", "One of a
+> kind" for a single ukay-ukay piece, "Sold out").
+>
+> **Add to Cart** confirms in place: the button turns green, the photo
+> moves into the cart icon, and a short "Added to cart" panel shows the
+> colour, size and quantity with a "View cart" button. **Buy Now** shows
+> the total for the chosen quantity and goes straight to checkout.
+>
+> **Checkout** shows where the customer is ("Cart/Item → Review & pay →
+> Done") and the order in cards: **Deliver to**, **Items**, **Payment
+> method** and **Order summary**. Each payment method has a short
+> description, and a note says that online payments are simulated
+> (sandbox) or, for Cash on Delivery, to prepare the amount. If an item
+> sells out or runs short before the order is placed, a notice at the
+> top says so, confirms nothing was charged, and links back to change
+> the order.
+>
+> **Order placed** confirms the order with its order number (one per
+> store for a multi-store cart), status, payment method and total, with
+> "View My Orders" and "Continue shopping".
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-B1 | The customer must choose a size before adding to the cart or buying; a product offered in only one size has it chosen already. Trying without one says "Please choose a size first." |
+| FR-B2 | The size guide appears only when the store has recorded measurements, shows every size the product offers with the measured fields and unit, and lets the customer choose a size from it. |
+| FR-B3 | Quantity cannot exceed the product's stock; the stock is stated beside it, and a sold-out product cannot be added or bought. |
+| FR-B4 | Adding to the cart confirms without a dialog and offers a way to the cart for about four seconds. |
+| FR-B5 | Placing an order without a payment method is refused with an on-screen message beside the button, and the payment options are highlighted. Without a delivery address it is refused with a prompt to add one. |
+| FR-B6 | When the server refuses an order because an item sold out or has too little stock, checkout shows which item and how many remain, states that nothing was charged, and links back to the cart or product. |
+| FR-B7 | "Place order" is disabled while the device is offline, and checkout says so. |
+
+### Differences from the previous version
+
+- **No size is chosen automatically** (previously the first size was, so
+  an order could be placed in a size nobody picked).
+- Add to Cart previously opened a dialog; the size guide was a centred
+  window without size selection; Buy Now showed the unit price rather
+  than the total for the quantity.
+- Checkout's missing-payment and sold-out messages were dialogs.
+- The order confirmation no longer repeats the item list, delivery
+  address and "What happens next"; they are in My Orders.
+- **Where the app differs from the approved preview, and why:**
+  - No empty stars are shown for a product with no reviews, only "No
+    reviews yet", because empty stars read as a zero rating.
+  - The "Sold by" card keeps the store's rating.
+  - Stock is one number per product, not per size, as stored.
+  - The shoe diagram appears only in the footwear size guide; other kinds
+    of item show the table only.
+  - The confirmation offers "View My Orders", not "View order": the order
+    screen needs the full stored order, which is not available at that
+    moment.
+
+### Screens — module list (section 7)
+
+No new screens. **Product Details**, **Checkout** and **Order
+Confirmation** are redesigned; the **Size Guide** is now a sheet on the
+product screen.
+
+### Limitations
+
+- A size guide is only as accurate as the store's own measurements, and
+  says so.
+- Stock can still change between Add to Cart and checkout; the server's
+  check at checkout is the one that counts (FR-B6).
+
+### Verification
+
+Compared with the approved preview in a browser, then run against the
+local emulators with a customer account, a saved address and a footwear
+product with measurements for two sizes: no size preselected; Add to
+Cart without a size refused with the message; choosing size M from the
+size guide and its measurements appearing; the "Added to cart" panel
+and the cart count rising to 1; the panel closing after four seconds;
+the header turning solid on scroll; Buy Now opening checkout with the
+address and item; Place order without a payment method refused; and
+choosing Cash on Delivery clearing the message.
+
+The order confirmation, the sold-out notice and the offline state were
+not run locally: they follow a real order, and the functions emulator
+sends real email. They should be checked with one test order on the
+release build.
+
+---
+
+## 18. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
@@ -1342,16 +1541,17 @@ documentation gaps:
   the stock checkout decremented, and is permitted only from Pending or
   Processing. See section 4a — the SRS documents neither the restoration
   nor the restriction.
-- The Help screen offers four contact channels, a common-issues picker,
-  an app-share action, and published support hours, beyond the
-  "searchable FAQ" the SRS describes.
+- The Help screen offers four contact channels, topic filters, a support
+  request form routed to the right store, an app-share action, and
+  published support hours, beyond the "searchable FAQ" the SRS describes
+  (section 16).
 
 **Category C — both mention it, but describe it differently**
 - Signup postcondition: the SRS says the user is redirected to the login
   page; the app signs them in and goes to Home, because account creation
   authenticates them automatically.
-- "Out of Stock notification": the app disables the Add to Cart button
-  and shows a badge rather than displaying a message.
+- "Out of Stock notification": the app marks the product "Sold out" and
+  disables Add to Cart and Buy Now rather than displaying a message.
 - "Invalid Quantity" error: quantity is a stepper with a disabled
   decrement, so zero or negative input is structurally impossible and the
   error branch the SRS describes cannot occur.
