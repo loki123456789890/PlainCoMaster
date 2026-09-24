@@ -36,6 +36,7 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import DialogButtonRow from '../../components/ui/DialogButtonRow';
 import Sheet from '../../components/shop/Sheet';
 import Reveal from '../../components/shop/Reveal';
+import ResultToast from '../../components/admin/ResultToast';
 import { OfflineNotice } from '../../components/shop/TabScreen';
 import { ROLES, getRoleLabel, getPortalLabel, ROLE_CUSTOMER, ROLE_PLATFORM_ADMIN, ROLE_SELLER } from '../../constants/roles';
 import { logAccountActivity, ACTIONS } from '../../utils/activityLog';
@@ -71,6 +72,10 @@ const ROLE_TONES = {
   [ROLE_CUSTOMER]: { bg: '#F1EBE2', ink: '#5A534B', bar: '#E9DCCB', icon: null },
 };
 const roleTone = (role) => ROLE_TONES[role] || ROLE_TONES[ROLE_CUSTOMER];
+
+// The outline a row gets for a few seconds after it changes, matching the
+// result toast's tone; 'undo' is the quiet one after an Undo.
+const FLASH_TONES = { ok: MOSS, off: '#BFB3A6', role: CLAY, undo: '#BFB3A6' };
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -260,10 +265,17 @@ export default function AdminUsersScreen({ navigation }) {
   const [actionUser, setActionUser] = useState(null);
   const lastActionUser = useRef(null);
   if (actionUser) lastActionUser.current = actionUser;
-  // The account the Deactivate sheet is asking about, kept the same way.
-  const [deactivateTarget, setDeactivateTarget] = useState(null);
-  const lastDeactivateTarget = useRef(null);
-  if (deactivateTarget) lastDeactivateTarget.current = deactivateTarget;
+  // The account the Deactivate / Reactivate sheet is asking about, kept the
+  // same way. Which of the two it is follows the account's status when the
+  // sheet opened.
+  const [statusTarget, setStatusTarget] = useState(null);
+  const lastStatusTarget = useRef(null);
+  if (statusTarget) lastStatusTarget.current = statusTarget;
+  // The result toast, and the row outlined after a change ({ id, tone }).
+  const [toast, setToast] = useState(null);
+  const [flash, setFlash] = useState(null);
+  const flashTimer = useRef(null);
+  useEffect(() => () => clearTimeout(flashTimer.current), []);
 
   useEffect(() => {
     setLoading(true);
@@ -443,6 +455,93 @@ export default function AdminUsersScreen({ navigation }) {
     setShowEditModal(true);
   };
 
+  // Results are reported with a toast, not an alert: the action was already
+  // confirmed, so its result shouldn't cost another tap. The changed row is
+  // outlined for a few seconds too, so the change stays visible after the
+  // toast has gone.
+  const markRow = (id, tone) => {
+    clearTimeout(flashTimer.current);
+    setFlash({ id, tone });
+    flashTimer.current = setTimeout(() => setFlash(null), 5000);
+  };
+  const showResult = (userId, result) => {
+    setToast({ id: Date.now(), ...result });
+    markRow(userId, result.tone);
+  };
+
+  const reportWriteError = (error, message) => {
+    console.error(message, error);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    const isNetworkError = !isConnected || error.code === 'unavailable';
+    showAppAlert(
+      isNetworkError ? 'No Internet Connection' : 'Error',
+      isNetworkError ? 'Network connection lost. Please check your connection and try again.' : message
+    );
+  };
+
+  // A toast's Undo writes the previous value back straight away: it only
+  // reverses what the admin confirmed seconds ago, so it doesn't ask again.
+  // The reversal is logged like any other change.
+  const undoWith = (userId, write, failMessage) => async () => {
+    setToast(null);
+    try {
+      await write();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      markRow(userId, 'undo');
+    } catch (error) {
+      reportWriteError(error, failMessage);
+    }
+  };
+
+  // Writes `role` (and its store) over what `user` has now, and logs it.
+  // Shared by Save and by the toast's Undo. Throws on failure.
+  const writeRole = async (user, role, storeId, newStoreName = '') => {
+    // Field-scoped update — only "role" and "storeId" are sent,
+    // matching the hasOnly(['role', 'isActive', 'storeId']) allowlist in
+    // firestore.rules for the platformAdmin branch. Name is edited by the
+    // account owner from their own Profile screen, not here.
+    //
+    // A Store Manager must name a store in the same write, and anyone
+    // else must carry none (storeAssignmentIsValid). Opening a new store
+    // rides in the same batch, so a store is never created without the
+    // manager it was opened for, nor a manager assigned to a store that
+    // failed to be created.
+    const becomingSeller = role === ROLE_SELLER;
+    const batch = writeBatch(db);
+    let assignedStoreId = null;
+    let assignedStoreName = null;
+    if (becomingSeller && storeId === NEW_STORE) {
+      const storeRef = doc(collection(db, 'stores'));
+      assignedStoreName = newStoreName.trim();
+      batch.set(storeRef, { name: assignedStoreName, createdAt: serverTimestamp() });
+      assignedStoreId = storeRef.id;
+    } else if (becomingSeller) {
+      assignedStoreId = storeId;
+      assignedStoreName = storeName(assignedStoreId);
+    }
+    batch.update(doc(db, 'users', user.id), {
+      role,
+      storeId: assignedStoreId ?? deleteField(),
+    });
+    await batch.commit();
+    // Granting or revoking staff access is the single most consequential
+    // action this screen performs, so it's the one the log most needs to
+    // carry — including what the role was before.
+    logAccountActivity({
+      action: ACTIONS.USER_ROLE,
+      targetId: user.id,
+      targetLabel: user.name,
+      // A manager moved between stores keeps their role, so that case
+      // names the move rather than logging "Store Manager → Store Manager".
+      summary:
+        user.role === role && assignedStoreName
+          ? `${user.name} — now runs ${assignedStoreName}`
+          : `${user.name} — role ${getRoleLabel(user.role)} → ${getRoleLabel(role)}` +
+            (assignedStoreName ? ` at ${assignedStoreName}` : ''),
+    });
+    return { storeId: assignedStoreId, storeName: assignedStoreName };
+  };
+
   const handleUpdateUser = async () => {
     if (isSelf(selectedUser.id)) {
       // Defensive — role chips and Save are disabled whenever the modal is
@@ -453,123 +552,89 @@ export default function AdminUsersScreen({ navigation }) {
       return;
     }
 
+    const user = selectedUser;
+    const role = editFormData.role;
+    const before = roleLine(user.role, user.storeId);
     setUpdating(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      // Field-scoped update — only "role" and "storeId" are sent,
-      // matching the hasOnly(['role', 'isActive', 'storeId']) allowlist in
-      // firestore.rules for the platformAdmin branch. Name is edited by the
-      // account owner from their own Profile screen, not here.
-      //
-      // A Store Manager must name a store in the same write, and anyone
-      // else must carry none (storeAssignmentIsValid). Opening a new store
-      // rides in the same batch, so a store is never created without the
-      // manager it was opened for, nor a manager assigned to a store that
-      // failed to be created.
-      const previousRole = selectedUser.role;
-      const becomingSeller = editFormData.role === ROLE_SELLER;
-      const batch = writeBatch(db);
-      let assignedStoreId = null;
-      let assignedStoreName = null;
-      if (becomingSeller && editFormData.storeId === NEW_STORE) {
-        const storeRef = doc(collection(db, 'stores'));
-        assignedStoreName = editFormData.newStoreName.trim();
-        batch.set(storeRef, { name: assignedStoreName, createdAt: serverTimestamp() });
-        assignedStoreId = storeRef.id;
-      } else if (becomingSeller) {
-        assignedStoreId = editFormData.storeId;
-        assignedStoreName = storeName(assignedStoreId);
-      }
-      batch.update(doc(db, 'users', selectedUser.id), {
-        role: editFormData.role,
-        storeId: assignedStoreId ?? deleteField(),
-      });
-      await batch.commit();
-      // Granting or revoking staff access is the single most consequential
-      // action this screen performs, so it's the one the log most needs to
-      // carry — including what the role was before.
-      logAccountActivity({
-        action: ACTIONS.USER_ROLE,
-        targetId: selectedUser.id,
-        targetLabel: selectedUser.name,
-        // A manager moved between stores keeps their role, so that case
-        // names the move rather than logging "Store Manager → Store Manager".
-        summary:
-          previousRole === editFormData.role && assignedStoreName
-            ? `${selectedUser.name} — now runs ${assignedStoreName}`
-            : `${selectedUser.name} — role ${getRoleLabel(previousRole)} → ` +
-              `${getRoleLabel(editFormData.role)}` +
-              (assignedStoreName ? ` at ${assignedStoreName}` : ''),
-      });
+      const assigned = await writeRole(user, role, editFormData.storeId, editFormData.newStoreName);
       setShowEditModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert(
-        'Role changed',
-        `${selectedUser.name} is now ${getRoleLabel(editFormData.role)}` +
-          (assignedStoreName ? ` at ${assignedStoreName}.` : '.')
-      );
+      showResult(user.id, {
+        tone: 'role',
+        title: role === user.role ? 'Store changed' : 'Role changed',
+        detail: user.name,
+        diff: [before, getRoleLabel(role), assigned.storeName],
+        // Undo puts back the old role and store. A store opened by this
+        // change stays open (stores are never deleted), just unassigned.
+        onUndo: undoWith(
+          user.id,
+          () => writeRole({ ...user, role }, user.role, user.storeId),
+          `Could not change ${user.name}'s role back. Please try again.`
+        ),
+      });
     } catch (error) {
-      console.error('Error updating user:', error);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-
-      const isNetworkError = !isConnected || error.code === 'unavailable';
-      if (isNetworkError) {
-        showAppAlert(
-          'No Internet Connection',
-          'Network connection lost. Please check your connection and try again.'
-        );
-        return;
-      }
-
-      showAppAlert('Error', 'Could not update user. Please try again.');
+      reportWriteError(error, 'Could not update user. Please try again.');
     } finally {
       setUpdating(false);
     }
   };
 
-  // `onSuccess` runs before the confirmation alert, so the Deactivate
-  // sheet is already closing when the alert appears.
-  const setUserActive = async (user, newStatus, onSuccess) => {
+  const writeActive = async (user, isActive) => {
+    await updateDoc(doc(db, 'users', user.id), { isActive });
+    // Deactivation is this project's stand-in for deletion (SRS
+    // §2.4 keeps accounts for auditability), so it needs to leave
+    // a trace of its own — otherwise an account can go dark with
+    // nothing recording who did it.
+    logAccountActivity({
+      action: ACTIONS.USER_STATUS,
+      targetId: user.id,
+      targetLabel: user.name,
+      summary: `${user.name} — account ${isActive ? 'activated' : 'deactivated'}`,
+    });
+  };
+
+  const setUserActive = async (user, newStatus) => {
     setTogglingUserId(user.id);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      await updateDoc(doc(db, 'users', user.id), { isActive: newStatus });
-      // Deactivation is this project's stand-in for deletion (SRS
-      // §2.4 keeps accounts for auditability), so it needs to leave
-      // a trace of its own — otherwise an account can go dark with
-      // nothing recording who did it.
-      logAccountActivity({
-        action: ACTIONS.USER_STATUS,
-        targetId: user.id,
-        targetLabel: user.name,
-        summary: `${user.name} — account ${newStatus ? 'activated' : 'deactivated'}`,
-      });
-      onSuccess?.();
+      await writeActive(user, newStatus);
+      setStatusTarget(null);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert(
-        newStatus ? 'Account activated' : 'Account deactivated',
-        newStatus ? `${user.name} can sign in again.` : `${user.name} can no longer sign in.`
+      showResult(
+        user.id,
+        newStatus
+          ? {
+              tone: 'ok',
+              title: `${user.name} reactivated`,
+              detail: `Can sign in as ${roleLine(user.role, user.storeId)}`,
+              onUndo: undoWith(
+                user.id,
+                () => writeActive(user, false),
+                `Could not deactivate ${user.name} again. Please try again.`
+              ),
+            }
+          : {
+              tone: 'off',
+              title: `${user.name} deactivated`,
+              detail: 'Sign-in blocked. Nothing was deleted.',
+              onUndo: undoWith(
+                user.id,
+                () => writeActive(user, true),
+                `Could not reactivate ${user.name}. Please try again.`
+              ),
+            }
       );
     } catch (error) {
-      console.error('Error updating user status:', error);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-
-      const isNetworkError = !isConnected || error.code === 'unavailable';
-      if (isNetworkError) {
-        showAppAlert(
-          'No Internet Connection',
-          'Network connection lost. Please check your connection and try again.'
-        );
-      } else {
-        showAppAlert('Error', 'Could not update user status. Please try again.');
-      }
+      reportWriteError(error, 'Could not update user status. Please try again.');
     } finally {
       setTogglingUserId(null);
     }
   };
 
-  // Deactivating gets a sheet that spells out what happens; activating
-  // only gives access back, so a plain confirm is enough.
+  // Both directions confirm with a sheet that says what happens: red for
+  // taking access away, moss for giving it back.
   const handleToggleUserStatus = (user) => {
     if (isSelf(user.id)) {
       // Defensive — the status toggle is disabled on the signed-in
@@ -577,20 +642,11 @@ export default function AdminUsersScreen({ navigation }) {
       // either way.
       return;
     }
-
     Haptics.selectionAsync();
-    if (user.isActive) {
-      setDeactivateTarget(user);
-      return;
-    }
-    showAppAlert('Activate account?', `${user.name} will be able to sign in again.`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Activate', onPress: () => setUserActive(user, true) },
-    ]);
+    setStatusTarget(user);
   };
 
-  const confirmDeactivate = () =>
-    setUserActive(deactivateTarget, false, () => setDeactivateTarget(null));
+  const confirmStatus = () => setUserActive(statusTarget, !statusTarget.isActive);
 
   const formatDate = (dateInput) => {
     if (!dateInput) return 'Unknown';
@@ -662,14 +718,16 @@ export default function AdminUsersScreen({ navigation }) {
     );
 
   const shownAction = lastActionUser.current;
-  const shownDeactivate = lastDeactivateTarget.current;
-  const deactivating = Boolean(shownDeactivate) && togglingUserId === shownDeactivate.id;
+  const shownStatus = lastStatusTarget.current;
+  // True when the sheet is giving access back rather than taking it away.
+  const reactivating = Boolean(shownStatus) && !shownStatus.isActive;
+  const statusBusy = Boolean(shownStatus) && togglingUserId === shownStatus.id;
   // Who else keeps a store running if this manager goes.
   const deactivateStore =
-    shownDeactivate?.role === ROLE_SELLER && shownDeactivate.storeId
+    shownStatus?.role === ROLE_SELLER && shownStatus.storeId
       ? {
-          name: storeName(shownDeactivate.storeId) || 'Their store',
-          others: activeManagersAt(shownDeactivate.storeId, shownDeactivate.id),
+          name: storeName(shownStatus.storeId) || 'Their store',
+          others: activeManagersAt(shownStatus.storeId, shownStatus.id),
         }
       : null;
   const openQuestions = openGeneralSupport;
@@ -826,13 +884,13 @@ export default function AdminUsersScreen({ navigation }) {
               <View style={[styles.actionGroup, { marginTop: 10 }]}>
                 <SheetAction
                   icon={shownAction.isActive ? 'person-remove-outline' : 'person-add-outline'}
-                  title={shownAction.isActive ? 'Deactivate account' : 'Activate account'}
+                  title={shownAction.isActive ? 'Deactivate account' : 'Reactivate account'}
                   detail={
                     !isConnected
                       ? 'You’re offline'
                       : shownAction.isActive
                         ? 'Blocks sign-in. Orders and history are kept.'
-                        : 'Let them sign in again'
+                        : 'Lets them sign in again, with the same role'
                   }
                   danger={shownAction.isActive}
                   noChevron
@@ -845,64 +903,90 @@ export default function AdminUsersScreen({ navigation }) {
         ) : null}
       </Sheet>
 
-      {/* Deactivate: says exactly what happens, including whether a store is
-          left without anyone running it, before the one red button. */}
+      {/* Deactivate / Reactivate: says exactly what happens before the one
+          button that does it. Red takes access away; moss gives it back.
+          The confirm button stays Clay for reactivating — Clay is the only
+          call-to-action color (DESIGN.md), and moss marks what's done. */}
       <Sheet
-        visible={Boolean(deactivateTarget)}
-        onClose={() => setDeactivateTarget(null)}
-        locked={deactivating}
+        visible={Boolean(statusTarget)}
+        onClose={() => setStatusTarget(null)}
+        locked={statusBusy}
         footer={
           <DialogButtonRow
             buttons={[
               {
-                label: 'Keep active',
+                label: reactivating ? 'Not now' : 'Keep active',
                 variant: 'secondary',
-                onPress: () => setDeactivateTarget(null),
-                disabled: deactivating,
+                onPress: () => setStatusTarget(null),
+                disabled: statusBusy,
               },
               {
-                label: isConnected ? 'Deactivate' : 'Offline',
-                variant: 'danger',
-                onPress: confirmDeactivate,
-                loading: deactivating,
-                disabled: deactivating || !isConnected,
+                label: !isConnected ? 'Offline' : reactivating ? 'Reactivate' : 'Deactivate',
+                variant: reactivating ? 'primary' : 'danger',
+                onPress: confirmStatus,
+                loading: statusBusy,
+                disabled: statusBusy || !isConnected,
               },
             ]}
           />
         }
       >
-        {shownDeactivate ? (
+        {shownStatus ? (
           <View>
-            <View style={styles.warnRing}>
-              <Ionicons name="person-remove-outline" size={26} color={Colors.light.danger} />
+            <View style={[styles.warnRing, reactivating && styles.okRing]}>
+              <Ionicons
+                name={reactivating ? 'person-add-outline' : 'person-remove-outline'}
+                size={26}
+                color={reactivating ? MOSS : Colors.light.danger}
+              />
+              <View style={styles.ringAvatar}>
+                <UserAvatar user={{ ...shownStatus, isActive: true }} size={26} />
+              </View>
             </View>
             <Text style={styles.warnTitle} accessibilityRole="header">
-              Deactivate {shownDeactivate.name}?
+              {reactivating ? 'Reactivate' : 'Deactivate'} {shownStatus.name}?
             </Text>
-            <Text style={styles.warnEmail} numberOfLines={1}>{shownDeactivate.email}</Text>
-            <View style={styles.cons}>
-              <Consequence first icon="log-out-outline" tone="danger" lead="They can’t sign in.">
-                Anything they try while still signed in is refused.
-              </Consequence>
-              {deactivateStore ? (
-                deactivateStore.others.length > 0 ? (
-                  <Consequence icon="storefront-outline" tone="ok" lead={`${deactivateStore.name} stays covered.`}>
-                    {deactivateStore.others.map((u) => u.name).join(', ')}{' '}
-                    {deactivateStore.others.length === 1 ? 'still runs it.' : 'still run it.'}
-                  </Consequence>
-                ) : (
-                  <Consequence icon="alert-circle-outline" tone="danger" lead={`${deactivateStore.name} will have no active manager.`}>
-                    Nobody can update its products or orders until you assign someone.
-                  </Consequence>
-                )
-              ) : null}
-              <Consequence icon="archive-outline" tone="plain" lead="Nothing is deleted.">
-                Their orders, messages and history stay as they are.
-              </Consequence>
-              <Consequence icon="arrow-undo-outline" tone="plain" lead="You can undo it.">
-                Activate them again from ⋯ anytime. Both are recorded in Account activity.
-              </Consequence>
-            </View>
+            <Text style={styles.warnEmail} numberOfLines={1}>{shownStatus.email}</Text>
+            {reactivating ? (
+              <View style={styles.cons}>
+                <Consequence first icon="key-outline" tone="ok" lead="They can sign in again">
+                  with the same email and password.
+                </Consequence>
+                <Consequence icon={roleCardIcon(shownStatus.role)} tone="ok" lead={`Returns as ${roleLine(shownStatus.role, shownStatus.storeId)},`}>
+                  the same role they had before.
+                </Consequence>
+                <Consequence icon="archive-outline" tone="plain" lead="Everything is still there:">
+                  orders, favorites and messages.
+                </Consequence>
+                <Consequence icon="document-text-outline" tone="plain" lead="Logged">
+                  in Account activity under your name.
+                </Consequence>
+              </View>
+            ) : (
+              <View style={styles.cons}>
+                <Consequence first icon="log-out-outline" tone="danger" lead="They can’t sign in.">
+                  Anything they try while still signed in is refused.
+                </Consequence>
+                {deactivateStore ? (
+                  deactivateStore.others.length > 0 ? (
+                    <Consequence icon="storefront-outline" tone="ok" lead={`${deactivateStore.name} stays covered.`}>
+                      {deactivateStore.others.map((u) => u.name).join(', ')}{' '}
+                      {deactivateStore.others.length === 1 ? 'still runs it.' : 'still run it.'}
+                    </Consequence>
+                  ) : (
+                    <Consequence icon="alert-circle-outline" tone="danger" lead={`${deactivateStore.name} will have no active manager.`}>
+                      Nobody can update its products or orders until you assign someone.
+                    </Consequence>
+                  )
+                ) : null}
+                <Consequence icon="archive-outline" tone="plain" lead="Nothing is deleted.">
+                  Their orders, messages and history stay as they are.
+                </Consequence>
+                <Consequence icon="arrow-undo-outline" tone="plain" lead="You can undo it.">
+                  Reactivate them from their row anytime. Both are recorded in Account activity.
+                </Consequence>
+              </View>
+            )}
           </View>
         ) : null}
       </Sheet>
@@ -1169,6 +1253,7 @@ export default function AdminUsersScreen({ navigation }) {
           ) : filteredUsers.length > 0 ? (
             filteredUsers.map((user, index) => {
               const selfRow = isSelf(user.id);
+              const flashed = flash?.id === user.id ? flash.tone : null;
               return (
                 <Reveal key={user.id} delay={120 + Math.min(index, 8) * 40}>
                   <Pressable
@@ -1176,6 +1261,8 @@ export default function AdminUsersScreen({ navigation }) {
                     style={({ pressed }) => [
                       styles.row,
                       selfRow && styles.rowSelf,
+                      !user.isActive && styles.rowOff,
+                      flashed && [styles.rowFlash, { borderColor: FLASH_TONES[flashed] }],
                       pressed && { transform: [{ scale: 0.99 }] },
                     ]}
                     accessibilityRole="button"
@@ -1189,6 +1276,7 @@ export default function AdminUsersScreen({ navigation }) {
                           {user.name}
                         </Text>
                         {selfRow ? <Text style={styles.youTag}>YOU</Text> : null}
+                        {flashed ? <Text style={styles.youTag}>UPDATED</Text> : null}
                       </View>
                       <Text style={styles.email} numberOfLines={1}>{user.email}</Text>
                       <View style={styles.badges}>
@@ -1218,6 +1306,31 @@ export default function AdminUsersScreen({ navigation }) {
                       >
                         <Ionicons name="lock-closed-outline" size={17} color={MUTED} />
                       </View>
+                    ) : !user.isActive ? (
+                      // A deactivated account has one likely next step, so
+                      // it's on the row itself; the rest is still a tap on
+                      // the row away.
+                      <Pressable
+                        onPress={() => handleToggleUserStatus(user)}
+                        disabled={!isConnected || togglingUserId === user.id}
+                        style={({ pressed }) => [
+                          styles.reactivate,
+                          pressed && { opacity: 0.7 },
+                          !isConnected && { opacity: 0.5 },
+                        ]}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Reactivate ${user.name}`}
+                      >
+                        {togglingUserId === user.id ? (
+                          <ActivityIndicator size="small" color={MOSS} />
+                        ) : (
+                          <>
+                            <Ionicons name="person-add-outline" size={13} color="#37412F" />
+                            <Text style={styles.reactivateText}>Reactivate</Text>
+                          </>
+                        )}
+                      </Pressable>
                     ) : (
                       <Pressable
                         onPress={() => openActions(user)}
@@ -1486,6 +1599,7 @@ export default function AdminUsersScreen({ navigation }) {
           </View>
         ) : null}
       </Sheet>
+      <ResultToast toast={toast} onDismiss={() => setToast(null)} />
     </SafeAreaView>
   );
 }
@@ -1835,7 +1949,32 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: Spacing.md,
   },
-  // Deactivate sheet
+  rowOff: { backgroundColor: '#F6F2EC' },
+  // Half a point less padding offsets the thicker border, so the row
+  // doesn't shift when the outline comes and goes.
+  rowFlash: { borderWidth: 1.5, padding: 11.5 },
+  reactivate: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 32,
+    paddingHorizontal: 11,
+    borderRadius: 11,
+    backgroundColor: '#EEF0EA',
+    alignSelf: 'flex-start',
+  },
+  reactivateText: { fontSize: 11.5, fontWeight: '600', color: '#37412F' },
+
+  // Deactivate / Reactivate sheet
+  okRing: { backgroundColor: '#EEF0EA', borderColor: '#F4F6F1' },
+  ringAvatar: {
+    position: 'absolute',
+    right: -12,
+    bottom: -10,
+    borderRadius: 16,
+    borderWidth: 2.5,
+    borderColor: Colors.light.background,
+  },
   warnRing: {
     width: 58,
     height: 58,
