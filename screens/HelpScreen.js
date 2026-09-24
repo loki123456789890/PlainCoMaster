@@ -230,7 +230,11 @@ function LivePill({ open }) {
   );
 }
 
-export default function HelpScreen({ navigation }) {
+export default function HelpScreen({ navigation, route }) {
+  // Order details' "Problem with this order?" arrives with that order: the
+  // request form opens already about it. An order from before stores
+  // existed has nowhere to be routed, so it opens Help as usual.
+  const fromOrder = typeof route?.params?.order?.storeId === 'string' ? route.params.order : null;
   const { isConnected } = useNetworkStatus();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState(null);
@@ -243,8 +247,16 @@ export default function HelpScreen({ navigation }) {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [sentTo, setSentTo] = useState(null); // who the sent request went to
-  const [recentOrders, setRecentOrders] = useState([]);
-  const [aboutOrderId, setAboutOrderId] = useState(null);
+  const [recentOrders, setRecentOrders] = useState(fromOrder ? [fromOrder] : []);
+  const [aboutOrderId, setAboutOrderId] = useState(fromOrder?.id ?? null);
+
+  // Waits for the screen's own slide-in, so the sheet doesn't rise while
+  // the page underneath is still moving.
+  useEffect(() => {
+    if (!fromOrder) return undefined;
+    const t = setTimeout(() => setSheetOpen(true), 400);
+    return () => clearTimeout(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // One-shot, not a listener: the list only needs to be right when the form
   // opens, and a guest has no orders to offer.
@@ -253,15 +265,17 @@ export default function HelpScreen({ navigation }) {
     if (!uid) return;
     getDocs(query(collection(db, 'users', uid, 'orders'), orderBy('createdAt', 'desc'), limit(5)))
       .then((snapshot) => {
-        setRecentOrders(
-          snapshot.docs
-            // An order from before stores existed has nowhere to be routed.
-            .filter((d) => typeof d.data().storeId === 'string')
-            .map((d) => ({ id: d.id, storeId: d.data().storeId, storeName: d.data().storeName || '' }))
-        );
+        const recent = snapshot.docs
+          // An order from before stores existed has nowhere to be routed.
+          .filter((d) => typeof d.data().storeId === 'string')
+          .map((d) => ({ id: d.id, storeId: d.data().storeId, storeName: d.data().storeName || '' }));
+        // The order Help was opened from stays pickable even when it's
+        // older than the five most recent.
+        if (fromOrder && !recent.some((o) => o.id === fromOrder.id)) recent.unshift(fromOrder);
+        setRecentOrders(recent);
       })
       .catch((error) => console.error('Could not load recent orders for support:', error));
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const q = search.trim().toLowerCase();
   const questions = useMemo(

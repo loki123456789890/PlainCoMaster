@@ -261,8 +261,13 @@ export default function OrderDetailsScreen({ navigation, route }) {
     });
   };
 
+  // Opens Help with the support request already about this order, so it
+  // goes to the store that sold it without the customer finding it again.
   const handleContactSupport = () => {
-    navigation.navigate('Help');
+    Haptics.selectionAsync();
+    navigation.navigate('Help', {
+      order: { id: order.id, storeId: order.storeId, storeName: order.storeName || '' },
+    });
   };
 
   const handleWriteReview = (item) => {
@@ -282,19 +287,9 @@ export default function OrderDetailsScreen({ navigation, route }) {
         <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
       </TouchableOpacity>
       <Text style={styles.headerTitle}>Order details</Text>
-      {order ? (
-        <TouchableOpacity
-          onPress={handleContactSupport}
-          style={[styles.headerBtn, styles.headerBtnEnd]}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Get help with this order"
-        >
-          <Ionicons name="help-circle-outline" size={24} color={Colors.light.tint} />
-        </TouchableOpacity>
-      ) : (
-        <View style={styles.headerBtn} />
-      )}
+      {/* Balances Back so the title stays centered. Help lives in the
+          "Problem with this order?" row at the end of the order, not here. */}
+      <View style={styles.headerBtn} />
     </View>
   );
 
@@ -637,7 +632,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   headerBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-  headerBtnEnd: { alignItems: 'center' },
   headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
   content: { paddingHorizontal: 18, paddingTop: 6, paddingBottom: 40 },
   sectionTitle: {
