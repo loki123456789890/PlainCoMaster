@@ -20,22 +20,33 @@ export const ROLE_PLATFORM_ADMIN = 'platformAdmin';
 // one plain sentence a panelist can read aloud — it is the shortest honest
 // answer to "what does this role actually do?", and it deliberately states
 // what each privileged role CANNOT do, because that boundary is the whole
-// point of the split.
+// point of the split. `summary` is the same answer without the boundary,
+// for places that show the boundary separately as `can` / `cannot` chips
+// (the Change role sheet).
 export const ROLES = [
   {
     value: ROLE_CUSTOMER,
     label: 'Customer',
     capability: 'Shops, places orders, and sends support requests.',
+    summary: 'Shops, places orders and sends support requests.',
+    can: ['Browse & buy', 'Order history'],
+    cannot: ['Store tools'],
   },
   {
     value: ROLE_SELLER,
     label: 'Store Manager',
     capability: 'Runs one store’s products, orders, and support. No access to user accounts.',
+    summary: 'Runs one store’s products, orders and support.',
+    can: ['Products', 'Orders', 'Store support'],
+    cannot: ['User accounts'],
   },
   {
     value: ROLE_PLATFORM_ADMIN,
     label: 'Platform Admin',
     capability: 'Manages accounts, roles and stores, and answers general questions. No access to any store’s products or orders.',
+    summary: 'Manages accounts, roles and stores. Answers general questions.',
+    can: ['Accounts', 'Roles', 'Stores'],
+    cannot: ['Store products', 'Orders'],
   },
 ];
 

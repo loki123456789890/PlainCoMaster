@@ -231,7 +231,7 @@ function Entry({ entry, type, isYou, open, onToggle, delay }) {
   );
 }
 
-export default function AdminActivityScreen({ navigation }) {
+export default function AdminActivityScreen({ navigation, route }) {
   const { role, storeId } = useAdmin();
   const view = VIEWS[role] ?? VIEWS.seller;
   // The store log is per store: a manager reads their own store's entries
@@ -241,7 +241,9 @@ export default function AdminActivityScreen({ navigation }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  // Manage Users' "See their history" opens the log already searched for
+  // that person.
+  const [searchQuery, setSearchQuery] = useState(route?.params?.query || '');
   const [searchFocused, setSearchFocused] = useState(false);
   const [typeKey, setTypeKey] = useState('all');
   const [openId, setOpenId] = useState(null);

@@ -7,7 +7,6 @@ import {
   Pressable,
   TextInput,
   ActivityIndicator,
-  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -32,7 +31,6 @@ import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
 import EmptyState from '../../components/ui/EmptyState';
 import Button from '../../components/ui/Button';
-import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import DialogButtonRow from '../../components/ui/DialogButtonRow';
@@ -123,12 +121,20 @@ function RoleBadge({ role, short }) {
   );
 }
 
-function SheetAction({ icon, title, detail, danger, disabled, onPress }) {
+// One row of the ⋯ sheet's grouped actions card. `divided` draws the rule
+// above it; the destructive action sits in its own card without a chevron,
+// since it opens a confirmation rather than another screen.
+function SheetAction({ icon, title, detail, danger, disabled, divided, noChevron, onPress }) {
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      style={({ pressed }) => [styles.action, pressed && { backgroundColor: '#F1EBE3' }, disabled && { opacity: 0.5 }]}
+      style={({ pressed }) => [
+        styles.action,
+        divided && styles.actionDivided,
+        pressed && { backgroundColor: '#F7F2EC' },
+        disabled && { opacity: 0.5 },
+      ]}
       accessibilityRole="button"
       accessibilityLabel={title}
       accessibilityHint={detail}
@@ -141,9 +147,39 @@ function SheetAction({ icon, title, detail, danger, disabled, onPress }) {
         <Text style={[styles.actionTitle, danger && { color: Colors.light.danger }]}>{title}</Text>
         <Text style={styles.actionDetail}>{detail}</Text>
       </View>
+      {noChevron ? null : <Ionicons name="chevron-forward" size={16} color={MUTED} />}
     </Pressable>
   );
 }
+
+// One line of the Deactivate sheet's "what happens" list. The tone says
+// whether it's a loss (danger), a reassurance (moss), or plain fact.
+const CONSEQUENCE_TONES = {
+  danger: { bg: '#FBEDEB', ink: Colors.light.danger },
+  ok: { bg: '#EEF0EA', ink: MOSS },
+  plain: { bg: '#F1EBE2', ink: MUTED },
+};
+
+function Consequence({ icon, tone, lead, children, first }) {
+  const t = CONSEQUENCE_TONES[tone];
+  return (
+    <View style={[styles.con, !first && styles.conDivided]}>
+      <View style={[styles.conIcon, { backgroundColor: t.bg }]}>
+        <Ionicons name={icon} size={14} color={t.ink} />
+      </View>
+      <Text style={styles.conText}>
+        <Text style={styles.conLead}>{lead}</Text> {children}
+      </Text>
+    </View>
+  );
+}
+
+// Customer has no badge icon (it's the default), but its card in the
+// Change role sheet needs one to line up with the other two.
+const roleCardIcon = (role) => {
+  const icon = roleTone(role).icon;
+  return icon ? `${icon}-outline` : 'bag-handle-outline';
+};
 
 // Shaped like a real user row so the loading state previews the content
 // that's about to arrive, instead of a spinner floating mid-screen.
@@ -168,7 +204,6 @@ export default function AdminUsersScreen({ navigation }) {
   const [updating, setUpdating] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
-  const [showUserModal, setShowUserModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFormData, setEditFormData] = useState({
     role: 'customer',
@@ -225,6 +260,10 @@ export default function AdminUsersScreen({ navigation }) {
   const [actionUser, setActionUser] = useState(null);
   const lastActionUser = useRef(null);
   if (actionUser) lastActionUser.current = actionUser;
+  // The account the Deactivate sheet is asking about, kept the same way.
+  const [deactivateTarget, setDeactivateTarget] = useState(null);
+  const lastDeactivateTarget = useRef(null);
+  if (deactivateTarget) lastDeactivateTarget.current = deactivateTarget;
 
   useEffect(() => {
     setLoading(true);
@@ -392,12 +431,6 @@ export default function AdminUsersScreen({ navigation }) {
     setTimeout(() => fn(user), 320);
   };
 
-  const handleViewUser = (user) => {
-    Haptics.selectionAsync();
-    setSelectedUser(user);
-    setShowUserModal(true);
-  };
-
   const handleEditUser = (user) => {
     if (isSelf(user.id)) return; // Edit action is disabled on the self row; defensive no-op.
     Haptics.selectionAsync();
@@ -470,7 +503,11 @@ export default function AdminUsersScreen({ navigation }) {
       });
       setShowEditModal(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showAppAlert('Success', 'User updated successfully');
+      showAppAlert(
+        'Role changed',
+        `${selectedUser.name} is now ${getRoleLabel(editFormData.role)}` +
+          (assignedStoreName ? ` at ${assignedStoreName}.` : '.')
+      );
     } catch (error) {
       console.error('Error updating user:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -490,6 +527,49 @@ export default function AdminUsersScreen({ navigation }) {
     }
   };
 
+  // `onSuccess` runs before the confirmation alert, so the Deactivate
+  // sheet is already closing when the alert appears.
+  const setUserActive = async (user, newStatus, onSuccess) => {
+    setTogglingUserId(user.id);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      await updateDoc(doc(db, 'users', user.id), { isActive: newStatus });
+      // Deactivation is this project's stand-in for deletion (SRS
+      // §2.4 keeps accounts for auditability), so it needs to leave
+      // a trace of its own — otherwise an account can go dark with
+      // nothing recording who did it.
+      logAccountActivity({
+        action: ACTIONS.USER_STATUS,
+        targetId: user.id,
+        targetLabel: user.name,
+        summary: `${user.name} — account ${newStatus ? 'activated' : 'deactivated'}`,
+      });
+      onSuccess?.();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showAppAlert(
+        newStatus ? 'Account activated' : 'Account deactivated',
+        newStatus ? `${user.name} can sign in again.` : `${user.name} can no longer sign in.`
+      );
+    } catch (error) {
+      console.error('Error updating user status:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+
+      const isNetworkError = !isConnected || error.code === 'unavailable';
+      if (isNetworkError) {
+        showAppAlert(
+          'No Internet Connection',
+          'Network connection lost. Please check your connection and try again.'
+        );
+      } else {
+        showAppAlert('Error', 'Could not update user status. Please try again.');
+      }
+    } finally {
+      setTogglingUserId(null);
+    }
+  };
+
+  // Deactivating gets a sheet that spells out what happens; activating
+  // only gives access back, so a plain confirm is enough.
   const handleToggleUserStatus = (user) => {
     if (isSelf(user.id)) {
       // Defensive — the status toggle is disabled on the signed-in
@@ -499,67 +579,18 @@ export default function AdminUsersScreen({ navigation }) {
     }
 
     Haptics.selectionAsync();
-    const newStatus = !user.isActive;
-    showAppAlert(
-      newStatus ? 'Activate User' : 'Deactivate User',
-      `Are you sure you want to ${newStatus ? 'activate' : 'deactivate'} ${user.name}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: newStatus ? 'Activate' : 'Deactivate',
-          style: newStatus ? 'default' : 'destructive',
-          onPress: async () => {
-            setTogglingUserId(user.id);
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            try {
-              await updateDoc(doc(db, 'users', user.id), { isActive: newStatus });
-              // Deactivation is this project's stand-in for deletion (SRS
-              // §2.4 keeps accounts for auditability), so it needs to leave
-              // a trace of its own — otherwise an account can go dark with
-              // nothing recording who did it.
-              logAccountActivity({
-                action: ACTIONS.USER_STATUS,
-                targetId: user.id,
-                targetLabel: user.name,
-                summary: `${user.name} — account ${newStatus ? 'activated' : 'deactivated'}`,
-              });
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              showAppAlert('Success', `User ${newStatus ? 'activated' : 'deactivated'} successfully`);
-            } catch (error) {
-              console.error('Error updating user status:', error);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-
-              const isNetworkError = !isConnected || error.code === 'unavailable';
-              if (isNetworkError) {
-                showAppAlert(
-                  'No Internet Connection',
-                  'Network connection lost. Please check your connection and try again.'
-                );
-              } else {
-                showAppAlert('Error', 'Could not update user status. Please try again.');
-              }
-            } finally {
-              setTogglingUserId(null);
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const getRoleBadgeStyle = (role) => {
-    const tone = roleTone(role);
-    return { backgroundColor: tone.bg, color: tone.ink };
-  };
-
-  const getActiveBadgeStyle = (isActive) => {
-    if (isActive) {
-      return { backgroundColor: Colors.light.success + '20', color: Colors.light.success };
+    if (user.isActive) {
+      setDeactivateTarget(user);
+      return;
     }
-    return { backgroundColor: Colors.light.danger + '20', color: Colors.light.danger };
+    showAppAlert('Activate account?', `${user.name} will be able to sign in again.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Activate', onPress: () => setUserActive(user, true) },
+    ]);
   };
 
-  const getStatusIcon = (isActive) => (isActive ? 'checkmark-circle-outline' : 'close-circle-outline');
+  const confirmDeactivate = () =>
+    setUserActive(deactivateTarget, false, () => setDeactivateTarget(null));
 
   const formatDate = (dateInput) => {
     if (!dateInput) return 'Unknown';
@@ -612,7 +643,35 @@ export default function AdminUsersScreen({ navigation }) {
     editFormData.role === ROLE_SELLER &&
     (!editFormData.storeId ||
       (editFormData.storeId === NEW_STORE && !editFormData.newStoreName.trim()));
+  // What Save would change, for the Change role sheet's before → after bar.
+  // Moving a manager to another store counts; re-picking the same one doesn't.
+  const editChanged = Boolean(
+    selectedUser &&
+      (editFormData.role !== selectedUser.role ||
+        (editFormData.role === ROLE_SELLER && editFormData.storeId !== selectedUser.storeId))
+  );
+  const roleLine = (role, storeId) => {
+    if (role !== ROLE_SELLER || !storeId) return getRoleLabel(role);
+    const name =
+      storeId === NEW_STORE ? editFormData.newStoreName.trim() || 'New store' : storeName(storeId);
+    return name ? `${getRoleLabel(role)} · ${name}` : getRoleLabel(role);
+  };
+  const activeManagersAt = (storeId, exceptId) =>
+    users.filter(
+      (u) => u.role === ROLE_SELLER && u.storeId === storeId && u.isActive && u.id !== exceptId
+    );
+
   const shownAction = lastActionUser.current;
+  const shownDeactivate = lastDeactivateTarget.current;
+  const deactivating = Boolean(shownDeactivate) && togglingUserId === shownDeactivate.id;
+  // Who else keeps a store running if this manager goes.
+  const deactivateStore =
+    shownDeactivate?.role === ROLE_SELLER && shownDeactivate.storeId
+      ? {
+          name: storeName(shownDeactivate.storeId) || 'Their store',
+          others: activeManagersAt(shownDeactivate.storeId, shownDeactivate.id),
+        }
+      : null;
   const openQuestions = openGeneralSupport;
   const inboxTone =
     openQuestions === null ? 'unknown' : openQuestions > 0 ? 'waiting' : 'clear';
@@ -634,7 +693,7 @@ export default function AdminUsersScreen({ navigation }) {
           {[
             { title: 'They sign up as a customer', detail: 'Using the regular PlainCo app.' },
             { title: 'Find them here', detail: 'Search by name or email.' },
-            { title: 'Change their role', detail: 'Open ⋯ → Edit role.' },
+            { title: 'Change their role', detail: 'Open ⋯ → Change role.' },
           ].map((step, i, all) => {
             const last = i === all.length - 1;
             return (
@@ -703,45 +762,147 @@ export default function AdminUsersScreen({ navigation }) {
       <Sheet visible={Boolean(actionUser)} onClose={() => setActionUser(null)}>
         {shownAction ? (
           <View>
-            <View style={styles.sheetUser}>
-              <UserAvatar user={shownAction} size={42} />
+            <View style={styles.idCard}>
+              <UserAvatar user={shownAction} size={48} />
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.sheetUserName} numberOfLines={1}>{shownAction.name}</Text>
-                <Text style={styles.sheetUserMeta} numberOfLines={1}>
-                  {getRoleLabel(shownAction.role)} · {shownAction.email}
-                </Text>
+                <Text style={styles.idName} numberOfLines={1}>{shownAction.name}</Text>
+                <Text style={styles.idEmail} numberOfLines={1}>{shownAction.email}</Text>
+                <View style={styles.badges}>
+                  <RoleBadge role={shownAction.role} />
+                  {!shownAction.isActive ? (
+                    <View style={[styles.roleBadge, { backgroundColor: '#FBEDEB' }]}>
+                      <Text style={[styles.roleBadgeText, { color: '#B42318' }]}>DEACTIVATED</Text>
+                    </View>
+                  ) : null}
+                </View>
               </View>
             </View>
-            <SheetAction
-              icon="swap-horizontal-outline"
-              title="Edit role"
-              detail={
-                shownAction.role === ROLE_SELLER
-                  ? `Change their role or store${storeName(shownAction.storeId) ? ` (${storeName(shownAction.storeId)})` : ''}`
-                  : 'Customer, Store Manager or Platform Admin'
-              }
-              onPress={() => runAction(handleEditUser)}
-            />
-            <SheetAction
-              icon="person-circle-outline"
-              title="View details"
-              detail="Email, status and join date"
-              onPress={() => runAction(handleViewUser)}
-            />
-            <SheetAction
-              icon={shownAction.isActive ? 'person-remove-outline' : 'person-add-outline'}
-              title={shownAction.isActive ? 'Deactivate account' : 'Activate account'}
-              detail={
-                !isConnected
-                  ? 'You’re offline'
-                  : shownAction.isActive
-                    ? 'They won’t be able to sign in'
-                    : 'Let them sign in again'
-              }
-              danger={shownAction.isActive}
-              disabled={!isConnected || togglingUserId === shownAction.id}
-              onPress={() => runAction(handleToggleUserStatus)}
-            />
+            <View style={styles.facts}>
+              <View style={styles.fact}>
+                <Text style={styles.factLabel}>Store</Text>
+                <Text style={styles.factValue} numberOfLines={2}>
+                  {shownAction.role === ROLE_SELLER
+                    ? storeName(shownAction.storeId) || 'No store assigned'
+                    : '—'}
+                </Text>
+              </View>
+              <View style={styles.fact}>
+                <Text style={styles.factLabel}>Member since</Text>
+                <Text style={styles.factValue}>{formatDate(shownAction.createdAt)}</Text>
+              </View>
+            </View>
+
+            <View style={styles.actionGroup}>
+              {isSelf(shownAction.id) ? null : (
+                <SheetAction
+                  icon="swap-horizontal-outline"
+                  title="Change role or store"
+                  detail={`Currently ${roleLine(shownAction.role, shownAction.storeId)}`}
+                  onPress={() => runAction(handleEditUser)}
+                />
+              )}
+              <SheetAction
+                icon="time-outline"
+                title="See their history"
+                detail={`Role and account changes for ${shownAction.name}`}
+                divided={!isSelf(shownAction.id)}
+                onPress={() =>
+                  runAction((user) => navigation.navigate('AdminActivity', { query: user.name }))
+                }
+              />
+            </View>
+
+            {isSelf(shownAction.id) ? (
+              // Your own role and status can't change here (firestore.rules
+              // blocks the admin branch on your own document), so the sheet
+              // says so instead of offering actions that would be refused.
+              <View style={styles.selfNote}>
+                <Ionicons name="lock-closed-outline" size={15} color={MUTED} />
+                <Text style={styles.selfNoteText}>
+                  Your own role and status can&apos;t be changed here. Ask another Platform Admin.
+                </Text>
+              </View>
+            ) : (
+              <View style={[styles.actionGroup, { marginTop: 10 }]}>
+                <SheetAction
+                  icon={shownAction.isActive ? 'person-remove-outline' : 'person-add-outline'}
+                  title={shownAction.isActive ? 'Deactivate account' : 'Activate account'}
+                  detail={
+                    !isConnected
+                      ? 'You’re offline'
+                      : shownAction.isActive
+                        ? 'Blocks sign-in. Orders and history are kept.'
+                        : 'Let them sign in again'
+                  }
+                  danger={shownAction.isActive}
+                  noChevron
+                  disabled={!isConnected || togglingUserId === shownAction.id}
+                  onPress={() => runAction(handleToggleUserStatus)}
+                />
+              </View>
+            )}
+          </View>
+        ) : null}
+      </Sheet>
+
+      {/* Deactivate: says exactly what happens, including whether a store is
+          left without anyone running it, before the one red button. */}
+      <Sheet
+        visible={Boolean(deactivateTarget)}
+        onClose={() => setDeactivateTarget(null)}
+        locked={deactivating}
+        footer={
+          <DialogButtonRow
+            buttons={[
+              {
+                label: 'Keep active',
+                variant: 'secondary',
+                onPress: () => setDeactivateTarget(null),
+                disabled: deactivating,
+              },
+              {
+                label: isConnected ? 'Deactivate' : 'Offline',
+                variant: 'danger',
+                onPress: confirmDeactivate,
+                loading: deactivating,
+                disabled: deactivating || !isConnected,
+              },
+            ]}
+          />
+        }
+      >
+        {shownDeactivate ? (
+          <View>
+            <View style={styles.warnRing}>
+              <Ionicons name="person-remove-outline" size={26} color={Colors.light.danger} />
+            </View>
+            <Text style={styles.warnTitle} accessibilityRole="header">
+              Deactivate {shownDeactivate.name}?
+            </Text>
+            <Text style={styles.warnEmail} numberOfLines={1}>{shownDeactivate.email}</Text>
+            <View style={styles.cons}>
+              <Consequence first icon="log-out-outline" tone="danger" lead="They can’t sign in.">
+                Anything they try while still signed in is refused.
+              </Consequence>
+              {deactivateStore ? (
+                deactivateStore.others.length > 0 ? (
+                  <Consequence icon="storefront-outline" tone="ok" lead={`${deactivateStore.name} stays covered.`}>
+                    {deactivateStore.others.map((u) => u.name).join(', ')}{' '}
+                    {deactivateStore.others.length === 1 ? 'still runs it.' : 'still run it.'}
+                  </Consequence>
+                ) : (
+                  <Consequence icon="alert-circle-outline" tone="danger" lead={`${deactivateStore.name} will have no active manager.`}>
+                    Nobody can update its products or orders until you assign someone.
+                  </Consequence>
+                )
+              ) : null}
+              <Consequence icon="archive-outline" tone="plain" lead="Nothing is deleted.">
+                Their orders, messages and history stay as they are.
+              </Consequence>
+              <Consequence icon="arrow-undo-outline" tone="plain" lead="You can undo it.">
+                Activate them again from ⋯ anytime. Both are recorded in Account activity.
+              </Consequence>
+            </View>
           </View>
         ) : null}
       </Sheet>
@@ -1011,7 +1172,7 @@ export default function AdminUsersScreen({ navigation }) {
               return (
                 <Reveal key={user.id} delay={120 + Math.min(index, 8) * 40}>
                   <Pressable
-                    onPress={() => handleViewUser(user)}
+                    onPress={() => openActions(user)}
                     style={({ pressed }) => [
                       styles.row,
                       selfRow && styles.rowSelf,
@@ -1019,7 +1180,7 @@ export default function AdminUsersScreen({ navigation }) {
                     ]}
                     accessibilityRole="button"
                     accessibilityLabel={`${user.name}${selfRow ? ', you' : ''}, ${getRoleLabel(user.role)}, ${user.isActive ? 'active' : 'deactivated'}`}
-                    accessibilityHint="Opens user details"
+                    accessibilityHint="Shows their details and actions"
                   >
                     <UserAvatar user={user} />
                     <View style={{ flex: 1, minWidth: 0 }}>
@@ -1100,329 +1261,231 @@ export default function AdminUsersScreen({ navigation }) {
         </View>
       </ScrollView>
 
-      {/* User Details Modal */}
-      <Modal
-        visible={showUserModal}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setShowUserModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>User Details</Text>
-              <Pressable
-                onPress={() => setShowUserModal(false)}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Close"
-              >
-                <Ionicons name="close" size={24} color={Colors.light.text} />
-              </Pressable>
-            </View>
-
-            {selectedUser && (
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <View style={styles.modalAvatar}>
-                  <Text style={styles.modalAvatarText}>
-                    {selectedUser.name.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Name:</Text>
-                  <Text style={styles.modalInfoValue}>{selectedUser.name}</Text>
-                </View>
-
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Email:</Text>
-                  <Text style={styles.modalInfoValue}>{selectedUser.email}</Text>
-                </View>
-
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Role:</Text>
-                  <View style={[styles.modalRoleBadge, getRoleBadgeStyle(selectedUser.role)]}>
-                    <Text style={[styles.modalRoleText, { color: getRoleBadgeStyle(selectedUser.role).color }]}>
-                      {getRoleLabel(selectedUser.role).toUpperCase()}
-                    </Text>
-                  </View>
-                </View>
-
-                {selectedUser.role === ROLE_SELLER && (
-                  <View style={styles.modalInfoRow}>
-                    <Text style={styles.modalInfoLabel}>Store:</Text>
-                    <Text style={styles.modalInfoValue}>
-                      {storeName(selectedUser.storeId) || 'No store assigned'}
-                    </Text>
-                  </View>
-                )}
-
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Status:</Text>
-                  <View style={[styles.modalStatusBadge, getActiveBadgeStyle(selectedUser.isActive)]}>
-                    <Ionicons
-                      name={getStatusIcon(selectedUser.isActive)}
-                      size={12}
-                      color={getActiveBadgeStyle(selectedUser.isActive).color}
-                    />
-                    <Text style={[styles.modalStatusText, { color: getActiveBadgeStyle(selectedUser.isActive).color }]}>
-                      {selectedUser.isActive ? 'ACTIVE' : 'INACTIVE'}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalInfoLabel}>Join Date:</Text>
-                  <Text style={styles.modalInfoValue}>{formatDate(selectedUser.createdAt)}</Text>
-                </View>
-
-                {isSelf(selectedUser.id) ? (
-                  <Text style={styles.selfModalHint}>
-                    This is your account — role and status can&apos;t be changed from here.
-                    Ask another platform administrator to make this change.
-                  </Text>
-                ) : (
-                  <View style={styles.modalButtons}>
-                    <View style={styles.modalButtonHalf}>
-                      <Button
-                        variant="primary"
-                        label="Edit User"
-                        onPress={() => {
-                          setShowUserModal(false);
-                          handleEditUser(selectedUser);
-                        }}
-                      />
-                    </View>
-                    <View style={styles.modalButtonHalf}>
-                      <AnimatedPressable
-                        style={[
-                          styles.statusToggleButton,
-                          { backgroundColor: selectedUser.isActive ? Colors.light.danger : Colors.light.success },
-                          !isConnected && { opacity: 0.7 },
-                        ]}
-                        onPress={() => {
-                          setShowUserModal(false);
-                          handleToggleUserStatus(selectedUser);
-                        }}
-                        disabled={!isConnected}
-                        accessibilityRole="button"
-                        accessibilityLabel={
-                          !isConnected
-                            ? 'Offline, cannot change status'
-                            : `${selectedUser.isActive ? 'Deactivate' : 'Activate'} ${selectedUser.name}`
-                        }
-                      >
-                        <Text style={styles.statusButtonText}>
-                          {/* Shortened vs. the full "No Internet Connection" —
-                              this button shares a half-width row with Edit
-                              User, so the longer phrase wrapped awkwardly. */}
-                          {!isConnected
-                            ? 'Offline'
-                            : selectedUser.isActive ? 'Deactivate' : 'Activate'}
-                        </Text>
-                      </AnimatedPressable>
-                    </View>
-                  </View>
-                )}
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* Edit User Modal */}
-      <Modal
+      {/* Change role: one card per role with what it can and can't reach,
+          the store picker only for Store Manager, and a bar above the
+          buttons that says exactly what Save will change. */}
+      <Sheet
         visible={showEditModal}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowEditModal(false)}
+        onClose={() => setShowEditModal(false)}
+        locked={updating}
+        footer={
+          selectedUser ? (
+            <View>
+              <View style={[styles.diff, !editChanged && styles.diffSame]}>
+                <Text style={[styles.diffLabel, !editChanged && { color: MUTED }]}>
+                  {editChanged ? 'THIS CHANGE' : 'NO CHANGES YET'}
+                </Text>
+                {editChanged ? (
+                  <View style={styles.diffLine}>
+                    <Text style={styles.diffFrom} numberOfLines={1}>
+                      {roleLine(selectedUser.role, selectedUser.storeId)}
+                    </Text>
+                    <Ionicons name="arrow-forward" size={13} color={ON_INK_MUTED} />
+                    <Text style={styles.diffTo} numberOfLines={1}>
+                      {roleLine(editFormData.role, editFormData.storeId)}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.diffSameText} numberOfLines={1}>
+                    {roleLine(selectedUser.role, selectedUser.storeId)}
+                  </Text>
+                )}
+              </View>
+              <DialogButtonRow
+                buttons={[
+                  {
+                    label: 'Cancel',
+                    variant: 'secondary',
+                    onPress: () => setShowEditModal(false),
+                    disabled: updating,
+                  },
+                  {
+                    label: !isConnected ? 'Offline' : 'Save change',
+                    variant: 'primary',
+                    onPress: handleUpdateUser,
+                    loading: updating,
+                    disabled: updating || !isConnected || editingSelf || needsStore || !editChanged,
+                  },
+                ]}
+              />
+            </View>
+          ) : null
+        }
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit User</Text>
+        {selectedUser ? (
+          <View>
+            <View style={styles.sheetHead}>
+              <Text style={styles.sheetTitle} accessibilityRole="header">Change role</Text>
               <Pressable
                 onPress={() => setShowEditModal(false)}
-                hitSlop={8}
+                disabled={updating}
+                style={({ pressed }) => [styles.sheetClose, pressed && { opacity: 0.6 }]}
+                hitSlop={6}
                 accessibilityRole="button"
                 accessibilityLabel="Close"
               >
-                <Ionicons name="close" size={24} color={Colors.light.text} />
+                <Ionicons name="close" size={18} color={INK} />
               </Pressable>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Name</Text>
-                <View style={[styles.input, styles.inputDisabled]}>
-                  <Text style={styles.disabledInputText}>{selectedUser?.name}</Text>
-                </View>
-                <Text style={styles.inputHint}>
-                  Users change their own display name from Profile — it isn&apos;t an administrative action.
-                </Text>
+            {/* Name and email are the user's own to change (from Profile), so
+                they collapse to one read-only row instead of greyed fields. */}
+            <View style={styles.mini}>
+              <UserAvatar user={selectedUser} size={34} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.miniName} numberOfLines={1}>{selectedUser.name}</Text>
+                <Text style={styles.miniEmail} numberOfLines={1}>{selectedUser.email}</Text>
               </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Email</Text>
-                <View style={[styles.input, styles.inputDisabled]}>
-                  <Text style={styles.disabledInputText}>{selectedUser?.email}</Text>
-                </View>
-                <Text style={styles.inputHint}>
-                  Login email can&apos;t be changed here — it&apos;s tied to their Firebase Auth account.
-                </Text>
+              <View
+                style={styles.miniLock}
+                accessible
+                accessibilityLabel="Name and email are changed by the user, not here"
+              >
+                <Ionicons name="lock-closed-outline" size={11} color={MUTED} />
+                <Text style={styles.miniLockText}>Set by user</Text>
               </View>
+            </View>
 
-              {/* editingSelf should never be true here in normal use — the Edit
-                  entry points on the list row and detail modal are already
-                  disabled for the signed-in platformAdmin's own account. Kept
-                  as a defensive guard anyway: firestore.rules denies this
-                  write regardless of how the modal was reached, and the UI
-                  must not present a control that's guaranteed to be denied. */}
-              {editingSelf && (
-                <Text style={styles.selfModalHint}>
-                  You can&apos;t change your own role — have another platform
-                  administrator make this change instead.
-                </Text>
-              )}
+            {/* editingSelf should never be true in normal use — every entry
+                point is already disabled on your own row. Kept as a guard:
+                firestore.rules denies this write however the sheet was
+                reached, so the controls must not pretend otherwise. */}
+            {editingSelf ? (
+              <Text style={styles.selfModalHint}>
+                You can&apos;t change your own role — have another platform administrator do it.
+              </Text>
+            ) : null}
 
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Role</Text>
-                {/* Each option carries a one-line statement of what the role
-                    can and can't reach. Assigning roles is this account's
-                    entire job, so the consequence of the choice belongs next
-                    to the choice — three unlabeled pills ("Customer / Store
-                    Manager / Platform Admin") assume the reader already
-                    knows the boundary, which is exactly the assumption that
-                    made the old single "admin" role confusing. Stacked
-                    vertically rather than as a pill row because a sentence
-                    doesn't fit in a pill. */}
-                <View style={styles.roleSelector}>
-                  {ROLE_OPTIONS.map((option) => {
-                    const active = editFormData.role === option.value;
+            <Text style={styles.fieldLabel}>ROLE</Text>
+            <View style={styles.roleCards}>
+              {ROLE_OPTIONS.map((option) => {
+                const active = editFormData.role === option.value;
+                const current = selectedUser.role === option.value;
+                const tone = roleTone(option.value);
+                return (
+                  <Pressable
+                    key={option.value}
+                    style={[styles.roleCard, active && styles.roleCardOn, editingSelf && { opacity: 0.5 }]}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      // Coming back to Store Manager restores their store, so
+                      // a stray tap on another role doesn't lose it.
+                      setEditFormData({
+                        ...editFormData,
+                        role: option.value,
+                        storeId:
+                          option.value === ROLE_SELLER
+                            ? editFormData.storeId || selectedUser.storeId
+                            : editFormData.storeId,
+                      });
+                    }}
+                    disabled={editingSelf || updating}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: active, disabled: editingSelf }}
+                    accessibilityLabel={`${option.label}${current ? ', current role' : ''}. ${option.capability}`}
+                  >
+                    <View style={[styles.roleCardIcon, { backgroundColor: tone.bg }]}>
+                      <Ionicons name={roleCardIcon(option.value)} size={17} color={tone.ink} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <View style={styles.roleCardHead}>
+                        <Text style={styles.roleCardTitle}>{option.label}</Text>
+                        {current ? <Text style={styles.currentTag}>CURRENT</Text> : null}
+                      </View>
+                      <Text style={styles.roleCardSummary}>{option.summary}</Text>
+                      <View style={styles.perms}>
+                        {option.can.map((item) => (
+                          <View key={item} style={styles.perm}>
+                            <Ionicons name="checkmark" size={11} color={MOSS} />
+                            <Text style={styles.permText}>{item}</Text>
+                          </View>
+                        ))}
+                        {option.cannot.map((item) => (
+                          <View key={item} style={styles.perm}>
+                            <Text style={[styles.permText, styles.permNo]}>{item}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                    <View style={[styles.radio, active && styles.radioOn]} />
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Only a Store Manager runs a store, so the picker appears only
+                for that role. "Open a new store" is the last tile rather than
+                a separate screen: a store is only ever opened to put someone
+                in charge of it. */}
+            {editFormData.role === ROLE_SELLER && !editingSelf ? (
+              <View>
+                <Text style={styles.fieldLabel}>ASSIGNED STORE</Text>
+                <View style={styles.storeGrid}>
+                  {[...stores, { id: NEW_STORE, name: 'Open a new store' }].map((store) => {
+                    const active = editFormData.storeId === store.id;
+                    const isNew = store.id === NEW_STORE;
+                    const managers = isNew ? 0 : activeManagersAt(store.id).length;
                     return (
-                      <AnimatedPressable
-                        key={option.value}
-                        style={[
-                          styles.roleOption,
-                          active && styles.roleOptionActive,
-                          editingSelf && styles.roleOptionDisabled,
-                        ]}
+                      <Pressable
+                        key={store.id}
+                        style={[styles.storeTile, isNew && styles.storeTileNew, active && styles.storeTileOn]}
                         onPress={() => {
-                          if (editingSelf) return;
                           Haptics.selectionAsync();
-                          setEditFormData({ ...editFormData, role: option.value });
+                          setEditFormData({ ...editFormData, storeId: store.id });
                         }}
-                        disabled={editingSelf}
+                        disabled={updating}
                         accessibilityRole="radio"
-                        accessibilityState={{ checked: active, disabled: editingSelf }}
-                        accessibilityLabel={`${option.label} role. ${option.capability}`}
+                        accessibilityState={{ checked: active }}
+                        accessibilityLabel={isNew ? 'Open a new store' : `${store.name}, ${managers} active managers`}
                       >
-                        <View style={styles.roleOptionCheck}>
+                        {active ? (
+                          <View style={styles.storeCheck}>
+                            <Ionicons name="checkmark" size={11} color="#fff" />
+                          </View>
+                        ) : null}
+                        <View style={[styles.storeTileIcon, active && { backgroundColor: CLAY }]}>
                           <Ionicons
-                            name={active ? 'radio-button-on' : 'radio-button-off'}
-                            size={18}
-                            color={active ? Colors.light.tint : Colors.light.icon}
+                            name={isNew ? 'add' : 'storefront-outline'}
+                            size={15}
+                            color={active ? '#fff' : MUTED}
                           />
                         </View>
-                        <View style={styles.roleOptionCopy}>
-                          <Text
-                            style={[
-                              styles.roleOptionText,
-                              active && styles.roleOptionTextActive,
-                            ]}
-                          >
-                            {option.label}
-                          </Text>
-                          <Text style={styles.roleOptionCapability}>{option.capability}</Text>
-                        </View>
-                      </AnimatedPressable>
+                        <Text style={styles.storeTileName} numberOfLines={2}>{store.name}</Text>
+                        <Text style={styles.storeTileMeta}>
+                          {isNew
+                            ? 'Name it, then assign'
+                            : managers === 0
+                              ? 'No manager'
+                              : `${managers} manager${managers === 1 ? '' : 's'}`}
+                        </Text>
+                      </Pressable>
                     );
                   })}
                 </View>
-              </View>
-
-              {/* Only a Store Manager runs a store, so the picker appears
-                  only for that role. Same stacked-option pattern as the
-                  role picker above, with "Open a new store" as the last
-                  option rather than a separate screen: opening a store is
-                  only ever done in order to put someone in charge of it. */}
-              {editFormData.role === ROLE_SELLER && !editingSelf && (
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Store</Text>
-                  <View style={styles.roleSelector}>
-                    {[...stores, { id: NEW_STORE, name: 'Open a new store' }].map((store) => {
-                      const active = editFormData.storeId === store.id;
-                      const isNew = store.id === NEW_STORE;
-                      return (
-                        <AnimatedPressable
-                          key={store.id}
-                          style={[styles.roleOption, active && styles.roleOptionActive]}
-                          onPress={() => {
-                            Haptics.selectionAsync();
-                            setEditFormData({ ...editFormData, storeId: store.id });
-                          }}
-                          accessibilityRole="radio"
-                          accessibilityState={{ checked: active }}
-                          accessibilityLabel={isNew ? 'Open a new store' : `${store.name} store`}
-                        >
-                          <View style={styles.roleOptionCheck}>
-                            <Ionicons
-                              name={isNew ? 'add-circle-outline' : active ? 'radio-button-on' : 'radio-button-off'}
-                              size={18}
-                              color={active ? Colors.light.tint : Colors.light.icon}
-                            />
-                          </View>
-                          <View style={styles.roleOptionCopy}>
-                            <Text style={[styles.roleOptionText, active && styles.roleOptionTextActive]}>
-                              {store.name}
-                            </Text>
-                          </View>
-                        </AnimatedPressable>
-                      );
-                    })}
-                  </View>
-                  {editFormData.storeId === NEW_STORE && (
-                    <TextInput
-                      style={[styles.input, styles.newStoreInput]}
-                      value={editFormData.newStoreName}
-                      onChangeText={(text) => setEditFormData({ ...editFormData, newStoreName: text })}
-                      placeholder="Store name, e.g. Ukay ni Lola"
-                      placeholderTextColor={Colors.light.icon}
-                      maxLength={STORE_NAME_MAX}
-                      autoFocus
-                      accessibilityLabel="New store name"
-                    />
-                  )}
-                  <Text style={styles.inputHint}>
-                    A Store Manager can only change their own store&apos;s products.
-                    Stores can be renamed later but not deleted.
+                {editFormData.storeId === NEW_STORE ? (
+                  <TextInput
+                    style={styles.newStoreInput}
+                    value={editFormData.newStoreName}
+                    onChangeText={(text) => setEditFormData({ ...editFormData, newStoreName: text })}
+                    placeholder="Store name, e.g. Ukay ni Lola"
+                    placeholderTextColor={MUTED}
+                    maxLength={STORE_NAME_MAX}
+                    autoFocus
+                    accessibilityLabel="New store name"
+                  />
+                ) : null}
+                <View style={styles.storeNote}>
+                  <Ionicons name="information-circle-outline" size={14} color={MUTED} />
+                  <Text style={styles.storeNoteText}>
+                    A Store Manager can only change their own store&apos;s products. Stores can be
+                    renamed later, not deleted.
                   </Text>
                 </View>
-              )}
-
-              <View style={styles.editModalButtons}>
-                <DialogButtonRow
-                  buttons={[
-                    {
-                      label: 'Cancel',
-                      variant: 'secondary',
-                      onPress: () => setShowEditModal(false),
-                      disabled: updating,
-                    },
-                    {
-                      label: !isConnected ? 'Offline' : 'Save Changes',
-                      variant: 'primary',
-                      onPress: handleUpdateUser,
-                      loading: updating,
-                      disabled: updating || !isConnected || editingSelf || needsStore,
-                    },
-                  ]}
-                />
               </View>
-            </ScrollView>
+            ) : null}
           </View>
-        </View>
-      </Modal>
+        ) : null}
+      </Sheet>
     </SafeAreaView>
   );
 }
@@ -1693,36 +1756,61 @@ const styles = StyleSheet.create({
   ghost: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   ghostText: { fontSize: 15.5, fontWeight: '600', color: MUTED },
 
-  sheetUser: {
+  // ⋯ sheet: who it is, two facts, then the actions grouped in one card
+  // and the destructive one in a card of its own.
+  idCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 4,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    marginBottom: 8,
+    padding: 14,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
   },
-  sheetUserName: { fontSize: 15, fontWeight: '600', color: INK },
-  sheetUserMeta: { fontSize: 12, color: MUTED, marginTop: 1 },
+  idName: { fontSize: 16, fontWeight: '600', color: INK },
+  idEmail: { fontSize: 12, color: MUTED, marginTop: 1 },
+  facts: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  fact: { flex: 1, paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, backgroundColor: '#F3EEE6' },
+  factLabel: { fontSize: 10.5, color: MUTED },
+  factValue: { fontSize: 12.5, fontWeight: '600', color: INK, marginTop: 1 },
+  actionGroup: {
+    marginTop: 14,
+    borderRadius: 20,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+    overflow: 'hidden',
+  },
   action: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 11,
-    paddingHorizontal: 8,
-    borderRadius: 14,
+    padding: 14,
   },
+  actionDivided: { borderTopWidth: 1, borderTopColor: CARD_LINE },
   actionIcon: {
-    width: 36,
-    height: 36,
+    width: 38,
+    height: 38,
     borderRadius: 12,
     backgroundColor: '#F3EEE6',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionTitle: { fontSize: 14, fontWeight: '500', color: INK },
-  actionDetail: { fontSize: 11.5, color: MUTED },
+  selfNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#E0D3C4',
+  },
+  selfNoteText: { flex: 1, fontSize: 12, lineHeight: 17, color: MUTED },
+  actionTitle: { fontSize: 14, fontWeight: '600', color: INK },
+  actionDetail: { fontSize: 11.5, lineHeight: 16, color: MUTED },
 
   modalMessage: { fontSize: 14, lineHeight: 20, color: MUTED, textAlign: 'center', marginBottom: 14 },
   who: {
@@ -1747,187 +1835,201 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: Spacing.md,
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  // Deactivate sheet
+  warnRing: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#FBEDEB',
+    borderWidth: 8,
+    borderColor: '#FDF5F3',
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: Colors.light.background,
-    borderRadius: 20,
-    padding: 20,
-    width: '90%',
-    maxHeight: '80%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  modalAvatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: Colors.light.tint,
-    justifyContent: 'center',
-    alignItems: 'center',
     alignSelf: 'center',
-    marginBottom: 20,
+    marginTop: 2,
+    marginBottom: 12,
   },
-  modalAvatarText: {
-    color: '#fff',
-    fontSize: 32,
-    fontWeight: '600',
-  },
-  modalInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-  },
-  modalInfoLabel: {
-    fontSize: 14,
-    color: Colors.light.icon,
-    fontWeight: '500',
-  },
-  modalInfoValue: {
-    fontSize: 14,
-    color: Colors.light.text,
-  },
-  modalRoleBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  modalRoleText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  modalStatusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  modalStatusText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 20,
-  },
-  modalButtonHalf: { flex: 1 },
-  // Cancel/Save Changes render through DialogButtonRow, which keeps both
-  // buttons the same width and the same text size — this wrap just adds
-  // the top spacing above the row.
-  editModalButtons: {
-    marginTop: 20,
-  },
-  statusToggleButton: {
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  statusButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  inputGroup: {
-    marginBottom: 16,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: Colors.light.text,
-    marginBottom: 8,
-  },
-  input: {
+  warnTitle: { fontSize: 19, fontWeight: '600', color: INK, textAlign: 'center' },
+  warnEmail: { fontSize: 12.5, color: MUTED, textAlign: 'center', marginTop: 3 },
+  cons: {
+    marginTop: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 2,
+    borderRadius: 18,
+    backgroundColor: '#fff',
     borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: Colors.light.text,
-    backgroundColor: Colors.light.background,
+    borderColor: CARD_LINE,
   },
-  inputDisabled: {
-    backgroundColor: Colors.light.border + '30',
+  con: { flexDirection: 'row', gap: 10, paddingVertical: 11 },
+  conDivided: { borderTopWidth: 1, borderTopColor: CARD_LINE },
+  conIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 9,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  disabledInputText: {
-    fontSize: 14,
-    color: Colors.light.icon,
+  conText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: MUTED },
+  conLead: { fontWeight: '600', color: INK },
+
+  // Change role sheet
+  sheetHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
-  newStoreInput: {
-    marginTop: Spacing.sm,
+  sheetClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    backgroundColor: '#F0E9DF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  inputHint: {
+  mini: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    backgroundColor: '#F3EEE6',
+  },
+  miniName: { fontSize: 13.5, fontWeight: '600', color: INK },
+  miniEmail: { fontSize: 11.5, color: MUTED },
+  miniLock: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  miniLockText: { fontSize: 10.5, color: MUTED },
+  fieldLabel: {
     fontSize: 11,
-    color: Colors.light.icon,
-    marginTop: 6,
+    fontWeight: '600',
+    letterSpacing: 1.2,
+    color: MUTED,
+    marginTop: 18,
+    marginBottom: 8,
+    marginHorizontal: 2,
   },
-  roleSelector: {
-    gap: Spacing.sm,
-  },
-  // Selection reads as a tinted outline rather than a solid Clay fill:
-  // the option now carries a description line, and white-on-Clay body copy
-  // at 12px would be the least legible text in the modal. Flat-by-default
-  // per DESIGN.md, with the fill reserved for the actual primary action
-  // (Save Changes) at the bottom of the same modal.
-  roleOption: {
+  roleCards: { gap: 8 },
+  // Selection reads as a Clay outline on a faint Clay wash rather than a
+  // solid fill: the card carries body copy, and the fill is reserved for
+  // the actual primary action (Save change) below.
+  roleCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: Spacing.sm,
-    minHeight: 44,
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm + 2,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
+    gap: 12,
+    padding: 13,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: CARD_LINE,
+    backgroundColor: '#fff',
   },
-  roleOptionActive: {
-    backgroundColor: Colors.light.tint + '12',
-    borderColor: Colors.light.tint,
+  roleCardOn: { borderColor: CLAY, backgroundColor: '#FCF3EE' },
+  roleCardIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  roleOptionDisabled: {
-    opacity: 0.5,
-  },
-  roleOptionCheck: {
-    // Nudged down so the radio sits on the label's optical center rather
-    // than the top edge of a two-line block.
-    marginTop: 1,
-  },
-  roleOptionCopy: {
-    flex: 1,
-  },
-  roleOptionText: {
-    fontSize: 14,
+  roleCardHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  roleCardTitle: { fontSize: 14, fontWeight: '600', color: INK },
+  currentTag: {
+    fontSize: 9.5,
     fontWeight: '600',
-    color: Colors.light.text,
+    letterSpacing: 0.3,
+    color: MUTED,
+    backgroundColor: '#EFE7DC',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: 'hidden',
   },
-  roleOptionTextActive: {
-    color: Colors.light.tint,
+  roleCardSummary: { fontSize: 11.5, lineHeight: 16, color: MUTED, marginTop: 2 },
+  perms: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 8 },
+  perm: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 99,
+    backgroundColor: '#F3EEE6',
   },
-  roleOptionCapability: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: Colors.light.icon,
+  permText: { fontSize: 10.5, color: '#4A413A' },
+  permNo: { color: '#9A9187', textDecorationLine: 'line-through' },
+  radio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1.8,
+    borderColor: '#CFC4B6',
     marginTop: 2,
   },
+  radioOn: { borderWidth: 6, borderColor: CLAY },
+  storeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  storeTile: {
+    flexGrow: 1,
+    flexBasis: '46%',
+    minHeight: 88,
+    padding: 12,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: CARD_LINE,
+    backgroundColor: '#fff',
+  },
+  storeTileNew: { borderStyle: 'dashed', borderColor: '#D8CCBC', backgroundColor: 'transparent' },
+  storeTileOn: { borderStyle: 'solid', borderColor: CLAY, backgroundColor: '#FCF3EE' },
+  storeTileIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    backgroundColor: '#F3EEE6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  storeTileName: { fontSize: 12.5, fontWeight: '600', lineHeight: 16, color: INK },
+  storeTileMeta: { fontSize: 10.5, color: MUTED, marginTop: 2 },
+  storeCheck: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: CLAY,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  newStoreInput: {
+    marginTop: 8,
+    height: 46,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: CLAY,
+    backgroundColor: '#fff',
+    fontSize: 14,
+    color: INK,
+  },
+  storeNote: { flexDirection: 'row', gap: 6, marginTop: 10, marginHorizontal: 2 },
+  storeNoteText: { flex: 1, fontSize: 11, lineHeight: 16, color: MUTED },
+  diff: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: INK,
+    marginBottom: 10,
+  },
+  diffSame: { backgroundColor: '#F0E9DF' },
+  diffLabel: { fontSize: 10, fontWeight: '600', letterSpacing: 1, color: ON_INK_MUTED },
+  diffLine: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  diffFrom: {
+    flexShrink: 1,
+    fontSize: 12.5,
+    color: ON_INK_MUTED,
+    textDecorationLine: 'line-through',
+  },
+  diffTo: { flexShrink: 1, fontSize: 12.5, fontWeight: '600', color: '#fff' },
+  diffSameText: { fontSize: 12.5, color: MUTED, marginTop: 4 },
 });
