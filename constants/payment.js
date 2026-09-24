@@ -196,6 +196,15 @@ export const getPaymentNote = (order) => {
   return '';
 };
 
+// The PayMongo receipt for an order it took: its payment id, and whether
+// it went through PayMongo's test mode (livemode false). Null for COD and
+// for orders from before PayMongo, which the order screens show only as
+// their payment method.
+export const getPaymongoReceipt = (order) => {
+  if (!order || isPayOnDelivery(order.paymentMethod) || order.paymentProvider !== 'paymongo') return null;
+  return { ref: order.paymentRef || null, test: order.paymentSandbox === true };
+};
+
 // Which gateway the online methods use, from config/payments — the same
 // document placeOrder reads. A missing document, or one this version of the
 // app does not recognise, means the sandbox, as it does on the server.

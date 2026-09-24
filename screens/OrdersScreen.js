@@ -317,7 +317,7 @@ export default function OrdersScreen({ navigation }) {
             shippingAddress: data.shippingAddress || null,
             paymentMethod: data.paymentMethod || null,
             paymentStatus: data.paymentStatus || null,
-            // For OrderDetails' payment note (getPaymentNote).
+            // For OrderDetails' PayMongo receipt line (getPaymongoReceipt).
             paymentRef: data.paymentRef || null,
             paymentSandbox: data.paymentSandbox === true,
             paymentProvider: data.paymentProvider || null,

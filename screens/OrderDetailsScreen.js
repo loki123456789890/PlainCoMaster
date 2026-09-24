@@ -12,6 +12,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Platform,
 } from 'react-native';
 import Animated, {
   useSharedValue,
@@ -40,7 +41,7 @@ import ProductImage from '../components/ui/ProductImage';
 import StoreLogo from '../components/shop/StoreLogo';
 import { useStores } from '../context/StoreContext';
 import { REVIEWS_COLLECTION, mapReviewDoc, isOrderReviewable } from '../utils/reviews';
-import { getPaymentLabel, getPaymentIcon, getPaymentStatus, getPaymentNote } from '../constants/payment';
+import { getPaymentLabel, getPaymentIcon, getPaymentStatus, getPaymongoReceipt } from '../constants/payment';
 import { formatOrderNumber } from '../utils/orderNumber';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 import { orderRef, chatFields, hasUnread } from '../utils/orderChat';
@@ -341,10 +342,10 @@ export default function OrderDetailsScreen({ navigation, route }) {
         ? paymentMethod === 'card' ? 'Credit / debit card' : 'E-wallet'
         : `Not charged. The ${paymentLabel} payment was not completed.`;
 
-  // Shown only where it is true, and stated plainly rather than softened.
-  // An order carrying a simulated authorisation must say so on the screen
-  // a customer or a Store Manager would point at as proof of payment.
-  const sandboxNote = getPaymentNote(order);
+  // Which PayMongo payment took the money, so a customer has a reference
+  // to quote. A test-mode payment says so: it's the proof of payment a
+  // customer or Store Manager would point at.
+  const receipt = getPaymongoReceipt(order);
   const itemCount = items.reduce((n, item) => n + (item.quantity || 1), 0);
   const fade = (delay) => (reduceMotion ? undefined : FadeIn.duration(220).delay(delay).easing(EASE_OUT_QUART));
 
@@ -559,10 +560,18 @@ export default function OrderDetailsScreen({ navigation, route }) {
               </View>
               {isPaid ? <Text style={styles.paidPill}>Paid</Text> : null}
             </View>
-            {sandboxNote ? (
-              <View style={styles.sandbox}>
-                <Ionicons name="flask-outline" size={15} color={Colors.light.icon} />
-                <Text style={styles.sandboxText}>{sandboxNote}</Text>
+            {receipt ? (
+              <View
+                style={styles.gateway}
+                accessible
+                accessibilityLabel={`Paid through PayMongo${receipt.ref ? `, reference ${receipt.ref}` : ''}${receipt.test ? ', test mode' : ''}`}
+              >
+                <Ionicons name="shield-checkmark-outline" size={15} color={Colors.light.secondary} />
+                <Text style={styles.gatewayText} numberOfLines={1}>
+                  Paid through <Text style={styles.gatewayName}>PayMongo</Text>
+                  {receipt.ref ? <Text style={styles.gatewayRef}>{`  ${receipt.ref}`}</Text> : null}
+                </Text>
+                {receipt.test ? <Text style={styles.testTag}>Test mode</Text> : null}
               </View>
             ) : null}
           </Card>
@@ -825,21 +834,29 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
     overflow: 'hidden',
   },
-  sandbox: {
+  gateway: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginHorizontal: 14,
-    marginBottom: 14,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
   },
-  sandboxText: { flex: 1, fontSize: 11.5, color: Colors.light.icon, lineHeight: 16 },
+  gatewayText: { flex: 1, fontSize: 12, color: Colors.light.icon },
+  gatewayName: { fontWeight: '600', color: Colors.light.text },
+  gatewayRef: { fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 11 },
+  testTag: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: Colors.light.icon,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    overflow: 'hidden',
+  },
 
   // Receipt
   receipt: { marginTop: 22 },

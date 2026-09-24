@@ -48,7 +48,7 @@ import {
   getPaymentLabel,
   getPaymentStatus,
   getPaymentStatusLabel,
-  getPaymentNote,
+  getPaymongoReceipt,
   isPayOnDelivery,
 } from '../../constants/payment';
 import { chatFields, hasUnread } from '../../utils/orderChat';
@@ -578,6 +578,7 @@ export default function AdminOrdersScreen({ navigation, route }) {
   const lastSheetOrder = useRef(null);
   if (openOrder) lastSheetOrder.current = openOrder;
   const sheetOrder = openOrder || lastSheetOrder.current;
+  const sheetReceipt = getPaymongoReceipt(sheetOrder);
 
   const showToast = (next) => {
     clearTimeout(toastTimer.current);
@@ -1152,15 +1153,19 @@ export default function AdminOrdersScreen({ navigation, route }) {
                   <Text style={styles.sumVal}>
                     {getPaymentLabel(sheetOrder.paymentMethod)} · {getPaymentStatusLabel(sheetOrder)}
                   </Text>
-                  {sheetOrder.paymentSandbox ? <Text style={styles.sbxTag}>SANDBOX</Text> : null}
+                  {sheetReceipt?.test ? <Text style={styles.testTag}>TEST</Text> : null}
                 </View>
               </View>
-              {/* The Store Manager is the person most likely to act on
-                  this screen as if money had arrived, so the order's
-                  simulated origin is stated here rather than inferred
-                  from a "Paid" label that looks like every other one. */}
-              {getPaymentNote(sheetOrder) ? (
-                <Text style={styles.payNote}>{getPaymentNote(sheetOrder)}</Text>
+              {/* The PayMongo payment id, to look the payment up in the
+                  PayMongo dashboard. A test-mode payment is tagged above:
+                  the Store Manager is the one who'd ship on a "Paid". */}
+              {sheetReceipt ? (
+                <View style={styles.gatewayRow}>
+                  <Ionicons name="shield-checkmark-outline" size={13} color={Colors.light.success} />
+                  <Text style={styles.gatewayText} numberOfLines={1}>
+                    PayMongo{sheetReceipt.ref ? <Text style={styles.gatewayRef}>{`  ${sheetReceipt.ref}`}</Text> : null}
+                  </Text>
+                </View>
               ) : null}
               <View style={[styles.sumRow, styles.sumTotalRow]}>
                 <Text style={styles.sumKey}>Total</Text>
@@ -1421,15 +1426,15 @@ const styles = StyleSheet.create({
   sumKey: { fontSize: 12.5, color: Colors.light.icon },
   sumVal: { flexShrink: 1, fontSize: 12.5, fontWeight: '500', color: Colors.light.text, textAlign: 'right' },
   sumValRow: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sbxTag: {
+  testTag: {
     fontSize: 10.5,
     fontWeight: '600',
     letterSpacing: 0.4,
     color: Colors.light.icon,
     borderWidth: 1,
-    borderStyle: 'dashed',
     borderColor: '#DCD2C3',
     borderRadius: 6,
+    overflow: 'hidden',
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
@@ -1443,7 +1448,9 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: 15,
   },
   sumTotalVal: { fontSize: 19, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
-  payNote: { fontSize: 11.5, color: Colors.light.highlight, textAlign: 'right', marginTop: -4 },
+  gatewayRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 5, marginTop: -4 },
+  gatewayText: { flexShrink: 1, fontSize: 11.5, fontWeight: '600', color: Colors.light.text },
+  gatewayRef: { fontFamily: MONO, fontSize: 11, fontWeight: '400', color: Colors.light.icon },
 
   step: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingBottom: 14 },
   stepLine: { position: 'absolute', left: 13, top: 26, bottom: 0, width: 2, backgroundColor: '#E4DCCE' },
