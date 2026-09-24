@@ -1278,7 +1278,7 @@ bar returning to Home; and each category tile opening Shop filtered.
 | FR-P4 | The cart total and the Checkout button exclude items that are no longer available, and say so. Checkout is disabled only when no available items remain. |
 | FR-P5 | Profile shows the saved delivery address and phone, or a prompt to add them, and opens the Delivery Address screen to edit them. |
 | FR-P6 | The display name is edited in a sheet; it must not be empty and may be at most 60 characters. The email is shown read-only. |
-| FR-P7 | Log Out and Deactivate each ask for confirmation. The Deactivate confirmation states that the user will be signed out and cannot sign in again, that past orders are kept for transaction records, that only a Platform Admin can reactivate the account, and that data questions go through Contact Support in the Help Center. |
+| FR-P7 | Log Out and Deactivate each ask for confirmation. Log Out names the account being logged out of. The Deactivate confirmation states that the user will be signed out and cannot sign in again, that past orders are kept for transaction records, that only a Platform Admin can reactivate the account, and that data questions go through Contact Support in the Help Center. Deactivate stays disabled until the user ticks that they understand they can't log in again. Both end on a confirmation screen before returning to the landing screen. |
 
 ### Differences from the previous version
 
@@ -1408,6 +1408,40 @@ sheet; the Deactivate confirmation; and logging out to Landing.
 **Store page** is a new screen (previously part of Shop). **Delivery
 Address** and **Help & Support** are redesigned.
 
+### New use case — 2.5 View Store Page
+
+> **2.5 Transaction Name: View Store Page**
+>
+> • **Use Case Description**
+> A customer opens a store's page from the Shop screen to view the
+> store's profile and its product listings. The page displays the
+> store's name, logo, category, date joined, description, item count,
+> and a review summary computed from reviews of that store's products,
+> followed by a searchable grid of the store's products.
+>
+> **Preconditions:** The customer is logged in and the store has an
+> active profile in Cloud Firestore.
+>
+> **Postconditions:** The store's profile and product grid are
+> displayed; searching filters only that store's products.
+>
+> **Extensions:** 1a. No Reviews: If none of the store's products have
+> been reviewed, the summary is replaced by a message explaining that
+> buyers can review an item once their order is delivered.
+
+Checked against the app. Details the panel may want to include:
+
+- The page can also be opened from "Sold by" on a product's page, not
+  only from Shop.
+- The category is not stored on the store. It is worked out from the
+  store's products: Ukay-Ukay, Ready-to-Wear, or both. A store selling
+  both also gets category tabs above its products.
+- The review summary is the average rating and the share of buyers who
+  said items matched the description. It is computed from the store's
+  100 most recent reviews.
+- The login precondition is required: the security rules let only
+  signed-in users read stores, products and reviews.
+
 ### Limitations
 
 - Filling the address from location needs permission and a network
@@ -1501,6 +1535,18 @@ Shop, scrolled, and searched.
 No new screens. **Product Details**, **Checkout** and **Order
 Confirmation** are redesigned; the **Size Guide** is now a sheet on the
 product screen.
+
+### Checkout use case — alternative flow (Buy Now)
+
+Suggested addition to the Checkout / Add to Cart use case:
+
+> Alternatively, the customer taps "Buy Now," which proceeds directly to
+> Checkout with only the selected item, size, color and quantity,
+> without adding it to the shopping cart.
+
+Checked against the app. The cart is left as it was, and placing the
+order doesn't remove anything from it. As with Add to Cart, a size must
+be chosen first (FR-B1), and Buy Now is disabled for a sold-out item.
 
 ### Limitations
 
