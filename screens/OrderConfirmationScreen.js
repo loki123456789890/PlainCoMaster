@@ -119,6 +119,10 @@ export default function OrderConfirmationScreen({ navigation, route }) {
   const split = placedOrders.length > 1;
   const payOnDelivery = isPayOnDelivery(order.paymentMethod);
   const storeName = placedOrders[0]?.storeName;
+  // An online payment the sandbox approved: the payment/orders preview's
+  // "Payment successful" wording, with the Paid status beside it. A COD
+  // order has nothing paid yet, so it keeps "Order placed!".
+  const paid = order.paymentStatus === 'paid';
 
   return (
     <ScrollView
@@ -129,13 +133,15 @@ export default function OrderConfirmationScreen({ navigation, route }) {
       <SuccessTile reduceMotion={reduceMotion} />
       <Reveal delay={350}>
         <Text style={styles.title} accessibilityRole="header">
-          {split ? 'Orders placed!' : 'Order placed!'}
+          {paid ? 'Payment successful' : split ? 'Orders placed!' : 'Order placed!'}
         </Text>
       </Reveal>
       <Reveal delay={430}>
         <Text style={styles.text}>
           {split
             ? `Your cart came from ${placedOrders.length} stores, so it ships as ${placedOrders.length} orders. We'll show updates in My Orders as each is prepared and shipped.`
+            : paid
+            ? `Your order is on its way to ${storeName || 'the store'}. You can follow it in My Orders.`
             : `${storeName || 'The store'} has your order. We'll show updates in My Orders as it's prepared and shipped.`}
         </Text>
       </Reveal>
@@ -150,16 +156,32 @@ export default function OrderConfirmationScreen({ navigation, route }) {
             </Text>
           </Row>
         ))}
-        <Row label="Status">
-          <Text style={styles.pill}>Processing</Text>
-        </Row>
-        <Row label="Payment">
-          <Text style={styles.rowValue}>
-            {getPaymentLabel(order.paymentMethod)}
-            {order.paymentSandbox ? ' (test)' : ''}
-          </Text>
-        </Row>
-        <Row label={payOnDelivery ? 'To pay on delivery' : 'Total'}>
+        {paid ? (
+          <>
+            <Row label="Paid with">
+              <Text style={styles.rowValue}>
+                {getPaymentLabel(order.paymentMethod)}
+                {order.paymentSandbox ? ' (test)' : ''}
+              </Text>
+            </Row>
+            <Row label="Payment">
+              <Text style={[styles.pill, styles.pillPaid]}>Paid</Text>
+            </Row>
+          </>
+        ) : (
+          <>
+            <Row label="Status">
+              <Text style={styles.pill}>Processing</Text>
+            </Row>
+            <Row label="Payment">
+              <Text style={styles.rowValue}>
+                {getPaymentLabel(order.paymentMethod)}
+                {order.paymentSandbox ? ' (test)' : ''}
+              </Text>
+            </Row>
+          </>
+        )}
+        <Row label={payOnDelivery ? 'To pay on delivery' : paid ? 'Amount' : 'Total'}>
           <Text style={[styles.rowValue, { color: PRICE }]}>₱{Number(order.total || 0).toFixed(2)}</Text>
         </Row>
       </Reveal>
@@ -215,6 +237,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 3,
   },
+  pillPaid: { color: '#37412F', backgroundColor: '#EEF0EA' },
   full: { alignSelf: 'stretch', marginBottom: 10 },
   button: { height: 54, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   primary: { backgroundColor: Colors.light.tint },

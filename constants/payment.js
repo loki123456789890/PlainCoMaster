@@ -18,6 +18,8 @@
 // dominant method in Philippine e-commerce and fits ukay-ukay's
 // inspect-before-you-pay nature — see Checkoutscreen's trust copy.
 
+import { Colors } from './theme';
+
 // Ordered as the checkout picker renders them.
 export const PAYMENT_METHODS = [
   { id: 'gcash', label: 'GCash', icon: 'cash-outline' },
@@ -25,6 +27,15 @@ export const PAYMENT_METHODS = [
   { id: 'card', label: 'Card', icon: 'card-outline' },
   { id: 'cod', label: 'Cash on Delivery', icon: 'cube-outline' },
 ];
+
+// How each method is shown in the list: a colored letter or icon tile and
+// a line under its name, on Checkout and the Payment screen.
+export const PAYMENT_LOOK = {
+  gcash: { tile: '#1E6FEB', letter: 'G', name: 'GCash', line: 'Pay with your GCash wallet' },
+  maya: { tile: '#1A1A1A', letter: 'M', name: 'Maya', line: 'Pay with your Maya wallet' },
+  card: { tile: Colors.light.secondary, icon: 'card-outline', name: 'Credit / debit card', line: 'Visa, Mastercard' },
+  cod: { tile: Colors.light.tint, icon: 'cube-outline', name: 'Cash on Delivery', line: 'Pay the rider when it arrives' },
+};
 
 const BY_ID = PAYMENT_METHODS.reduce((acc, method) => {
   acc[method.id] = method;

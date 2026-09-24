@@ -26,12 +26,14 @@ import { db, auth, functions } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import useNetworkStatus from '../hooks/useNetworkStatus';
-import { PAYMENT_METHODS, isPayOnDelivery, requiresOnlinePayment } from '../constants/payment';
+import { PAYMENT_METHODS, PAYMENT_LOOK, isPayOnDelivery, requiresOnlinePayment, getPaymentLabel } from '../constants/payment';
 import { Colors } from '../constants/theme';
 import SkeletonBlock from '../components/ui/Skeleton';
 import { TopBar, OfflineNotice } from '../components/shop/TabScreen';
 import ProductImage from '../components/ui/ProductImage';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
+import Sheet from '../components/shop/Sheet';
+import Button from '../components/ui/Button';
 
 // Handles "$450.00", "450", or 450 — always returns a clean number
 const parsePrice = (price) => {
@@ -48,19 +50,77 @@ const parsePrice = (price) => {
 // pairs with the existing validation Alert instead of replacing it, so a
 // screen-reader user still gets the authoritative message while a sighted
 // user also sees *where*.
-// How each method is shown in the list: a colored letter or icon tile and
-// a line under its name. The ids, labels and order are still
-// constants/payment.js's.
-const METHOD_LOOK = {
-  gcash: { tile: '#1E6FEB', letter: 'G', name: 'GCash', line: 'Pay with your GCash wallet' },
-  maya: { tile: '#1A1A1A', letter: 'M', name: 'Maya', line: 'Pay with your Maya wallet' },
-  card: { tile: Colors.light.secondary, icon: 'card-outline', name: 'Credit / debit card', line: 'Visa, Mastercard' },
-  cod: { tile: Colors.light.tint, icon: 'cube-outline', name: 'Cash on Delivery', line: 'Pay the rider when it arrives' },
-};
-
 function ValidationRing({ opacity }) {
   const animatedStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
   return <Animated.View pointerEvents="none" style={[styles.validationRing, animatedStyle]} />;
+}
+
+// What the sheet says for each answer the sandbox gateway can refuse with.
+// Every one ends on the same fact, because it is the one the customer
+// needs most: nothing was taken and no order exists. (The server refuses
+// before writing anything; see functions/index.js.)
+const PAYMENT_PROBLEMS = {
+  declined: {
+    icon: 'close-circle-outline',
+    color: '#B42318',
+    bg: '#FBEDEB',
+    title: () => 'Payment declined',
+    text: (method) => `${method} refused this payment.`,
+  },
+  insufficient_funds: {
+    icon: 'wallet-outline',
+    color: Colors.light.tint,
+    bg: '#FBF1EC',
+    title: () => 'Not enough balance',
+    text: (method, amount) =>
+      `Your ${method} balance is less than ₱${amount.toFixed(2)}. Top it up first, or choose Cash on Delivery.`,
+  },
+  timeout: {
+    icon: 'time-outline',
+    color: '#8C6D0C',
+    bg: '#F6EFE3',
+    title: (method) => `We didn't hear back from ${method}`,
+    text: () => "The payment gateway didn't respond in time, so we stopped waiting instead of leaving you stuck.",
+  },
+};
+
+function PaymentProblemSheet({ problem, amount, onClose, onRetry, onOtherMethod, onCod }) {
+  // Kept through the sheet's closing slide, so its text doesn't blank out
+  // as it goes.
+  const [shown, setShown] = useState(problem);
+  useEffect(() => {
+    if (problem) setShown(problem);
+  }, [problem]);
+  const look = PAYMENT_PROBLEMS[shown?.outcome] || PAYMENT_PROBLEMS.declined;
+  const method = getPaymentLabel(shown?.method);
+  const lowBalance = shown?.outcome === 'insufficient_funds';
+
+  return (
+    <Sheet visible={Boolean(problem)} onClose={onClose}>
+      <View style={styles.problem}>
+        <View style={[styles.problemIcon, { backgroundColor: look.bg }]}>
+          <Ionicons name={look.icon} size={34} color={look.color} />
+        </View>
+        <Text style={styles.problemTitle} accessibilityRole="header">
+          {look.title(method)}
+        </Text>
+        <Text style={styles.problemText}>{look.text(method, amount)}</Text>
+        <View style={styles.problemSafe}>
+          <Ionicons name="shield-checkmark-outline" size={15} color="#37412F" />
+          <Text style={styles.problemSafeText}>No money was taken and your order wasn&apos;t placed.</Text>
+        </View>
+        <Button label="Try again" fontSize={15.5} onPress={onRetry} fullWidth />
+        <Button
+          variant="secondary"
+          label={lowBalance ? 'Pay with Cash on Delivery' : 'Use another payment method'}
+          fontSize={15.5}
+          onPress={lowBalance ? onCod : onOtherMethod}
+          fullWidth
+          style={{ marginTop: 8 }}
+        />
+      </View>
+    </Sheet>
+  );
 }
 
 export default function CheckoutScreen({ navigation, route }) {
@@ -97,6 +157,9 @@ export default function CheckoutScreen({ navigation, route }) {
   // An item that sold out (or ran short) between opening checkout and
   // placing the order, shown as a notice at the top of the page.
   const [stockProblem, setStockProblem] = useState(null);
+  // A payment the sandbox gateway refused: { outcome, method }. Shown in
+  // a sheet with the next steps that fit that answer.
+  const [paymentProblem, setPaymentProblem] = useState(null);
   const paymentY = useRef(0);
   // Opened from the cart (lines carry a cart productId) or from a
   // product's Buy Now (a raw product with no productId).
@@ -280,6 +343,8 @@ export default function CheckoutScreen({ navigation, route }) {
         // submits an order with no lines. Round-tripping the lines makes
         // the outcome independent of which of those navigation does.
         orderItems,
+        // For the Payment screen's summary line only.
+        deliverTo: [shippingAddress.city, shippingAddress.province].filter(Boolean).join(', '),
       });
       return;
     }
@@ -404,18 +469,7 @@ export default function CheckoutScreen({ navigation, route }) {
       // given, because a declined card and an unresponsive gateway call
       // for different next steps and the customer knows which they had.
       if (reason === 'payment-declined') {
-        showAppAlert(
-          'Payment Not Completed',
-          `${error.message}\n\nYour order was not placed and nothing was charged.`,
-          [
-            { text: 'Try Again', onPress: () => handlePlaceOrder() },
-            // "Change Method" truncated to "Change Meth..." in the dialog's
-            // two-button row. The shorter word carries the same meaning
-            // beside "Try Again" and next to a payment picker that is
-            // still on screen with the refused method highlighted.
-            { text: 'Change', style: 'cancel' },
-          ]
-        );
+        setPaymentProblem({ outcome: error.details?.outcome, method: paymentMethod });
         return;
       }
 
@@ -669,7 +723,7 @@ export default function CheckoutScreen({ navigation, route }) {
               <View style={{ gap: 8 }} accessibilityRole="radiogroup">
                 {PAYMENT_METHODS.map((option) => {
                   const on = selectedPayment === option.id;
-                  const look = METHOD_LOOK[option.id] || { tile: Colors.light.icon, icon: option.icon, name: option.label, line: '' };
+                  const look = PAYMENT_LOOK[option.id] || { tile: Colors.light.icon, icon: option.icon, name: option.label, line: '' };
                   return (
                     <Pressable
                       key={option.id}
@@ -761,6 +815,25 @@ export default function CheckoutScreen({ navigation, route }) {
           {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.placeText}>Place order</Text>}
         </Pressable>
       </View>
+
+      <PaymentProblemSheet
+        problem={paymentProblem}
+        amount={total}
+        onClose={() => setPaymentProblem(null)}
+        onRetry={() => {
+          setPaymentProblem(null);
+          handlePlaceOrder();
+        }}
+        onOtherMethod={() => {
+          setPaymentProblem(null);
+          scrollRef.current?.scrollTo({ y: Math.max(0, paymentY.current - 120), animated: true });
+        }}
+        onCod={() => {
+          setPaymentProblem(null);
+          handleSelectPayment('cod');
+          scrollRef.current?.scrollTo({ y: Math.max(0, paymentY.current - 120), animated: true });
+        }}
+      />
     </View>
   );
 }
@@ -914,4 +987,21 @@ const styles = StyleSheet.create({
   place: { height: 54, borderRadius: 16, backgroundColor: Colors.light.tint, alignItems: 'center', justifyContent: 'center' },
   placeOff: { backgroundColor: '#E3C3B6' },
   placeText: { fontSize: 15.5, fontWeight: '600', color: '#fff' },
+  problem: { alignItems: 'center', paddingTop: 4 },
+  problemIcon: { width: 72, height: 72, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  problemTitle: { fontSize: 19, fontWeight: '600', color: Colors.light.text, textAlign: 'center', marginBottom: 6 },
+  problemText: { fontSize: 13, lineHeight: 20, color: Colors.light.icon, textAlign: 'center', marginBottom: 14 },
+  problemSafe: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#EEF0EA',
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+  },
+  problemSafeText: { flexShrink: 1, fontSize: 12, color: '#37412F' },
 });
