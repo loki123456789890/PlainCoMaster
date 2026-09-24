@@ -34,6 +34,8 @@ import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import Button from '../../components/ui/Button';
 import Sheet from '../../components/shop/Sheet';
+import Reveal from '../../components/shop/Reveal';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Colors } from '../../constants/theme';
 import { getHomeRouteForRole, ROLE_SELLER, ROLE_PLATFORM_ADMIN } from '../../constants/roles';
 
@@ -89,53 +91,97 @@ function AccessNote() {
 const NOTE_INK = '#8B8178';
 const FOOT_INK = '#BDB3A9';
 
+// Step 2 names the two roles as tags rather than in the sentence.
 const STAFF_STEPS = [
   {
     title: 'Create a customer account',
-    body: 'Sign up on the main PlainCo sign-up screen, with the email you want to use for work.',
+    body: ['Sign up on the main PlainCo sign-up screen with the ', { em: "email you'll use for work" }, '.'],
   },
   {
     title: 'Ask a Platform Admin for a role',
-    body: 'They find your email in Manage Users and make you a Store Manager (with your store) or a Platform Admin.',
+    body: ['They find your email in Manage Users and give you one of these roles:'],
+    tags: [
+      { label: 'Store Manager · your store', tone: 'clay' },
+      { label: 'Platform Admin', tone: 'moss' },
+    ],
   },
   {
     title: 'Sign in here',
-    body: 'Use the same email and password. The Staff Portal opens your dashboard.',
+    body: ['Use the same email and password. The Staff Portal opens your dashboard.'],
   },
 ];
 
-// The sheet behind "How do I get a staff account?". Drawn on canvas like
-// every other sheet, not on this screen's ink.
+// The sheet behind "How do I get a staff account?", on ink like the rest
+// of the Staff Portal: a header with a close button, the three steps as a
+// numbered timeline, a note about passwords, and a way to sign up.
 function StaffAccountSheet({ visible, onClose, onSignUp }) {
   return (
-    <Sheet visible={visible} onClose={onClose}>
-      <Text style={styles.sheetTitle} accessibilityRole="header">
-        Getting a staff account
-      </Text>
+    <Sheet visible={visible} onClose={onClose} dark>
+      <View style={styles.sheetHead}>
+        <View style={styles.sheetIcon}>
+          <Ionicons name="shield-checkmark-outline" size={22} color={PILL_INK} />
+        </View>
+        <Text style={styles.sheetTitle} accessibilityRole="header">
+          Getting a staff account
+        </Text>
+        <Pressable
+          onPress={onClose}
+          style={({ pressed }) => [styles.sheetClose, pressed && { opacity: 0.7 }]}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel="Close"
+        >
+          <Ionicons name="close" size={17} color={FOOT_INK} />
+        </Pressable>
+      </View>
       <Text style={styles.sheetSub}>
-        Staff accounts can manage stores, orders and other people&apos;s accounts, so they&apos;re given by a Platform
-        Admin instead of signed up for.
+        Staff accounts can manage stores, orders and other people&apos;s accounts, so a Platform Admin grants them. You
+        can&apos;t sign up for one.
       </Text>
 
-      <View style={styles.steps}>
-        {STAFF_STEPS.map((step, index) => (
-          <View key={step.title} style={[styles.step, index < STAFF_STEPS.length - 1 && styles.stepDivider]}>
-            <View style={styles.stepNum}>
-              <Text style={styles.stepNumText}>{index + 1}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.stepTitle}>{step.title}</Text>
-              <Text style={styles.stepBody}>{step.body}</Text>
-            </View>
-          </View>
-        ))}
+      <View style={styles.timeline}>
+        {STAFF_STEPS.map((step, index) => {
+          const last = index === STAFF_STEPS.length - 1;
+          return (
+            <Reveal key={step.title} delay={120 + index * 80} style={[styles.step, last && { paddingBottom: 0 }]}>
+              {/* The line down to the next step, Clay fading into the ink. */}
+              {!last ? (
+                <LinearGradient colors={[Colors.light.tint, '#4A423B']} style={styles.stepLine} pointerEvents="none" />
+              ) : null}
+              <View style={[styles.stepNum, last && styles.stepNumLast]}>
+                <Text style={[styles.stepNumText, last && { color: PILL_INK }]}>{index + 1}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.stepTitle}>{step.title}</Text>
+                <Text style={styles.stepBody}>
+                  {step.body.map((bit, i) =>
+                    typeof bit === 'string' ? (
+                      bit
+                    ) : (
+                      <Text key={i} style={styles.stepEm}>
+                        {bit.em}
+                      </Text>
+                    )
+                  )}
+                </Text>
+                {step.tags ? (
+                  <View style={styles.tags}>
+                    {step.tags.map((tag) => (
+                      <Text key={tag.label} style={[styles.tag, tag.tone === 'moss' ? styles.tagMoss : styles.tagClay]}>
+                        {tag.label.toUpperCase()}
+                      </Text>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            </Reveal>
+          );
+        })}
       </View>
 
       <View style={styles.sheetNote}>
-        <Ionicons name="key-outline" size={15} color={Colors.light.secondary} style={{ marginTop: 1 }} />
-        <Text style={styles.sheetNoteText}>
-          You keep your own password — the Platform Admin never sees it.
-        </Text>
+        <Ionicons name="key-outline" size={18} color="#D5E0C9" style={{ marginTop: 1 }} />
+        <Text style={styles.sheetNoteText}>You keep your own password. The Platform Admin never sees it.</Text>
       </View>
 
       <Button label="Create a customer account" fontSize={15.5} onPress={onSignUp} fullWidth />
@@ -303,9 +349,18 @@ export default function AdminLoginScreen({ navigation, route }) {
       <RiseTitle delay={T.title} skip={skip}>Staff sign in</RiseTitle>
       <FadeUp delay={T.sub} skip={skip}>
         <Subtitle>For Store Managers and Platform Admins.</Subtitle>
-        <AuthLink accent onPress={() => setHelpOpen(true)} style={styles.helpLink}>
-          How do I get a staff account?
-        </AuthLink>
+        <Pressable
+          onPress={() => {
+            Haptics.selectionAsync();
+            setHelpOpen(true);
+          }}
+          style={({ pressed }) => [styles.helpLink, pressed && { opacity: 0.7 }]}
+          hitSlop={6}
+          accessibilityRole="button"
+        >
+          <Ionicons name="help-circle-outline" size={16} color={PILL_INK} />
+          <Text style={styles.helpLinkText}>How do I get a staff account?</Text>
+        </Pressable>
       </FadeUp>
 
       <AuthAlert alert={alert} />
@@ -408,34 +463,70 @@ const styles = StyleSheet.create({
   footText: { fontSize: 13, color: FOOT_INK, textAlign: 'center' },
   // The pill's light terracotta rather than Clay: Clay on ink is too dim
   // to read comfortably at this size.
-  helpLink: { alignSelf: 'flex-start', color: PILL_INK, fontSize: 13.5, marginTop: -6, marginBottom: 18, paddingVertical: 4 },
+  helpLink: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: -10, marginBottom: 16, paddingVertical: 6 },
+  helpLinkText: { fontSize: 13, fontWeight: '600', color: PILL_INK },
 
-  sheetTitle: { fontSize: 18, fontWeight: '600', color: Colors.light.text, marginBottom: 4 },
-  sheetSub: { fontSize: 13, lineHeight: 19, color: Colors.light.icon, marginBottom: 14 },
-  steps: {
-    backgroundColor: '#FFFFFF',
+  sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 6 },
+  sheetIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    marginBottom: 12,
+    borderColor: 'rgba(196,98,62,0.4)',
+    backgroundColor: 'rgba(196,98,62,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  step: { flexDirection: 'row', gap: 12, paddingVertical: 12 },
-  stepDivider: { borderBottomWidth: 1, borderBottomColor: Colors.light.border },
-  stepNum: {
-    width: 24,
-    height: 24,
+  sheetTitle: { flex: 1, fontSize: 19, fontWeight: '600', letterSpacing: -0.2, color: Colors.light.background, marginTop: 10 },
+  sheetClose: {
+    width: 36,
+    height: 36,
     borderRadius: 12,
+    backgroundColor: 'rgba(250,247,242,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetSub: { fontSize: 13, lineHeight: 20, color: FOOT_INK, marginTop: 6, marginBottom: 18 },
+  timeline: { marginBottom: 16 },
+  step: { flexDirection: 'row', gap: 14, paddingBottom: 18 },
+  stepLine: { position: 'absolute', left: 15, top: 32, bottom: 0, width: 2 },
+  stepNum: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: Colors.light.tint,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 1,
   },
-  stepNumText: { fontSize: 12.5, fontWeight: '700', color: '#fff' },
-  stepTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 2 },
-  stepBody: { fontSize: 12.5, lineHeight: 18, color: Colors.light.icon },
-  sheetNote: { flexDirection: 'row', gap: 8, paddingHorizontal: 4, marginBottom: 16 },
-  sheetNoteText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: Colors.light.icon },
+  stepNumLast: { backgroundColor: '#3A332E', borderWidth: 1.5, borderColor: Colors.light.tint },
+  stepNumText: { fontSize: 13, fontWeight: '600', color: '#fff' },
+  stepTitle: { fontSize: 14.5, fontWeight: '600', color: Colors.light.background, marginTop: 5 },
+  stepBody: { fontSize: 12.5, lineHeight: 19, color: FOOT_INK, marginTop: 3 },
+  stepEm: { fontWeight: '500', color: Colors.light.background },
+  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 8 },
+  tag: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    letterSpacing: 0.6,
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  tagClay: { backgroundColor: 'rgba(196,98,62,0.16)', color: PILL_INK },
+  tagMoss: { backgroundColor: 'rgba(143,163,125,0.16)', color: '#CFE0BF' },
+  sheetNote: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(143,163,125,0.3)',
+    backgroundColor: 'rgba(143,163,125,0.12)',
+    marginBottom: 18,
+  },
+  sheetNoteText: { flex: 1, fontSize: 12.5, lineHeight: 19, color: '#D5E0C9' },
   ghost: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
-  ghostText: { fontSize: 15.5, fontWeight: '600', color: Colors.light.icon },
+  ghostText: { fontSize: 15.5, fontWeight: '600', color: FOOT_INK },
 });
