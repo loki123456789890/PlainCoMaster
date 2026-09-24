@@ -52,6 +52,8 @@ import { pickAndUploadImage, uploadErrorMessage } from '../utils/imageUpload';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import { useAdmin } from '../context/AdminContext';
 import { useFavorites } from '../context/FavoritesContext';
+import { useCart } from '../context/CartContext';
+import LoggedOut from '../components/auth/LoggedOut';
 import { getPortalLabel } from '../constants/roles';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { Colors } from '../constants/theme';
@@ -245,7 +247,7 @@ function Consequence({ icon, color, children, last }) {
   );
 }
 
-// Shown after logging out or deactivating, over the (now signed-out)
+// Shown after deactivating, over the (now signed-out)
 // Profile screen, until the customer moves on to Landing.
 function Farewell({ farewell, onDone }) {
   const reduceMotion = useReducedMotion();
@@ -292,7 +294,7 @@ export default function ProfileScreen({ navigation, route }) {
   // they can't log back in.
   const [deactivateAck, setDeactivateAck] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  // What the goodbye screen says after logging out or deactivating.
+  // What the goodbye screen says after deactivating.
   const [farewell, setFarewell] = useState(null);
   const [orderCount, setOrderCount] = useState(null);
   // True only while the sole-platform-admin check is in flight, so the row
@@ -304,6 +306,9 @@ export default function ProfileScreen({ navigation, route }) {
   const [savingName, setSavingName] = useState(false);
   const { role, adminLoading, acknowledgeSelfDeactivation } = useAdmin();
   const { favorites } = useFavorites();
+  const { cartCount } = useCart();
+  // Set on logging out: who it was and what they had saved.
+  const [loggedOut, setLoggedOut] = useState(null);
   const { isConnected } = useNetworkStatus();
   const fromTab = route.params?.via === 'tab';
 
@@ -552,13 +557,11 @@ export default function ProfileScreen({ navigation, route }) {
     if (loggingOut) return;
     setLoggingOut(true);
     try {
+      // Read before signing out, which empties the cart and favorites.
+      const saved = { firstName, email: userData.email, cartCount, favoriteCount: favorites.length };
       await signOut(auth);
       setLogoutVisible(false);
-      setFarewell({
-        icon: 'log-out-outline',
-        title: "You're logged out",
-        text: `See you soon${firstName ? `, ${firstName}` : ''}. Your cart and favorites will be waiting.`,
-      });
+      setLoggedOut(saved);
     } catch (error) {
       console.error('Logout failed:', error?.code);
       setLogoutVisible(false);
@@ -704,6 +707,22 @@ export default function ProfileScreen({ navigation, route }) {
       </ConfirmDialog>
 
       <Farewell farewell={farewell} onDone={goToLanding} />
+      <LoggedOut
+        info={loggedOut}
+        onStart={() => {
+          setLoggedOut(null);
+          navigation.reset({ index: 0, routes: [{ name: 'Landing' }] });
+        }}
+        onLogBackIn={() => {
+          const email = loggedOut?.email;
+          setLoggedOut(null);
+          // Landing under Log In, so Back from Log In goes to the start.
+          navigation.reset({
+            index: 1,
+            routes: [{ name: 'Landing' }, { name: 'Login', params: email ? { email } : undefined }],
+          });
+        }}
+      />
 
       <PrivacyPolicyModal visible={privacyPolicyVisible} onClose={() => setPrivacyPolicyVisible(false)} />
 
