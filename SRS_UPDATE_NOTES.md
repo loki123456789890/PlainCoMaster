@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 18):
+- **New use case — Reset Password** (fills the gap listed in section 20):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -1030,7 +1030,8 @@ made after checking each statement against the app:
 1. **Payments:** the preview had a placeholder. The policy states that
    payments in this version are simulated: the user can choose GCash,
    Maya, Card or Cash on Delivery, no money is charged, and no card or
-   e-wallet details are collected or stored.
+   e-wallet details are collected or stored. *(Superseded: the policy
+   now names PayMongo — see section 18.)*
 2. **Contact:** the preview had a "[support email]" placeholder. The
    policy points to the Contact Support form in the Help Center, which
    is the channel the app actually provides.
@@ -1084,9 +1085,13 @@ Full text, for an appendix:
 > shown.
 >
 > **4. Payments**
-> Payments in this version are simulated. You can choose GCash, Maya,
-> Card, or Cash on Delivery, but no money is charged in the app, and
-> PlainCo does not collect or store card or e-wallet details.
+> You can pay with GCash, Maya, Card, or Cash on Delivery. GCash, Maya,
+> and Card are processed by PayMongo, a Philippine payment gateway: you
+> enter your card or e-wallet details on PayMongo's own secure page, and
+> PlainCo never receives or stores them. PlainCo keeps only the payment
+> method, the amount, and PayMongo's payment reference, as part of your
+> order record. PayMongo currently runs in test mode, so no real money is
+> charged.
 >
 > **5. How your data is stored and protected**
 > Your data is stored on Google Firebase (Authentication, Cloud
@@ -1487,8 +1492,8 @@ Shop, scrolled, and searched.
 > **Checkout** shows where the customer is ("Cart/Item → Review & pay →
 > Done") and the order in cards: **Deliver to**, **Items**, **Payment
 > method** and **Order summary**. Each payment method has a short
-> description, and a note says that online payments are simulated
-> (sandbox) or, for Cash on Delivery, to prepare the amount. If an item
+> description, and a note says that online payments are completed on
+> PayMongo's secure page or, for Cash on Delivery, to prepare the amount. If an item
 > sells out or runs short before the order is placed, a notice at the
 > top says so, confirms nothing was charged, and links back to change
 > the order.
@@ -1574,7 +1579,188 @@ release build.
 
 ---
 
-## 18. Still outstanding — SRS-side only, no code changes needed
+## 18. Online payment through PayMongo — NEW
+
+GCash, Maya and Card are no longer only options in the interface. They
+are processed by **PayMongo**, a Philippine payment gateway, in **test
+mode** (real PayMongo servers, test keys, no real money). Cash on
+Delivery is unchanged. This replaces every statement in the SRS that
+payment options are "included in the UI design and not yet integrated".
+
+### What changed in each SRS area
+
+**Scope / Constraints.** Replace the "payment is UI only" constraint:
+
+> Online payments (GCash, Maya and Card) are processed through the
+> PayMongo payment gateway. The customer completes the payment on
+> PayMongo's hosted checkout page; PlainCo never receives, transmits or
+> stores card numbers, CVVs or e-wallet credentials. In this version
+> PayMongo operates in test mode, so no real money is charged. Cash on
+> Delivery is paid to the rider on arrival.
+
+**External interfaces** (add if the SRS has this section):
+
+> PlainCo's server communicates with the PayMongo API over HTTPS to open
+> a checkout session, check a session's payment status, and close an
+> unpaid session. PayMongo notifies PlainCo of completed payments through
+> a webhook, whose requests are verified with a shared secret before they
+> are accepted.
+
+**Functional requirements — checkout.** Add:
+
+- FR: When the customer places an order with GCash, Maya or Card, the
+  system reserves the items and opens PayMongo's payment page for the
+  chosen method.
+- FR: The order is created only after PayMongo confirms the payment. The
+  customer then sees "Payment successful" and the order is marked
+  **Paid** with PayMongo's payment reference (`pay_…`).
+- FR: If the customer leaves the payment page without paying, the
+  reservation is released at once, no order is created, nothing is
+  charged, and the cart is left as it was.
+- FR: Items reserved for an unfinished payment are released
+  automatically after **30 minutes**.
+- FR: Cash on Delivery orders are created immediately, marked "Pay on
+  delivery", and never open the payment page.
+
+**New use case — Pay Online**
+
+| | |
+|---|---|
+| **Actor** | Customer |
+| **Precondition** | Signed in, a delivery address saved, items in the cart (or Buy Now), GCash, Maya or Card selected |
+| **Main flow** | 1. Customer taps **Place order**. 2. System checks stock and prices, reserves the items for 30 minutes, and opens PayMongo's page for the chosen method. 3. Customer pays on PayMongo's page. 4. PayMongo confirms the payment to PlainCo. 5. System creates one order per store, marked Paid, and clears the cart. 6. Customer sees **Payment successful** with the order number(s). |
+| **Alternative flow A — customer backs out** | At step 3 the customer closes the page or taps **Cancel payment**. The system first checks with PayMongo that no payment was made, then releases the items. Checkout shows "Payment not completed — no money was taken and your order wasn't placed." |
+| **Alternative flow B — paid, then closed the page** | The customer pays but closes the page before it returns to the app. The system finds the payment when it checks with PayMongo and places the order anyway. |
+| **Alternative flow C — no answer in time** | The reservation expires after 30 minutes. The items go back on sale and Checkout shows "Payment timed out". |
+| **Exception — gateway unavailable** | PayMongo cannot be reached when the order is placed. The reservation is released and the customer is told to try again or choose Cash on Delivery. |
+| **Postcondition** | Either one Paid order per store exists, or nothing was created and nothing was charged. |
+
+**Security / business rules.** Add:
+
+> An order is created only after PlainCo's server has confirmed the
+> payment with PayMongo, either through PayMongo's signed webhook or by
+> querying PayMongo directly; the app's own report that a payment
+> succeeded is never trusted. The amount PayMongo charged must equal the
+> order total computed by the server from the product catalogue.
+> Webhook requests without a valid PayMongo signature are rejected.
+> Customers can read only their own pending checkout and cannot change
+> it. The switch between the test sandbox and PayMongo can be changed
+> only from the Firebase console, never by a user of the app.
+
+**Data dictionary.** New collection `checkouts` (one document per online
+payment in progress):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `customerId` | string | Who is paying |
+| `status` | string | `pending`, `paid`, `released`, or (flagged for a person) `needs-review` / `paid-after-release` |
+| `total` | number | Amount to be charged, computed by the server |
+| `paymentMethod` | string | `gcash`, `maya` or `card` |
+| `sessionId` | string | PayMongo checkout session id |
+| `expiresAt` | timestamp | When the 30-minute reservation ends |
+| `paymentId` | string | PayMongo payment id, once paid |
+
+New or changed fields on each **order**:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `paymentStatus` | string | `paid` (online) or `unpaid` (Cash on Delivery) |
+| `paymentRef` | string / null | PayMongo payment id such as `pay_…`; null for Cash on Delivery |
+| `paymentProvider` | string / null | `paymongo`, `sandbox`, or null for Cash on Delivery |
+| `paymentSandbox` | boolean | `true` when no real money moved (PayMongo test mode or the sandbox) |
+| `paidAt` | timestamp | When PayMongo confirmed the payment |
+
+**Module / screen list.** Add **Online Payment** (customer side): shows
+the amount and method, opens PayMongo's page, and confirms the result.
+The earlier **Sandbox Payment** screen remains for offline demos only;
+the live app no longer shows it.
+
+**Order screens.** Order Details and the Store Manager's order view show
+the PayMongo reference and, while in test mode, "PayMongo test payment —
+no real money moved".
+
+**Privacy Policy (section 13).** Section 4 of the in-app policy now
+reads:
+
+> You can pay with GCash, Maya, Card, or Cash on Delivery. GCash, Maya,
+> and Card are processed by PayMongo, a Philippine payment gateway: you
+> enter your card or e-wallet details on PayMongo's own secure page, and
+> PlainCo never receives or stores them. PlainCo keeps only the payment
+> method, the amount, and PayMongo's payment reference, as part of your
+> order record. PayMongo currently runs in test mode, so no real money is
+> charged.
+
+**Help / FAQ.** "What payment methods do you accept?" and "Is my payment
+information secure?" now describe PayMongo and test mode instead of the
+sandbox.
+
+**Limitations / future work.**
+
+> Payments run in PayMongo's test mode; accepting real money requires
+> PayMongo business verification and live keys, with no change to the
+> app's design. Refunds are made from the PayMongo dashboard, not from
+> within PlainCo.
+
+### Verification
+
+Automated tests (with PayMongo replaced by a stand-in) cover:
+- an online order reserving stock without creating an order;
+- a signed webhook creating the paid orders exactly once, even when
+  PayMongo sends it twice;
+- a forged webhook being refused;
+- backing out releasing the reservation, but placing the order if the
+  customer had actually paid;
+- expiry after 30 minutes;
+- PayMongo being unreachable;
+- a payment that does not match the total creating no order.
+
+Checkout tests: 39. Security-rule tests: 133. On the live app, the
+PayMongo page was opened and a cancelled payment returned to Checkout
+with nothing charged.
+
+---
+
+## 19. Staff account provisioning — made visible in the app
+
+Section 3 still stands: staff accounts are **granted by a Platform
+Admin, never self-registered**. What was missing was saying so where
+people look. The Staff Portal only had one line of small print, so
+someone new to PlainCo went looking for a staff sign-up that does not
+exist.
+
+The Staff Portal now has a **"How do I get a staff account?"** link under
+its subtitle. It opens a panel with:
+
+1. **Create a customer account** — sign up on the main sign-up screen,
+   with the email you want to use for work.
+2. **Ask a Platform Admin for a role** — they find your email in Manage
+   Users and make you a Store Manager (with your store) or a Platform
+   Admin.
+3. **Sign in here** — the same email and password open the Staff Portal.
+
+It also explains why there is no staff sign-up (staff can manage stores,
+orders and other people's accounts), notes that the staff member keeps
+their own password, and has a **Create a customer account** button that
+opens the sign-up screen.
+
+Suggested addition to the Staff Portal screen description (section 2 or
+13):
+
+> The Staff Portal has no registration option, by design. A "How do I get
+> a staff account?" link explains the process: register as a customer,
+> then a Platform Admin assigns the Store Manager or Platform Admin role
+> from Manage Users. A button on the explanation opens customer
+> registration.
+
+If a panel asks why there is no staff or seller registration: an open
+Platform Admin sign-up would let anyone take control of every account
+and store, and an open Store Manager sign-up would give unapproved
+sellers access to customers' names and addresses. Approval by a Platform
+Admin is the control.
+
+---
+
+## 20. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all

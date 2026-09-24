@@ -63,7 +63,7 @@ const SECTIONS = [
     id: 's4',
     title: 'Payments',
     paragraphs: [
-      ['Payments in this version are simulated. You can choose GCash, Maya, Card, or Cash on Delivery, but no money is charged in the app, and PlainCo does not collect or store card or e-wallet details.'],
+      ["You can pay with GCash, Maya, Card, or Cash on Delivery. GCash, Maya, and Card are processed by PayMongo, a Philippine payment gateway: you enter your card or e-wallet details on PayMongo's own secure page, and PlainCo never receives or stores them. PlainCo keeps only the payment method, the amount, and PayMongo's payment reference, as part of your order record. PayMongo currently runs in test mode, so no real money is charged."],
     ],
   },
   {
