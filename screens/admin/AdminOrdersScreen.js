@@ -505,6 +505,9 @@ export default function AdminOrdersScreen({ navigation, route }) {
             // it themselves.
             orderNumber: orderNumber(docSnap.id),
             customerEmail: data.customerEmail || 'Unknown customer',
+            // The name on the delivery address, for the chat header: a
+            // person to talk to rather than an email or "Unknown customer".
+            buyerName: data.shippingAddress?.fullName?.trim() || data.customerEmail || null,
             customerId: data.customerId || null,
             date: data.createdAt?.toDate ? data.createdAt.toDate() : null,
             total: data.total || 0,
@@ -626,7 +629,7 @@ export default function AdminOrdersScreen({ navigation, route }) {
       customerId: order.chatCustomerId,
       orderId: order.id,
       side: 'store',
-      title: order.customerEmail,
+      title: order.buyerName || undefined,
     });
   };
 

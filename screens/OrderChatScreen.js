@@ -24,6 +24,7 @@ import { Colors, Spacing, Radius } from '../constants/theme';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import StoreLogo from '../components/shop/StoreLogo';
+import Sheet from '../components/shop/Sheet';
 import { useStores } from '../context/StoreContext';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { showAppAlert } from '../utils/appAlert';
@@ -506,6 +507,7 @@ export default function OrderChatScreen({ navigation, route }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [photoSheet, setPhotoSheet] = useState(false);
   const [viewerUrl, setViewerUrl] = useState(null);
   const [selected, setSelected] = useState(null);
   const [reactionsFor, setReactionsFor] = useState(null);
@@ -667,11 +669,15 @@ export default function OrderChatScreen({ navigation, route }) {
       sendPhoto('library');
       return;
     }
-    showAppAlert('Send a photo', undefined, [
-      { text: 'Take Photo', onPress: () => sendPhoto('camera') },
-      { text: 'Choose from Library', onPress: () => sendPhoto('library') },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setPhotoSheet(true);
+  };
+
+  // The picker opens once the sheet has slid away: iOS won't present one
+  // modal while another is still dismissing.
+  const pickFrom = (source) => {
+    Haptics.selectionAsync();
+    setPhotoSheet(false);
+    setTimeout(() => sendPhoto(source), 350);
   };
 
   // --- Long-press actions -------------------------------------------------
@@ -966,6 +972,54 @@ export default function OrderChatScreen({ navigation, route }) {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Camera is the primary tile: a fresh photo of the real piece is
+          what a buyer is usually asking for. */}
+      <Sheet visible={photoSheet} onClose={() => setPhotoSheet(false)}>
+        <Text style={styles.photoTitle} accessibilityRole="header">Share a photo</Text>
+        <Text style={styles.photoSub}>
+          {side === 'store'
+            ? 'A clear photo helps them check fit & condition.'
+            : 'A photo shows the store exactly what you mean.'}
+        </Text>
+        <View style={styles.photoTiles}>
+          <Pressable
+            onPress={() => pickFrom('camera')}
+            style={({ pressed }) => [styles.photoTile, styles.photoTileCamera, pressed && styles.photoTilePressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Camera, take a new photo"
+          >
+            <View style={[styles.photoTileIcon, { backgroundColor: 'rgba(255,255,255,0.18)' }]}>
+              <Ionicons name="camera-outline" size={22} color="#fff" />
+            </View>
+            <View>
+              <Text style={[styles.photoTileTitle, { color: '#fff' }]}>Camera</Text>
+              <Text style={[styles.photoTileText, { color: 'rgba(255,255,255,0.8)' }]}>Take a new photo</Text>
+            </View>
+          </Pressable>
+          <Pressable
+            onPress={() => pickFrom('library')}
+            style={({ pressed }) => [styles.photoTile, pressed && styles.photoTilePressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Library, choose from your photos"
+          >
+            <View style={styles.photoTileIcon}>
+              <Ionicons name="images-outline" size={22} color="#A94F2F" />
+            </View>
+            <View>
+              <Text style={styles.photoTileTitle}>Library</Text>
+              <Text style={styles.photoTileText}>Choose from your photos</Text>
+            </View>
+          </Pressable>
+        </View>
+        <Pressable
+          onPress={() => setPhotoSheet(false)}
+          style={({ pressed }) => [styles.photoCancel, pressed && { opacity: 0.6 }]}
+          accessibilityRole="button"
+        >
+          <Text style={styles.photoCancelText}>Cancel</Text>
+        </Pressable>
+      </Sheet>
 
       <ReactionDetails
         message={reactionsFor}
@@ -1321,6 +1375,34 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   removeReactionText: { fontSize: 14, fontWeight: '600', color: Colors.light.danger },
+
+  photoTitle: { fontSize: 20, fontWeight: '600', color: Colors.light.text, marginTop: 2 },
+  photoSub: { fontSize: 13.5, color: Colors.light.icon, marginTop: 4, marginBottom: 18 },
+  photoTiles: { flexDirection: 'row', gap: 12 },
+  photoTile: {
+    flex: 1,
+    gap: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    backgroundColor: '#fff',
+  },
+  photoTileCamera: { backgroundColor: Colors.light.tint, borderColor: Colors.light.tint },
+  photoTilePressed: { transform: [{ scale: 0.98 }] },
+  photoTileIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#F6E6DE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoTileTitle: { fontSize: 15, fontWeight: '600', color: Colors.light.text },
+  photoTileText: { fontSize: 12, color: Colors.light.icon, marginTop: 1 },
+  photoCancel: { height: 48, alignItems: 'center', justifyContent: 'center', marginTop: 10 },
+  photoCancelText: { fontSize: 15.5, fontWeight: '600', color: Colors.light.icon },
 
   viewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '80%' },
