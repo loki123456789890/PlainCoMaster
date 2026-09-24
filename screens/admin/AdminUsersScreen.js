@@ -8,20 +8,12 @@ import {
   TextInput,
   ActivityIndicator,
   Modal,
-  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { showAppAlert } from '../../utils/appAlert';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  useReducedMotion,
-  FadeIn,
-  FadeInDown,
-} from 'react-native-reanimated';
+import Animated, { useReducedMotion, FadeIn } from 'react-native-reanimated';
 import { signOut } from 'firebase/auth';
 import { db, auth } from '../../firebaseConfig';
 import {
@@ -38,15 +30,16 @@ import {
 import { useAdmin } from '../../context/AdminContext';
 import useNetworkStatus from '../../hooks/useNetworkStatus';
 import { Colors, Spacing, Radius } from '../../constants/theme';
-import Card from '../../components/ui/Card';
 import EmptyState from '../../components/ui/EmptyState';
 import Button from '../../components/ui/Button';
 import AnimatedPressable from '../../components/ui/AnimatedPressable';
 import SkeletonBlock from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import DialogButtonRow from '../../components/ui/DialogButtonRow';
-import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
-import { ROLES, getRoleLabel, getPortalLabel, ROLE_PLATFORM_ADMIN, ROLE_SELLER } from '../../constants/roles';
+import Sheet from '../../components/shop/Sheet';
+import Reveal from '../../components/shop/Reveal';
+import { OfflineNotice } from '../../components/shop/TabScreen';
+import { ROLES, getRoleLabel, getPortalLabel, ROLE_CUSTOMER, ROLE_PLATFORM_ADMIN, ROLE_SELLER } from '../../constants/roles';
 import { logAccountActivity, ACTIONS } from '../../utils/activityLog';
 
 // The three roles Firestore recognizes (see firestore.rules) and their
@@ -63,22 +56,107 @@ const ROLE_OPTIONS = ROLES;
 const NEW_STORE = 'new/store';
 const STORE_NAME_MAX = 60;
 
+const INK = Colors.light.text;
+const MUTED = Colors.light.icon;
+const CLAY = Colors.light.tint;
+const MOSS = Colors.light.secondary;
+const CARD_LINE = '#EEE7DD';
+const ON_INK_MUTED = '#BDB3A9';
+
+// Role badges, from the redesign preview but on this app's palette: Rust
+// for Platform Admin (as before), Moss for Store Manager (the dashboard's
+// role color; the preview's gold is reserved for money), and a warm
+// neutral for Customer. `bar` is the same role drawn on the ink overview.
+const ROLE_TONES = {
+  [ROLE_PLATFORM_ADMIN]: { bg: '#FBEDEB', ink: '#B42318', bar: '#E0806F', icon: 'shield-checkmark' },
+  [ROLE_SELLER]: { bg: '#EEF0EA', ink: '#37412F', bar: '#A9B89A', icon: 'storefront' },
+  [ROLE_CUSTOMER]: { bg: '#F1EBE2', ink: '#5A534B', bar: '#E9DCCB', icon: null },
+};
+const roleTone = (role) => ROLE_TONES[role] || ROLE_TONES[ROLE_CUSTOMER];
+
+const FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: ROLE_CUSTOMER, label: 'Customers' },
+  { key: ROLE_SELLER, label: 'Managers' },
+  { key: ROLE_PLATFORM_ADMIN, label: 'Admins' },
+];
+
+// Initials tell rows apart better than one letter: "LA" and "LE" instead
+// of two "L"s. Two words give first letters; one word gives its first two.
+const initialsOf = (name) => {
+  const words = (name || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+};
+
+// A stable color per account, so the same person keeps the same avatar.
+const AVATAR_TONES = [CLAY, MOSS, '#A94F2F', '#6B655C', '#37412F'];
+const avatarTone = (id) => {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  return AVATAR_TONES[Math.abs(hash) % AVATAR_TONES.length];
+};
+
+function UserAvatar({ user, size = 44 }) {
+  return (
+    <View
+      style={[
+        styles.avatar,
+        { width: size, height: size, borderRadius: size / 2, backgroundColor: avatarTone(user.id) },
+        !user.isActive && styles.avatarInactive,
+      ]}
+    >
+      <Text style={[styles.avatarText, { fontSize: size * 0.34 }]}>{initialsOf(user.name)}</Text>
+    </View>
+  );
+}
+
+function RoleBadge({ role, short }) {
+  const tone = roleTone(role);
+  const label = short && role === ROLE_PLATFORM_ADMIN ? 'Admin' : getRoleLabel(role);
+  return (
+    <View style={[styles.roleBadge, { backgroundColor: tone.bg }]}>
+      {tone.icon ? <Ionicons name={tone.icon} size={11} color={tone.ink} /> : null}
+      <Text style={[styles.roleBadgeText, { color: tone.ink }]}>{label.toUpperCase()}</Text>
+    </View>
+  );
+}
+
+function SheetAction({ icon, title, detail, danger, disabled, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [styles.action, pressed && { backgroundColor: '#F1EBE3' }, disabled && { opacity: 0.5 }]}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityHint={detail}
+      accessibilityState={{ disabled: Boolean(disabled) }}
+    >
+      <View style={[styles.actionIcon, danger && { backgroundColor: '#FBEDEB' }]}>
+        <Ionicons name={icon} size={18} color={danger ? Colors.light.danger : INK} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.actionTitle, danger && { color: Colors.light.danger }]}>{title}</Text>
+        <Text style={styles.actionDetail}>{detail}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 // Shaped like a real user row so the loading state previews the content
 // that's about to arrive, instead of a spinner floating mid-screen.
 function UserCardSkeleton() {
   return (
-    <Card variant="flat" style={styles.userCard}>
+    <View style={styles.row}>
       <SkeletonBlock style={styles.avatarSkeleton} />
-      <View style={styles.userInfo}>
-        <SkeletonBlock style={{ width: '55%', height: 14, borderRadius: Radius.sm, marginBottom: 8 }} />
-        <SkeletonBlock style={{ width: '75%', height: 11, borderRadius: Radius.sm, marginBottom: 8 }} />
-        <SkeletonBlock style={{ width: '40%', height: 11, borderRadius: Radius.sm }} />
+      <View style={{ flex: 1, gap: 7 }}>
+        <SkeletonBlock style={{ width: '45%', height: 14, borderRadius: Radius.sm }} />
+        <SkeletonBlock style={{ width: '70%', height: 11, borderRadius: Radius.sm }} />
+        <SkeletonBlock style={{ width: 90, height: 16, borderRadius: 6 }} />
       </View>
-      <View style={styles.userActions}>
-        <SkeletonBlock style={{ width: 54, height: 18, borderRadius: Radius.pill, marginBottom: 8 }} />
-        <SkeletonBlock style={{ width: 60, height: 20, borderRadius: Radius.sm }} />
-      </View>
-    </Card>
+    </View>
   );
 }
 
@@ -138,6 +216,15 @@ export default function AdminUsersScreen({ navigation }) {
   // Focused when the dialog's action is taken, so "find the person" leads
   // straight into the search rather than leaving the admin to hunt for it.
   const searchInputRef = useRef(null);
+  const scrollRef = useRef(null);
+  const searchY = useRef(0);
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [searchFocused, setSearchFocused] = useState(false);
+  // The row whose ⋯ sheet is open. `lastActionUser` keeps the sheet's
+  // content in place while it slides away.
+  const [actionUser, setActionUser] = useState(null);
+  const lastActionUser = useRef(null);
+  if (actionUser) lastActionUser.current = actionUser;
 
   useEffect(() => {
     setLoading(true);
@@ -238,9 +325,15 @@ export default function AdminUsersScreen({ navigation }) {
   // Closing straight into a focused search field is the whole point of the
   // dialog's action — the next step really is "find that person in this
   // list", so the control does it instead of describing it.
+  // The focus waits for the sheet's closing slide: a field can't take focus
+  // from under a modal that is still on screen.
   const handleAddStaffFindUser = () => {
     setAddStaffVisible(false);
-    searchInputRef.current?.focus();
+    setRoleFilter('all');
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(searchY.current - 12, 0), animated: true });
+      searchInputRef.current?.focus();
+    }, 350);
   };
 
   const confirmLogout = async () => {
@@ -269,11 +362,35 @@ export default function AdminUsersScreen({ navigation }) {
   // rather than let someone tap them and get a write denied on submit.
   const isSelf = (userId) => userId === auth.currentUser?.uid;
 
-  const filteredUsers = users.filter(
-    (user) =>
-      user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Your own row comes first: it's the one row that behaves differently,
+  // and "which one is me?" shouldn't take a scroll.
+  const q = searchQuery.toLowerCase();
+  const filteredUsers = users
+    .filter((user) => roleFilter === 'all' || user.role === roleFilter)
+    .filter((user) => user.name.toLowerCase().includes(q) || user.email.toLowerCase().includes(q))
+    .sort((a, b) => Number(isSelf(b.id)) - Number(isSelf(a.id)));
+
+  const me = users.find((u) => isSelf(u.id)) || null;
+  const firstName = me?.name && me.name !== 'Unnamed User' ? me.name.trim().split(/\s+/)[0] : '';
+
+  const roleCounts = { [ROLE_CUSTOMER]: 0, [ROLE_SELLER]: 0, [ROLE_PLATFORM_ADMIN]: 0 };
+  users.forEach((u) => {
+    if (roleCounts[u.role] !== undefined) roleCounts[u.role] += 1;
+  });
+  const countFor = (key) => (key === 'all' ? users.length : roleCounts[key]);
+
+  const openActions = (user) => {
+    Haptics.selectionAsync();
+    setActionUser(user);
+  };
+
+  // Each action closes the sheet first, then opens what comes next, so two
+  // modals are never stacked.
+  const runAction = (fn) => {
+    const user = actionUser;
+    setActionUser(null);
+    setTimeout(() => fn(user), 320);
+  };
 
   const handleViewUser = (user) => {
     Haptics.selectionAsync();
@@ -431,13 +548,8 @@ export default function AdminUsersScreen({ navigation }) {
   };
 
   const getRoleBadgeStyle = (role) => {
-    if (role === 'platformAdmin') {
-      return { backgroundColor: Colors.light.danger + '20', color: Colors.light.danger };
-    }
-    if (role === 'seller') {
-      return { backgroundColor: Colors.light.tint + '20', color: Colors.light.tint };
-    }
-    return { backgroundColor: Colors.light.border + '60', color: Colors.light.icon };
+    const tone = roleTone(role);
+    return { backgroundColor: tone.bg, color: tone.ink };
   };
 
   const getActiveBadgeStyle = (isActive) => {
@@ -500,365 +612,492 @@ export default function AdminUsersScreen({ navigation }) {
     editFormData.role === ROLE_SELLER &&
     (!editFormData.storeId ||
       (editFormData.storeId === NEW_STORE && !editFormData.newStoreName.trim()));
-  return (
-    <SafeAreaView style={styles.container}>
-      <ConfirmDialog
-        visible={addStaffVisible}
-        onClose={() => setAddStaffVisible(false)}
-        title="Adding a staff member"
-        cancelLabel="Close"
-        confirmLabel="Find the user"
-        confirmVariant="primary"
-        onConfirm={handleAddStaffFindUser}
-      >
-        <Text style={styles.modalMessage}>
-          Staff accounts aren&apos;t created here — they&apos;re granted. Nobody can sign
-          up as a Store Manager or Platform Admin, which is what stops a
-          stranger from giving themselves access.
-        </Text>
-        <View style={styles.addStaffSteps}>
-          <Text style={styles.addStaffStep}>
-            <Text style={styles.addStaffStepNumber}>1. </Text>
-            Ask the person to sign up in the PlainCo app like any customer.
-          </Text>
-          <Text style={styles.addStaffStep}>
-            <Text style={styles.addStaffStepNumber}>2. </Text>
-            Find their account in this list.
-          </Text>
-          <Text style={styles.addStaffStep}>
-            <Text style={styles.addStaffStepNumber}>3. </Text>
-            Open Edit User and set their role to Store Manager or Platform Admin.
-          </Text>
-        </View>
-        <Text style={styles.addStaffFootnote}>
-          Granting roles is this account&apos;s job — no one else can do it.
-        </Text>
-      </ConfirmDialog>
+  const shownAction = lastActionUser.current;
+  const openQuestions = openGeneralSupport;
+  const inboxTone =
+    openQuestions === null ? 'unknown' : openQuestions > 0 ? 'waiting' : 'clear';
 
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Where staff accounts come from, as three steps. There is no
+          "create account" form behind it — see addStaffVisible above. */}
+      <Sheet visible={addStaffVisible} onClose={() => setAddStaffVisible(false)}>
+        <View style={styles.staffIcon}>
+          <Ionicons name="shield-checkmark-outline" size={26} color="#A94F2F" />
+        </View>
+        <Text style={styles.sheetTitle} accessibilityRole="header">Add a staff member</Text>
+        <Text style={styles.sheetText}>
+          Staff roles are granted, not signed up for, so no stranger can give themselves access.
+        </Text>
+        <View style={styles.steps}>
+          <View style={styles.stepsLine} />
+          {[
+            { title: 'They sign up as a customer', detail: 'Using the regular PlainCo app.' },
+            { title: 'Find them here', detail: 'Search by name or email.' },
+            { title: 'Change their role', detail: 'Open ⋯ → Edit role.' },
+          ].map((step, i, all) => {
+            const last = i === all.length - 1;
+            return (
+              <View key={step.title} style={styles.step}>
+                <View style={[styles.stepNum, last && styles.stepNumLast]}>
+                  <Text style={[styles.stepNumText, last && { color: '#fff' }]}>{i + 1}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.stepTitle}>{step.title}</Text>
+                  <Text style={styles.stepDetail}>{step.detail}</Text>
+                  {last ? (
+                    <View style={styles.stepRoles}>
+                      <RoleBadge role={ROLE_SELLER} />
+                      <RoleBadge role={ROLE_PLATFORM_ADMIN} />
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+        <View style={styles.lockNote}>
+          <Ionicons name="lock-closed-outline" size={17} color={CLAY} />
+          <Text style={styles.lockNoteText}>Only Platform Admins can grant or remove staff roles.</Text>
+        </View>
+        <Button label="Find the user" fontSize={15.5} onPress={handleAddStaffFindUser} fullWidth />
+        <Pressable
+          onPress={() => setAddStaffVisible(false)}
+          style={({ pressed }) => [styles.ghost, pressed && { opacity: 0.6 }]}
+          accessibilityRole="button"
+        >
+          <Text style={styles.ghostText}>Close</Text>
+        </Pressable>
+      </Sheet>
+
+      {/* Names the account being signed out, which matters when several
+          admins share a test phone. "Stay" reads clearer than "Cancel" when
+          the question is about leaving. */}
       <ConfirmDialog
         visible={logoutVisible}
         onClose={() => setLogoutVisible(false)}
-        title="Log Out"
-        confirmLabel="Log Out"
+        icon="log-out-outline"
+        title="Log out?"
+        cancelLabel="Stay"
+        confirmLabel="Log out"
         confirmVariant="primary"
         onConfirm={confirmLogout}
         loading={loggingOut}
         confirmDisabled={loggingOut}
         cancelDisabled={loggingOut}
       >
-        <Text style={styles.modalMessage}>Are you sure you want to log out of the Platform Admin portal?</Text>
+        <Text style={styles.modalMessage}>You&apos;ll need to sign in again to manage users and roles.</Text>
+        <View style={styles.who}>
+          {me ? <UserAvatar user={me} size={38} /> : null}
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.whoName} numberOfLines={1}>{me?.name || 'Platform Admin'}</Text>
+            <Text style={styles.whoEmail} numberOfLines={1}>
+              {me?.email || auth.currentUser?.email || ''}
+            </Text>
+          </View>
+          <RoleBadge role={ROLE_PLATFORM_ADMIN} short />
+        </View>
       </ConfirmDialog>
 
-      {/* Header */}
-      <View style={styles.header}>
-        {/* Log out, where Back would be on other screens — this is the
-            portal's home, so there is nothing to go back to. */}
-        <View style={styles.headerActions}>
-          <AnimatedPressable
-            onPress={handleOpenLogout}
-            style={styles.backButton}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel="Log out"
-          >
-            <Ionicons name="log-out-outline" size={22} color={Colors.light.danger} />
-          </AnimatedPressable>
-          <View style={styles.headerSpacer} />
-        </View>
-        {/* The signed-in role is named in the header, not just implied by
-            which screen you happen to be on. Before the split there was
-            one "admin" and no reason to say which hat you were wearing;
-            now there are two non-overlapping ones, and "why can't I see
-            Products?" has a visible answer sitting at the top of the
-            screen. */}
-        <View style={styles.headerTitleGroup}>
-          <Text style={styles.headerTitle} accessibilityRole="header">Manage Users</Text>
-          <Text style={styles.headerRole}>{getPortalLabel(ROLE_PLATFORM_ADMIN)}</Text>
-        </View>
-        {/* Sits in the slot the layout already reserved for balance, so the
-            title stays centered. "Add staff" is the question every new
-            platform admin arrives with; answering it in the place they'd
-            look for a + button is cheaper than letting them conclude the
-            feature is missing. */}
-        <View style={styles.headerActions}>
-          <AnimatedPressable
+      {/* The ⋯ sheet: who it's about, then what can be done to them. */}
+      <Sheet visible={Boolean(actionUser)} onClose={() => setActionUser(null)}>
+        {shownAction ? (
+          <View>
+            <View style={styles.sheetUser}>
+              <UserAvatar user={shownAction} size={42} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.sheetUserName} numberOfLines={1}>{shownAction.name}</Text>
+                <Text style={styles.sheetUserMeta} numberOfLines={1}>
+                  {getRoleLabel(shownAction.role)} · {shownAction.email}
+                </Text>
+              </View>
+            </View>
+            <SheetAction
+              icon="swap-horizontal-outline"
+              title="Edit role"
+              detail={
+                shownAction.role === ROLE_SELLER
+                  ? `Change their role or store${storeName(shownAction.storeId) ? ` (${storeName(shownAction.storeId)})` : ''}`
+                  : 'Customer, Store Manager or Platform Admin'
+              }
+              onPress={() => runAction(handleEditUser)}
+            />
+            <SheetAction
+              icon="person-circle-outline"
+              title="View details"
+              detail="Email, status and join date"
+              onPress={() => runAction(handleViewUser)}
+            />
+            <SheetAction
+              icon={shownAction.isActive ? 'person-remove-outline' : 'person-add-outline'}
+              title={shownAction.isActive ? 'Deactivate account' : 'Activate account'}
+              detail={
+                !isConnected
+                  ? 'You’re offline'
+                  : shownAction.isActive
+                    ? 'They won’t be able to sign in'
+                    : 'Let them sign in again'
+              }
+              danger={shownAction.isActive}
+              disabled={!isConnected || togglingUserId === shownAction.id}
+              onPress={() => runAction(handleToggleUserStatus)}
+            />
+          </View>
+        ) : null}
+      </Sheet>
+
+      {/* Log out sits behind your avatar, not in the top-left corner where
+          people reach for Back. The signed-in role is named here too, so
+          "why can't I see Products?" has its answer at the top. */}
+      <View style={styles.top}>
+        <Pressable
+          onPress={handleOpenLogout}
+          style={({ pressed }) => [styles.meRow, pressed && { opacity: 0.7 }]}
+          hitSlop={4}
+          accessibilityRole="button"
+          accessibilityLabel={`Signed in as ${me?.name || 'Platform Admin'}. Log out`}
+        >
+          {me ? (
+            <UserAvatar user={me} size={42} />
+          ) : (
+            <View style={[styles.avatar, styles.avatarBlank]}>
+              <Ionicons name="person" size={20} color={CLAY} />
+            </View>
+          )}
+          <View style={{ flexShrink: 1 }}>
+            <Text style={styles.meRole}>{getPortalLabel(ROLE_PLATFORM_ADMIN)}</Text>
+            <Text style={styles.meName} numberOfLines={1} accessibilityRole="header">
+              {firstName ? `Hi, ${firstName}` : 'Manage Users'}
+            </Text>
+          </View>
+        </Pressable>
+        <View style={styles.topActions}>
+          <Pressable
             onPress={() => {
               Haptics.selectionAsync();
               navigation.navigate('AdminActivity');
             }}
-            style={styles.headerAction}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={({ pressed }) => [styles.topButton, pressed && { backgroundColor: '#F3EEE6' }]}
+            hitSlop={4}
             accessibilityRole="button"
             accessibilityLabel="Account activity log"
           >
-            <Ionicons name="time-outline" size={22} color={Colors.light.tint} />
-          </AnimatedPressable>
-          <AnimatedPressable
+            <Ionicons name="time-outline" size={20} color={INK} />
+          </Pressable>
+          <Pressable
             onPress={handleOpenAddStaff}
-            style={styles.headerAction}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={({ pressed }) => [styles.topButton, styles.topButtonInk, pressed && { opacity: 0.85 }]}
+            hitSlop={4}
             accessibilityRole="button"
-            accessibilityLabel="How to add a staff member"
+            accessibilityLabel="Add a staff member"
           >
-            <Ionicons name="person-add-outline" size={22} color={Colors.light.tint} />
-          </AnimatedPressable>
+            <Ionicons name="person-add-outline" size={19} color="#fff" />
+          </Pressable>
         </View>
       </View>
 
-      {!isConnected && (
-        <View style={styles.offlineBanner}>
-          <Ionicons name="cloud-offline-outline" size={16} color={Colors.light.danger} />
-          <Text style={styles.offlineBannerText}>
-            No internet connection — user data may be out of date.
-          </Text>
-        </View>
-      )}
-
-      {/* Stats Cards */}
-      <Animated.View
-        style={styles.statsWrapper}
-        entering={reduceMotion ? undefined : FadeIn.duration(220)}
+      <ScrollView
+        ref={scrollRef}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
       >
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.statsContainer}
-        >
-          {/* The way into this role's support inbox: general questions that
-              no single store can answer. Questions about an order go to
-              that order's store instead. First in the row because it is
-              the only card that does anything, and the row scrolls — at
-              phone width a fourth card starts off-screen. */}
-          <AnimatedPressable
+        {!isConnected ? (
+          <View style={styles.sidePad}>
+            <OfflineNotice>No internet connection. User data may be out of date.</OfflineNotice>
+          </View>
+        ) : null}
+
+        {/* One card for the whole headcount. The role mix is a bar rather
+            than a row of side-scrolling stat cards, which clipped at phone
+            width. */}
+        <Reveal delay={40}>
+          <View style={styles.overview}>
+            <View style={styles.ring} pointerEvents="none" />
+            <View style={styles.ovRow}>
+              <View>
+                {loading ? (
+                  <SkeletonBlock style={styles.ovSkeleton} />
+                ) : (
+                  <Text style={styles.ovBig}>{usersError ? '—' : stats.totalUsers}</Text>
+                )}
+                <Text style={styles.ovLabel}>Total {stats.totalUsers === 1 ? 'user' : 'users'}</Text>
+              </View>
+              {!loading && !usersError ? (
+                <View style={styles.ovPill}>
+                  <View style={styles.ovPillDot} />
+                  <Text style={styles.ovPillText}>{stats.activeUsers} active</Text>
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.bar} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              {stats.totalUsers > 0 ? (
+                [ROLE_CUSTOMER, ROLE_SELLER, ROLE_PLATFORM_ADMIN]
+                  .filter((role) => roleCounts[role] > 0)
+                  .map((role) => (
+                    <View key={role} style={{ flex: roleCounts[role], backgroundColor: roleTone(role).bar, borderRadius: 8 }} />
+                  ))
+              ) : (
+                <View style={{ flex: 1, backgroundColor: 'rgba(250,247,242,0.12)', borderRadius: 8 }} />
+              )}
+            </View>
+            <View
+              style={styles.keys}
+              accessible
+              accessibilityLabel={`${roleCounts[ROLE_CUSTOMER]} customers, ${roleCounts[ROLE_SELLER]} store managers, ${roleCounts[ROLE_PLATFORM_ADMIN]} platform admins`}
+            >
+              {[
+                [ROLE_CUSTOMER, 'Customer', 'Customers'],
+                [ROLE_SELLER, 'Manager', 'Managers'],
+                [ROLE_PLATFORM_ADMIN, 'Admin', 'Admins'],
+              ].map(([role, one, many]) => (
+                <View key={role} style={styles.key}>
+                  <View style={[styles.keyDot, { backgroundColor: roleTone(role).bar }]} />
+                  <Text style={styles.keyText}>
+                    {roleCounts[role]} {roleCounts[role] === 1 ? one : many}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        </Reveal>
+
+        {/* The way into this role's support inbox: general questions no
+            single store can answer. Calm Moss when there's nothing to do,
+            Clay when someone is waiting. */}
+        <Reveal delay={90}>
+          <Pressable
             onPress={() => {
               Haptics.selectionAsync();
               navigation.navigate('AdminSupport');
             }}
+            style={({ pressed }) => [
+              styles.inbox,
+              inboxTone === 'waiting' && styles.inboxWaiting,
+              inboxTone === 'unknown' && styles.inboxUnknown,
+              pressed && { transform: [{ scale: 0.99 }] },
+            ]}
             accessibilityRole="button"
-            accessibilityLabel={`General support, ${openGeneralSupport ?? 'unknown number of'} open questions. Opens the inbox.`}
+            accessibilityLabel={
+              inboxTone === 'unknown'
+                ? 'Support inbox. Couldn’t count open questions.'
+                : `${openQuestions} open ${openQuestions === 1 ? 'question' : 'questions'}. Opens the support inbox.`
+            }
           >
-            <Card variant="flat" style={[styles.statCard, styles.supportStatCard]}>
-              <Text style={[styles.statValue, { color: Colors.light.tint }]}>
-                {openGeneralSupport ?? '—'}
-              </Text>
-              <Text style={styles.statLabel}>
-                Open {openGeneralSupport === 1 ? 'question' : 'questions'}
-              </Text>
-            </Card>
-          </AnimatedPressable>
-          <Card variant="flat" style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.totalUsers}</Text>
-            <Text style={styles.statLabel}>Total {stats.totalUsers === 1 ? 'User' : 'Users'}</Text>
-          </Card>
-          <Card variant="flat" style={[styles.statCard, { backgroundColor: Colors.light.success + '15' }]}>
-            <Text style={[styles.statValue, { color: Colors.light.success }]}>{stats.activeUsers}</Text>
-            <Text style={styles.statLabel}>Active {stats.activeUsers === 1 ? 'User' : 'Users'}</Text>
-          </Card>
-          <Card variant="flat" style={[styles.statCard, { backgroundColor: Colors.light.border + '60' }]}>
-            <Text style={styles.statValue}>{stats.platformAdminUsers}</Text>
-            <Text style={styles.statLabel}>{stats.platformAdminUsers === 1 ? 'Platform Admin' : 'Platform Admins'}</Text>
-          </Card>
-        </ScrollView>
-      </Animated.View>
-
-      {/* Highlight rather than danger: nothing is broken yet, and this is a
-          standing condition rather than a failure — Rust here would cry
-          wolf on every visit until a second admin exists. */}
-      {isSolePlatformAdmin && (
-        <Animated.View
-          style={styles.warningBanner}
-          entering={reduceMotion ? undefined : FadeIn.duration(220)}
-        >
-          <Ionicons name="warning-outline" size={16} color={Colors.light.highlight} />
-          <Text style={styles.warningText}>
-            You&apos;re the only active Platform Admin. If this account is lost or
-            deactivated, nobody can manage roles — grant a second person the
-            Platform Admin role to avoid that.
-          </Text>
-        </Animated.View>
-      )}
-
-      {/* Search Bar */}
-      <Animated.View
-        style={styles.searchContainer}
-        entering={reduceMotion ? undefined : FadeInDown.duration(240).delay(40).easing(EASE_OUT_QUART)}
-      >
-        <Ionicons name="search-outline" size={20} color={Colors.light.icon} style={styles.searchIcon} />
-        <TextInput
-          ref={searchInputRef}
-          style={styles.searchInput}
-          placeholder="Search by name or email..."
-          placeholderTextColor={Colors.light.icon}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          accessibilityLabel="Search users by name or email"
-        />
-        {searchQuery.length > 0 && (
-          <Pressable
-            onPress={() => setSearchQuery('')}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="Clear search"
-          >
-            <Ionicons name="close-circle" size={20} color={Colors.light.icon} />
-          </Pressable>
-        )}
-      </Animated.View>
-
-      {/* Users List */}
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.usersContainer}>
-        {loading ? (
-          <>
-            <UserCardSkeleton />
-            <UserCardSkeleton />
-            <UserCardSkeleton />
-          </>
-        ) : usersError ? (
-          <View style={styles.emptyStateWrap}>
-            <EmptyState
-              icon="cloud-offline-outline"
-              title="Couldn't load users"
-              subtitle="Check your connection and try again."
+            <Ionicons
+              name={inboxTone === 'clear' ? 'chatbubble-ellipses-outline' : 'chatbubbles-outline'}
+              size={20}
+              color={inboxTone === 'waiting' ? '#A94F2F' : inboxTone === 'clear' ? MOSS : MUTED}
             />
-            <View style={styles.emptyStateAction}>
-              <Button variant="outline" label="Retry" onPress={handleRetry} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.inboxTitle, inboxTone === 'waiting' && { color: '#8A3F24' }]}>
+                {inboxTone === 'unknown'
+                  ? 'Support inbox'
+                  : inboxTone === 'waiting'
+                    ? `${openQuestions} open ${openQuestions === 1 ? 'question' : 'questions'}`
+                    : 'No open questions'}
+              </Text>
+              <Text style={[styles.inboxText, inboxTone === 'waiting' && { color: '#A94F2F' }]}>
+                {inboxTone === 'unknown'
+                  ? 'Couldn’t count open questions'
+                  : inboxTone === 'waiting'
+                    ? 'Someone is waiting for a reply'
+                    : 'You’re all caught up'}
+              </Text>
             </View>
-          </View>
-        ) : filteredUsers.length > 0 ? (
-          filteredUsers.map((user, index) => {
-            const selfRow = isSelf(user.id);
-            const editDisabled = selfRow;
-            const toggleDisabled = !isConnected || togglingUserId === user.id || selfRow;
-            return (
-              <Animated.View
-                key={user.id}
-                entering={
-                  reduceMotion
-                    ? undefined
-                    : FadeInDown.duration(240)
-                        .delay(80 + Math.min(index, 8) * 40)
-                        .easing(EASE_OUT_QUART)
-                }
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={inboxTone === 'waiting' ? '#A94F2F' : inboxTone === 'clear' ? MOSS : MUTED}
+            />
+          </Pressable>
+        </Reveal>
+
+        {/* Highlight rather than danger: nothing is broken yet, and this is a
+            standing condition rather than a failure — Rust here would cry
+            wolf on every visit until a second admin exists. */}
+        {isSolePlatformAdmin && (
+          <Animated.View
+            style={styles.warningBanner}
+            entering={reduceMotion ? undefined : FadeIn.duration(220)}
+          >
+            <Ionicons name="warning-outline" size={16} color={Colors.light.highlight} />
+            <Text style={styles.warningText}>
+              You&apos;re the only active Platform Admin. If this account is lost or
+              deactivated, nobody can manage roles — grant a second person the
+              Platform Admin role to avoid that.
+            </Text>
+          </Animated.View>
+        )}
+
+        <View onLayout={(e) => { searchY.current = e.nativeEvent.layout.y; }}>
+          <View style={[styles.search, searchFocused && styles.searchFocused]}>
+            <Ionicons name="search-outline" size={18} color={MUTED} />
+            <TextInput
+              ref={searchInputRef}
+              style={styles.searchInput}
+              placeholder="Search name or email"
+              placeholderTextColor={MUTED}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
+              returnKeyType="search"
+              accessibilityLabel="Search users by name or email"
+            />
+            {searchQuery.length > 0 && (
+              <Pressable
+                onPress={() => setSearchQuery('')}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
               >
-                <AnimatedPressable
-                  onPress={() => handleViewUser(user)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${user.name}, ${getRoleLabel(user.role)} role, ${user.isActive ? 'active' : 'inactive'}`}
-                  accessibilityHint="Opens user details"
+                <Ionicons name="close-circle" size={18} color={MUTED} />
+              </Pressable>
+            )}
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filters}
+            accessibilityRole="tablist"
+          >
+            {FILTERS.map((f) => {
+              const on = roleFilter === f.key;
+              const count = loading ? '–' : countFor(f.key);
+              return (
+                <Pressable
+                  key={f.key}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setRoleFilter(f.key);
+                  }}
+                  style={[styles.filter, on && styles.filterOn]}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={`${f.label}, ${count}`}
                 >
-                  <Card variant="flat" style={styles.userCard}>
-                    <View style={styles.userAvatar}>
-                      <Text style={styles.userAvatarText}>
-                        {user.name.charAt(0).toUpperCase()}
-                      </Text>
-                    </View>
-                    <View style={styles.userInfo}>
-                      <View style={styles.userNameRow}>
-                        <Text style={styles.userName} numberOfLines={1} ellipsizeMode="tail">
+                  <Text style={[styles.filterText, on && { color: '#fff' }]}>
+                    {f.label}
+                    <Text style={[styles.filterCount, on && { color: 'rgba(255,255,255,0.7)' }]}> {count}</Text>
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        <View style={styles.list}>
+          {loading ? (
+            <>
+              <UserCardSkeleton />
+              <UserCardSkeleton />
+              <UserCardSkeleton />
+            </>
+          ) : usersError ? (
+            <View style={styles.emptyStateWrap}>
+              <EmptyState
+                icon="cloud-offline-outline"
+                title="Couldn't load users"
+                subtitle="Check your connection and try again."
+              />
+              <View style={styles.emptyStateAction}>
+                <Button variant="outline" label="Retry" onPress={handleRetry} />
+              </View>
+            </View>
+          ) : filteredUsers.length > 0 ? (
+            filteredUsers.map((user, index) => {
+              const selfRow = isSelf(user.id);
+              return (
+                <Reveal key={user.id} delay={120 + Math.min(index, 8) * 40}>
+                  <Pressable
+                    onPress={() => handleViewUser(user)}
+                    style={({ pressed }) => [
+                      styles.row,
+                      selfRow && styles.rowSelf,
+                      pressed && { transform: [{ scale: 0.99 }] },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${user.name}${selfRow ? ', you' : ''}, ${getRoleLabel(user.role)}, ${user.isActive ? 'active' : 'deactivated'}`}
+                    accessibilityHint="Opens user details"
+                  >
+                    <UserAvatar user={user} />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <View style={styles.nameRow}>
+                        <Text style={[styles.name, !user.isActive && { color: MUTED }]} numberOfLines={1}>
                           {user.name}
                         </Text>
-                        <View style={[styles.roleBadge, getRoleBadgeStyle(user.role)]}>
-                          <Text style={[styles.roleText, { color: getRoleBadgeStyle(user.role).color }]}>
-                            {getRoleLabel(user.role).toUpperCase()}
-                          </Text>
-                        </View>
+                        {selfRow ? <Text style={styles.youTag}>YOU</Text> : null}
                       </View>
-                      <View style={styles.userEmailRow}>
-                        <Ionicons name="mail-outline" size={12} color={Colors.light.icon} />
-                        <Text style={styles.userEmail} numberOfLines={1} ellipsizeMode="tail">
-                          {user.email}
-                        </Text>
+                      <Text style={styles.email} numberOfLines={1}>{user.email}</Text>
+                      <View style={styles.badges}>
+                        <RoleBadge role={user.role} />
+                        {!user.isActive ? (
+                          <View style={[styles.roleBadge, { backgroundColor: '#FBEDEB' }]}>
+                            <Text style={[styles.roleBadgeText, { color: '#B42318' }]}>DEACTIVATED</Text>
+                          </View>
+                        ) : null}
                       </View>
-                      {user.role === ROLE_SELLER && (
-                        <View style={styles.userEmailRow}>
-                          <Ionicons name="storefront-outline" size={12} color={Colors.light.icon} />
-                          <Text style={styles.userEmail} numberOfLines={1} ellipsizeMode="tail">
+                      {user.role === ROLE_SELLER ? (
+                        <View style={styles.storeRow}>
+                          <Ionicons name="storefront-outline" size={12} color={MUTED} />
+                          <Text style={styles.storeText} numberOfLines={1}>
                             {storeName(user.storeId) || 'No store assigned'}
                           </Text>
                         </View>
-                      )}
-                      {selfRow && (
-                        <Text style={styles.selfRowHint}>
-                          This is you — role and status can&apos;t be changed here
-                        </Text>
-                      )}
+                      ) : null}
                     </View>
-                    <View style={styles.userActions}>
-                      <View style={[styles.statusBadge, getActiveBadgeStyle(user.isActive)]}>
-                        <Ionicons
-                          name={getStatusIcon(user.isActive)}
-                          size={11}
-                          color={getActiveBadgeStyle(user.isActive).color}
-                        />
-                        <Text style={[styles.statusText, { color: getActiveBadgeStyle(user.isActive).color }]}>
-                          {user.isActive ? 'ACTIVE' : 'INACTIVE'}
-                        </Text>
+                    {selfRow ? (
+                      // Your own role and status can't change here, so a
+                      // lock says so instead of greyed-out buttons.
+                      <View
+                        style={styles.more}
+                        accessible
+                        accessibilityLabel="Your own role and status can’t be changed here"
+                      >
+                        <Ionicons name="lock-closed-outline" size={17} color={MUTED} />
                       </View>
-                      <View style={styles.actionButtons}>
-                        <AnimatedPressable
-                          style={[styles.actionButton, editDisabled && styles.actionButtonDisabled]}
-                          onPress={() => handleEditUser(user)}
-                          disabled={editDisabled}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                          accessibilityRole="button"
-                          accessibilityLabel={
-                            editDisabled ? "Edit disabled — this is your own account" : `Edit ${user.name}`
-                          }
-                          accessibilityState={{ disabled: editDisabled }}
-                        >
-                          <Ionicons
-                            name="create-outline"
-                            size={20}
-                            color={editDisabled ? Colors.light.border : Colors.light.tint}
-                          />
-                        </AnimatedPressable>
-                        <AnimatedPressable
-                          style={[styles.actionButton, toggleDisabled && styles.actionButtonDisabled]}
-                          onPress={() => handleToggleUserStatus(user)}
-                          disabled={toggleDisabled}
-                          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
-                          accessibilityRole="button"
-                          accessibilityLabel={
-                            selfRow
-                              ? "Status change disabled — this is your own account"
-                              : `${user.isActive ? 'Deactivate' : 'Activate'} ${user.name}`
-                          }
-                          accessibilityState={{ disabled: toggleDisabled }}
-                        >
-                          {togglingUserId === user.id ? (
-                            <ActivityIndicator
-                              size="small"
-                              color={user.isActive ? Colors.light.danger : Colors.light.success}
-                            />
-                          ) : (
-                            <Ionicons
-                              name={user.isActive ? 'person-remove-outline' : 'person-add-outline'}
-                              size={20}
-                              color={toggleDisabled ? Colors.light.border : (user.isActive ? Colors.light.danger : Colors.light.success)}
-                            />
-                          )}
-                        </AnimatedPressable>
-                      </View>
-                    </View>
-                  </Card>
-                </AnimatedPressable>
-              </Animated.View>
-            );
-          })
-        ) : (
-          <View style={styles.emptyStateWrap}>
-            <EmptyState
-              icon="people-outline"
-              title="No users found"
-              subtitle={searchQuery ? 'Try a different search term' : 'Users will appear here'}
-            />
-            {Boolean(searchQuery) && (
-              <View style={styles.emptyStateAction}>
-                <Button variant="outline" label="Clear search" onPress={() => setSearchQuery('')} />
-              </View>
-            )}
-          </View>
-        )}
+                    ) : (
+                      <Pressable
+                        onPress={() => openActions(user)}
+                        style={({ pressed }) => [styles.more, pressed && { backgroundColor: '#EAE3D9' }]}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={`More actions for ${user.name}`}
+                      >
+                        {togglingUserId === user.id ? (
+                          <ActivityIndicator size="small" color={CLAY} />
+                        ) : (
+                          <Ionicons name="ellipsis-horizontal" size={18} color={INK} />
+                        )}
+                      </Pressable>
+                    )}
+                  </Pressable>
+                </Reveal>
+              );
+            })
+          ) : (
+            <View style={styles.emptyStateWrap}>
+              <EmptyState
+                icon="people-outline"
+                title="No users found"
+                subtitle={searchQuery ? 'Try a different search term' : 'No one has this role yet'}
+              />
+              {Boolean(searchQuery) || roleFilter !== 'all' ? (
+                <View style={styles.emptyStateAction}>
+                  <Button
+                    variant="outline"
+                    label="Show everyone"
+                    onPress={() => {
+                      setSearchQuery('');
+                      setRoleFilter('all');
+                    }}
+                  />
+                </View>
+              ) : null}
+            </View>
+          )}
+        </View>
       </ScrollView>
 
       {/* User Details Modal */}
@@ -1193,92 +1432,113 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.light.background,
   },
-  header: {
+  content: {
+    paddingBottom: 40,
+    maxWidth: 560,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  sidePad: { paddingHorizontal: 16, paddingTop: 10 },
+
+  top: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.border,
-    marginTop: Platform.OS === 'ios' ? 0 : 30,
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 6,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitleGroup: {
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '600',
-    color: Colors.light.text,
-  },
-  headerRole: {
+  meRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
+  meRole: {
     fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 0.4,
+    letterSpacing: 1.1,
     textTransform: 'uppercase',
-    color: Colors.light.icon,
-    marginTop: 2,
+    color: CLAY,
   },
-  placeholder: {
-    width: 40,
-  },
-  headerAction: {
-    width: 40,
-    height: 40,
+  meName: { fontSize: 19, fontWeight: '600', letterSpacing: -0.3, color: INK, marginTop: 1 },
+  topActions: { flexDirection: 'row', gap: 6 },
+  topButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Two actions now sit on the right, so the left side has to reserve the
-  // same 80px or the centered title drifts off-centre by exactly one
-  // button. backButton keeps its own 40 and this pads the rest.
-  // Both header sides use this: 80px wide holding two 40px slots, so they
-  // balance exactly and the title stays centered. The left side is the
-  // back button plus a spacer; the right is two real buttons. No
-  // justifyContent needed — the children fill the width precisely.
-  headerActions: {
-    flexDirection: 'row',
-    width: 80,
+  topButtonInk: { backgroundColor: INK, borderColor: INK },
+
+  avatar: { alignItems: 'center', justifyContent: 'center' },
+  avatarBlank: { width: 42, height: 42, borderRadius: 21, backgroundColor: CLAY + '15' },
+  avatarInactive: { opacity: 0.45 },
+  avatarText: { color: '#fff', fontWeight: '600' },
+  avatarSkeleton: { width: 44, height: 44, borderRadius: 22 },
+
+  overview: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 24,
+    backgroundColor: INK,
+    padding: 16,
+    overflow: 'hidden',
   },
-  headerSpacer: {
-    width: 40,
+  ring: {
+    position: 'absolute',
+    right: -50,
+    top: -60,
+    width: 170,
+    height: 170,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'rgba(250,247,242,0.08)',
   },
-  addStaffSteps: {
-    alignSelf: 'stretch',
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
+  ovRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  ovBig: {
+    fontSize: 38,
+    fontWeight: '600',
+    letterSpacing: -0.8,
+    color: Colors.light.background,
+    lineHeight: 42,
+    fontVariant: ['tabular-nums'],
   },
-  addStaffStep: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: Colors.light.text,
-  },
-  addStaffStepNumber: {
-    fontWeight: '700',
-    color: Colors.light.tint,
-  },
-  addStaffFootnote: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: Colors.light.icon,
-    textAlign: 'center',
-    marginBottom: Spacing.md,
-  },
-  offlineBanner: {
+  ovSkeleton: { width: 60, height: 38, borderRadius: 8, marginBottom: 4, opacity: 0.25 },
+  ovLabel: { fontSize: 12.5, color: ON_INK_MUTED, marginTop: 2 },
+  ovPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.light.danger + '15',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.light.danger + '40',
+    gap: 6,
+    backgroundColor: 'rgba(143,163,125,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
   },
+  ovPillDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#A9C59A' },
+  ovPillText: { fontSize: 12, fontWeight: '600', color: '#CFE0BF' },
+  bar: { flexDirection: 'row', height: 8, gap: 3, marginTop: 14, marginBottom: 10 },
+  keys: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: 4 },
+  key: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  keyDot: { width: 8, height: 8, borderRadius: 3 },
+  keyText: { fontSize: 12, color: '#E6DED4' },
+
+  inbox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    backgroundColor: '#EEF0EA',
+  },
+  inboxWaiting: { backgroundColor: '#F6E6DE' },
+  inboxUnknown: { backgroundColor: '#fff', borderWidth: 1, borderColor: CARD_LINE },
+  inboxTitle: { fontSize: 13.5, fontWeight: '600', color: '#37412F' },
+  inboxText: { fontSize: 12, color: MOSS, marginTop: 1 },
+
   warningBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1288,7 +1548,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.light.highlight + '40',
     marginHorizontal: 16,
-    marginTop: 16,
+    marginTop: 10,
     paddingHorizontal: Spacing.md,
     paddingVertical: 10,
   },
@@ -1298,163 +1558,188 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: Colors.light.text,
   },
-  offlineBannerText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.danger },
-  modalMessage: { fontSize: 15, color: Colors.light.icon, textAlign: 'center', marginBottom: Spacing.lg },
-  statsWrapper: {
-    marginTop: 16,
-  },
-  statsContainer: {
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  statCard: {
-    minWidth: 100,
-    alignItems: 'center',
-  },
-  // The one tappable stat, so it reads as a control: the same tinted
-  // outline the role and store pickers use for "this does something".
-  supportStatCard: {
-    borderWidth: 1,
-    borderColor: Colors.light.tint,
-    backgroundColor: Colors.light.tint + '12',
-  },
-  // Matches AdminOrdersScreen.js's statValue exactly (no lineHeight /
-  // includeFontPadding overrides) — those were added earlier as a guess at
-  // fixing clipped-looking numbers, but AdminOrdersScreen renders the same
-  // bold 24px numerals cleanly with this exact style, so the real cause
-  // was more likely the stats row's wrapping structure (now matched too)
-  // than glyph metrics. Revisit with a lineHeight override only if a real
-  // regression shows up here that Orders doesn't have.
-  statValue: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: Colors.light.text,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: Colors.light.icon,
-  },
-  searchContainer: {
+
+  search: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.light.background,
-    margin: 16,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
+    gap: 10,
+    height: 46,
+    marginHorizontal: 16,
+    marginTop: 14,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: CARD_LINE,
+    paddingHorizontal: 14,
   },
-  searchIcon: {
-    marginRight: 8,
-  },
+  searchFocused: { borderColor: CLAY },
   searchInput: {
     flex: 1,
-    height: 44,
     fontSize: 14,
-    color: Colors.light.text,
+    color: INK,
+    paddingVertical: 0,
+    outlineStyle: 'none',
   },
-  usersContainer: {
-    padding: 16,
-    paddingTop: 0,
+  filters: { gap: 6, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 },
+  filter: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: CARD_LINE,
   },
+  filterOn: { backgroundColor: CLAY, borderColor: CLAY },
+  filterText: { fontSize: 12.5, fontWeight: '600', color: '#4A413A' },
+  filterCount: { fontWeight: '500', color: MUTED },
+
+  list: { paddingHorizontal: 16, paddingTop: 8, gap: 8 },
   emptyStateWrap: { paddingHorizontal: Spacing.md },
   emptyStateAction: { marginTop: -Spacing.sm, marginBottom: Spacing.md, paddingHorizontal: Spacing.xl },
-  userCard: {
+  row: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
     padding: 12,
-    marginBottom: 12,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
   },
-  userAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: Colors.light.tint,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  avatarSkeleton: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    marginRight: 12,
-  },
-  userAvatarText: {
+  rowSelf: { backgroundColor: '#FBF1EA', borderColor: '#F0D9CB' },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  name: { fontSize: 15, fontWeight: '600', color: INK, flexShrink: 1 },
+  youTag: {
+    fontSize: 10,
+    fontWeight: '700',
     color: '#fff',
-    fontSize: 20,
-    fontWeight: '600',
+    backgroundColor: INK,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: 'hidden',
   },
-  userInfo: {
-    flex: 1,
-  },
-  userNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  userName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: Colors.light.text,
-    flexShrink: 1,
-  },
+  email: { fontSize: 12.5, color: MUTED, marginTop: 1, marginBottom: 6 },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   roleBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  roleText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  userEmailRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    marginBottom: 6,
-  },
-  userEmail: {
-    fontSize: 12,
-    color: Colors.light.icon,
-    flexShrink: 1,
-  },
-  selfRowHint: {
-    fontSize: 11,
-    fontStyle: 'italic',
-    color: Colors.light.icon,
-  },
-  userActions: {
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
+    alignSelf: 'flex-start',
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-    marginBottom: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
-  statusText: {
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    gap: 4,
-  },
-  actionButton: {
+  roleBadgeText: { fontSize: 10.5, fontWeight: '700', letterSpacing: 0.5 },
+  storeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+  storeText: { fontSize: 12, color: MUTED, flexShrink: 1 },
+  more: {
     width: 36,
     height: 36,
-    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: '#F3EEE6',
     alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
   },
-  actionButtonDisabled: {
-    opacity: 0.4,
+
+  sheetTitle: { fontSize: 20, fontWeight: '600', color: INK, marginTop: 2 },
+  sheetText: { fontSize: 13.5, lineHeight: 19, color: MUTED, marginTop: 4 },
+  staffIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: '#F6E6DE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
   },
+  steps: { marginVertical: 14 },
+  stepsLine: {
+    position: 'absolute',
+    left: 15,
+    top: 24,
+    bottom: 24,
+    width: 2,
+    backgroundColor: CARD_LINE,
+  },
+  step: { flexDirection: 'row', gap: 14, paddingVertical: 8 },
+  stepNum: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: CLAY,
+    backgroundColor: Colors.light.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepNumLast: { backgroundColor: CLAY },
+  stepNumText: { fontSize: 14, fontWeight: '700', color: '#A94F2F' },
+  stepTitle: { fontSize: 14.5, fontWeight: '600', color: INK, marginTop: 5 },
+  stepDetail: { fontSize: 12.5, lineHeight: 18, color: MUTED },
+  stepRoles: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  lockNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#E0D3C4',
+    marginBottom: 16,
+  },
+  lockNoteText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: '#4A413A' },
+  ghost: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  ghostText: { fontSize: 15.5, fontWeight: '600', color: MUTED },
+
+  sheetUser: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 4,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.light.border,
+    marginBottom: 8,
+  },
+  sheetUserName: { fontSize: 15, fontWeight: '600', color: INK },
+  sheetUserMeta: { fontSize: 12, color: MUTED, marginTop: 1 },
+  action: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 11,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+  },
+  actionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#F3EEE6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionTitle: { fontSize: 14, fontWeight: '500', color: INK },
+  actionDetail: { fontSize: 11.5, color: MUTED },
+
+  modalMessage: { fontSize: 14, lineHeight: 20, color: MUTED, textAlign: 'center', marginBottom: 14 },
+  who: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    alignSelf: 'stretch',
+    padding: 10,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: CARD_LINE,
+    marginBottom: 18,
+  },
+  whoName: { fontSize: 14, fontWeight: '600', color: INK },
+  whoEmail: { fontSize: 12, color: MUTED },
+
   selfModalHint: {
     fontSize: 13,
     color: Colors.light.icon,
