@@ -90,8 +90,9 @@ service cloud.firestore {
         (!(readField in changed) || request.resource.data[readField] == request.time);
     }
     // Shopping is for customers. Staff accounts (seller, platformAdmin)
-    // may read what is already in their cart and favorites, but not add to
-    // them — the same boundary placeOrder draws on orders. A missing user
+    // may read and remove what is already in their cart and favorites —
+    // staff are promoted from customer accounts, so there may be some —
+    // but not add to them: the same boundary placeOrder draws on orders. A missing user
     // document or role is a customer, as everywhere else.
     function isCustomerAccount(userId) {
       return !exists(/databases/$(database)/documents/users/$(userId)) ||
@@ -466,16 +467,16 @@ service cloud.firestore {
         }
       }
       match /cart/{itemId} {
-        allow read: if isActiveOwner(userId);
-        allow write: if isActiveOwner(userId) && isCustomerAccount(userId);
+        allow read, delete: if isActiveOwner(userId);
+        allow create, update: if isActiveOwner(userId) && isCustomerAccount(userId);
       }
       match /favorites/{productId} {
         // New: favorites just migrated off AsyncStorage onto Firestore,
         // same per-user subcollection shape as cart. Same isActiveOwner()
         // gate — a deactivated account shouldn't be able to favorite
         // new items either.
-        allow read: if isActiveOwner(userId);
-        allow write: if isActiveOwner(userId) && isCustomerAccount(userId);
+        allow read, delete: if isActiveOwner(userId);
+        allow create, update: if isActiveOwner(userId) && isCustomerAccount(userId);
       }
     }
     // Same store-only read as above, for AdminOrdersScreen and the

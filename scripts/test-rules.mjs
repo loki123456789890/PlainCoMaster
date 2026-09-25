@@ -1448,7 +1448,7 @@ await test('STAFF-1  a customer may fill their own cart and favorites', async ()
   await assertSucceeds(setDoc(doc(db, 'users/customer1/favorites/p1'), { name: 'Denim Jacket' }));
 });
 
-await test('STAFF-2  staff accounts cannot add to a cart or favorites, but can read them', async () => {
+await test('STAFF-2  staff accounts cannot add to a cart or favorites, but can read and clear them', async () => {
   // placeOrder refuses staff too; this keeps the cart from filling with
   // an order that could never be placed.
   for (const [db, uid] of [[asSeller(), 'seller1'], [asAdmin(), 'admin1']]) {
@@ -1456,6 +1456,9 @@ await test('STAFF-2  staff accounts cannot add to a cart or favorites, but can r
     await assertFails(setDoc(doc(db, `users/${uid}/favorites/p1`), { name: 'Denim Jacket' }));
     await assertSucceeds(getDocs(collection(db, `users/${uid}/cart`)));
     await assertSucceeds(getDocs(collection(db, `users/${uid}/favorites`)));
+    // Left over from before they were promoted: they can still clear it.
+    await assertSucceeds(deleteDoc(doc(db, `users/${uid}/cart/old`)));
+    await assertSucceeds(deleteDoc(doc(db, `users/${uid}/favorites/old`)));
   }
 });
 

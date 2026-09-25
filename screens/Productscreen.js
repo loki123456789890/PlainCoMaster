@@ -56,6 +56,7 @@ import Avatar from '../components/ui/Avatar';
 import Reveal from '../components/shop/Reveal';
 import StoreLogo from '../components/shop/StoreLogo';
 import SizeGuideSheet, { measuredFields, measurementUnit } from '../components/shop/SizeGuideSheet';
+import StaffPreviewDock, { DOCK_HEIGHT, STRIP_HEIGHT } from '../components/shop/StaffPreviewDock';
 import { TopBar, BigEmpty } from '../components/shop/TabScreen';
 import {
   productReviewsQuery,
@@ -345,6 +346,7 @@ export default function ProductScreen({ navigation, route }) {
   const sizesShake = useSharedValue(0);
   const sizesShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: sizesShake.value }] }));
   const sizeBlockY = useRef(0);
+  const reviewsBlockY = useRef(0);
 
   const askForSize = () => {
     setNeedSize(true);
@@ -524,8 +526,8 @@ export default function ProductScreen({ navigation, route }) {
           icon="alert-circle-outline"
           title="Product unavailable"
           text="This item may have been removed or the link is out of date."
-          actionLabel="Back to Shop"
-          onAction={() => navigation.navigate('Shop')}
+          actionLabel={isStaff ? 'Go back' : 'Back to Shop'}
+          onAction={() => (isStaff ? navigation.goBack() : navigation.navigate('Shop'))}
         />
       </View>
     );
@@ -535,8 +537,14 @@ export default function ProductScreen({ navigation, route }) {
   // Only the store that sells it can edit it (a Platform Admin can't edit
   // any product), so Edit listing is offered to exactly that manager.
   const canEditListing = isSeller && Boolean(product?.storeId) && product.storeId === staffStoreId;
-  // The staff bar is a note line, plus Edit listing when there is one.
-  const barHeight = isStaff ? 12 + 18 + (canEditListing ? 10 + 54 : 0) + barBottom : 12 + 54 + barBottom;
+  // Staff get a floating dock instead of the buy bar, with the selling
+  // store's chips above it.
+  const dockBottom = insets.bottom + 12;
+  const barHeight = isStaff
+    ? dockBottom + DOCK_HEIGHT + (canEditListing ? STRIP_HEIGHT : 0)
+    : 12 + 54 + barBottom;
+  const staffMode = canEditListing ? 'own' : isSeller ? 'foreign' : 'admin';
+  const mismatchCount = reviewSummary.count - reviewSummary.matchedCount;
   const total = unitPrice * quantity;
 
   return (
@@ -770,6 +778,7 @@ export default function ProductScreen({ navigation, route }) {
 
           {/* Reviews, only from people whose order containing this item
               reached 'delivered' — enforced by firestore.rules. */}
+          <View onLayout={(e) => (reviewsBlockY.current = e.nativeEvent.layout.y)} />
           <Reveal delay={450} style={styles.block}>
             <Text style={[styles.blockTitle, { marginBottom: 10 }]}>Reviews</Text>
             {reviewsLoading ? (
@@ -960,28 +969,28 @@ export default function ProductScreen({ navigation, route }) {
         </Animated.View>
       ) : null}
 
-      {/* Staff: what this page is, and where the listing is edited. */}
+      {/* Staff: a shopper's-eye view, with Edit listing for the store that
+          sells it. See components/shop/StaffPreviewDock.js. */}
       {isStaff ? (
-        <View style={[styles.buybar, styles.staffBar, { paddingBottom: barBottom }]}>
-          <View style={styles.staffNote}>
-            <Ionicons name="eye-outline" size={16} color={MUTED} />
-            <Text style={styles.staffNoteText}>
-              {"Shopper's view. Staff accounts can't buy or save items."}
-            </Text>
-          </View>
-          {canEditListing ? (
-            <Pressable
-              onPress={() => navigation.navigate('AdminEditProduct', { product })}
-              style={({ pressed }) => [styles.button, styles.buttonPrimary, styles.staffEdit, pressed && { opacity: 0.88 }]}
-              accessibilityRole="button"
-            >
-              <View style={styles.buttonRow}>
-                <Ionicons name="create-outline" size={17} color="#fff" />
-                <Text style={[styles.buttonText, { color: '#fff' }]}>Edit listing</Text>
-              </View>
-            </Pressable>
-          ) : null}
-        </View>
+        <StaffPreviewDock
+          mode={staffMode}
+          scrollY={scrollY}
+          bottom={dockBottom}
+          productStoreName={store?.name}
+          ownStoreName={canEditListing ? store?.name : null}
+          stockLabel={stockText}
+          mismatchCount={mismatchCount}
+          onEdit={() => navigation.navigate('AdminEditProduct', { product })}
+          onJumpToReviews={() => {
+            // Every review, so a mismatch among the older ones isn't hidden
+            // behind "Show all"; stopped below the floating header.
+            setShowAllReviews(true);
+            scrollRef.current?.scrollTo({
+              y: Math.max(0, heroHeight - 28 + reviewsBlockY.current - (insets.top + 72)),
+              animated: true,
+            });
+          }}
+        />
       ) : (
         <View style={[styles.buybar, { paddingBottom: barBottom }]}>
           <View ref={addButtonRef} collapsable={false} style={{ flexBasis: '42%' }}>
@@ -1257,10 +1266,6 @@ const styles = StyleSheet.create({
   },
   addedFill: { flex: 1, backgroundColor: 'rgba(250,247,242,0.5)', transformOrigin: 'left' },
 
-  staffBar: { flexDirection: 'column', gap: 10 },
-  staffNote: { flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center' },
-  staffNoteText: { fontSize: 12.5, color: MUTED },
-  staffEdit: { width: '100%' },
   buybar: {
     position: 'absolute',
     left: 0,

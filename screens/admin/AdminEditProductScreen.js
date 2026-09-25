@@ -443,10 +443,22 @@ export default function AdminEditProductScreen({ navigation, route }) {
     [navigation]
   );
 
-  // Back to the product list with a message for it to show.
-  const leaveWith = (notice, highlight) => {
+  // Back to the product list with a message for it to show. Opened from
+  // somewhere else — the shopper's view of the product, reached from
+  // Reviews — it goes back there instead: popTo would otherwise swap this
+  // screen for a Products list the manager never came from. After a delete
+  // it goes back past that page too, since the product no longer exists.
+  const leaveWith = (notice, highlight, { deleted = false } = {}) => {
     leaving.current = true;
-    navigation.popTo('AdminProducts', { notice, highlight, noticeAt: Date.now() });
+    const { routes, index } = navigation.getState();
+    const from = routes[index - 1]?.name;
+    if (!from || from === 'AdminProducts') {
+      navigation.popTo('AdminProducts', { notice, highlight, noticeAt: Date.now() });
+    } else if (deleted && from === 'Product' && index >= 2) {
+      navigation.pop(2);
+    } else {
+      navigation.goBack();
+    }
   };
 
   // Validates every field at once and surfaces every error inline.
@@ -532,7 +544,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
     setDeleting(false);
     if (result.success) {
       setDeleteOpen(false);
-      leaveWith(`"${product.name}" deleted. It's logged in Store Activity.`);
+      leaveWith(`"${product.name}" deleted. It's logged in Store Activity.`, undefined, { deleted: true });
     } else if (!isConnected) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       showAppAlert('No Internet Connection', 'Network connection lost. Please check your connection and try again.');
