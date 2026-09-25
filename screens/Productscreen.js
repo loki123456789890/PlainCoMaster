@@ -42,6 +42,7 @@ import Svg, { Path, Circle } from 'react-native-svg';
 import { onSnapshot } from 'firebase/firestore';
 
 import { useFavorites } from '../context/FavoritesContext';
+import { useAdmin } from '../context/AdminContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
 import { useStores, useStoreRatings, storeReviewCountLabel } from '../context/StoreContext';
@@ -148,6 +149,13 @@ export default function ProductScreen({ navigation, route }) {
   // while someone looks at it is the ordinary case rather than an edge one.
   const routeProduct = route.params?.product;
   const { toggleFavorite, isFavorite } = useFavorites();
+  // Staff reach this page from Reviews ("View product") to see the listing
+  // as shoppers do. They see it, but can't shop from it: no favorites, no
+  // cart, no buying, no wandering into the shop. placeOrder and the cart
+  // and favorites rules refuse staff accounts too; this keeps the page
+  // from offering what the server would refuse.
+  const { role, isSeller, storeId: staffStoreId } = useAdmin();
+  const isStaff = Boolean(role);
   const { addToCart, cartCount } = useCart();
   // ProductContext already holds a live listener on the whole collection,
   // so reading through it costs no extra listener and no extra read.
@@ -524,7 +532,11 @@ export default function ProductScreen({ navigation, route }) {
   }
 
   const barBottom = Math.max(insets.bottom, 12) + 10;
-  const barHeight = 12 + 54 + barBottom;
+  // Only the store that sells it can edit it (a Platform Admin can't edit
+  // any product), so Edit listing is offered to exactly that manager.
+  const canEditListing = isSeller && Boolean(product?.storeId) && product.storeId === staffStoreId;
+  // The staff bar is a note line, plus Edit listing when there is one.
+  const barHeight = isStaff ? 12 + 18 + (canEditListing ? 10 + 54 : 0) + barBottom : 12 + 54 + barBottom;
   const total = unitPrice * quantity;
 
   return (
@@ -599,8 +611,9 @@ export default function ProductScreen({ navigation, route }) {
               <Pressable
                 style={({ pressed }) => [styles.store, pressed && { transform: [{ scale: 0.98 }] }]}
                 onPress={() => navigation.push('Shop', { storeId: store.id })}
-                accessibilityRole="button"
-                accessibilityLabel={`Sold by ${store.name}. View store`}
+                disabled={isStaff}
+                accessibilityRole={isStaff ? 'text' : 'button'}
+                accessibilityLabel={isStaff ? `Sold by ${store.name}` : `Sold by ${store.name}. View store`}
               >
                 <StoreLogo uri={store.logoUrl} size={42} radius={12} />
                 <View style={{ flex: 1 }}>
@@ -617,8 +630,12 @@ export default function ProductScreen({ navigation, route }) {
                     </View>
                   ) : null}
                 </View>
-                <Text style={styles.storeGo}>View store</Text>
-                <Ionicons name="chevron-forward" size={15} color={CLAY} style={{ marginLeft: -4 }} />
+                {isStaff ? null : (
+                  <>
+                    <Text style={styles.storeGo}>View store</Text>
+                    <Ionicons name="chevron-forward" size={15} color={CLAY} style={{ marginLeft: -4 }} />
+                  </>
+                )}
               </Pressable>
             </Reveal>
           ) : null}
@@ -876,32 +893,36 @@ export default function ProductScreen({ navigation, route }) {
         <Animated.Text style={[styles.topTitle, titleStyle]} numberOfLines={1}>
           {productName}
         </Animated.Text>
-        <FloatButton
-          solid={solid}
-          onPress={handleToggleFavorite}
-          accessibilityRole="button"
-          accessibilityLabel={isFavoriteState ? `Remove ${productName} from favorites` : `Save ${productName} to favorites`}
-          accessibilityState={{ selected: isFavoriteState }}
-        >
-          <Animated.View style={heartStyle}>
-            <Ionicons name={isFavoriteState ? 'heart' : 'heart-outline'} size={21} color={isFavoriteState ? CLAY : INK} />
-          </Animated.View>
-        </FloatButton>
-        <View ref={cartButtonRef} collapsable={false}>
-          <FloatButton
-            solid={solid}
-            onPress={() => navigation.navigate('Cart')}
-            accessibilityRole="button"
-            accessibilityLabel={shownCount > 0 ? `Cart, ${shownCount} items` : 'Cart'}
-          >
-            <Ionicons name="cart-outline" size={21} color={INK} />
-            {shownCount > 0 ? (
-              <Animated.View style={[styles.badge, badgeStyle]}>
-                <Text style={styles.badgeText}>{shownCount > 99 ? '99+' : shownCount}</Text>
+        {isStaff ? null : (
+          <>
+            <FloatButton
+              solid={solid}
+              onPress={handleToggleFavorite}
+              accessibilityRole="button"
+              accessibilityLabel={isFavoriteState ? `Remove ${productName} from favorites` : `Save ${productName} to favorites`}
+              accessibilityState={{ selected: isFavoriteState }}
+            >
+              <Animated.View style={heartStyle}>
+                <Ionicons name={isFavoriteState ? 'heart' : 'heart-outline'} size={21} color={isFavoriteState ? CLAY : INK} />
               </Animated.View>
-            ) : null}
-          </FloatButton>
-        </View>
+            </FloatButton>
+            <View ref={cartButtonRef} collapsable={false}>
+              <FloatButton
+                solid={solid}
+                onPress={() => navigation.navigate('Cart')}
+                accessibilityRole="button"
+                accessibilityLabel={shownCount > 0 ? `Cart, ${shownCount} items` : 'Cart'}
+              >
+                <Ionicons name="cart-outline" size={21} color={INK} />
+                {shownCount > 0 ? (
+                  <Animated.View style={[styles.badge, badgeStyle]}>
+                    <Text style={styles.badgeText}>{shownCount > 99 ? '99+' : shownCount}</Text>
+                  </Animated.View>
+                ) : null}
+              </FloatButton>
+            </View>
+          </>
+        )}
       </View>
 
       {/* Added to cart */}
@@ -939,52 +960,75 @@ export default function ProductScreen({ navigation, route }) {
         </Animated.View>
       ) : null}
 
-      {/* Buy bar */}
-      <View style={[styles.buybar, { paddingBottom: barBottom }]}>
-        <View ref={addButtonRef} collapsable={false} style={{ flexBasis: '42%' }}>
+      {/* Staff: what this page is, and where the listing is edited. */}
+      {isStaff ? (
+        <View style={[styles.buybar, styles.staffBar, { paddingBottom: barBottom }]}>
+          <View style={styles.staffNote}>
+            <Ionicons name="eye-outline" size={16} color={MUTED} />
+            <Text style={styles.staffNoteText}>
+              {"Shopper's view. Staff accounts can't buy or save items."}
+            </Text>
+          </View>
+          {canEditListing ? (
+            <Pressable
+              onPress={() => navigation.navigate('AdminEditProduct', { product })}
+              style={({ pressed }) => [styles.button, styles.buttonPrimary, styles.staffEdit, pressed && { opacity: 0.88 }]}
+              accessibilityRole="button"
+            >
+              <View style={styles.buttonRow}>
+                <Ionicons name="create-outline" size={17} color="#fff" />
+                <Text style={[styles.buttonText, { color: '#fff' }]}>Edit listing</Text>
+              </View>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : (
+        <View style={[styles.buybar, { paddingBottom: barBottom }]}>
+          <View ref={addButtonRef} collapsable={false} style={{ flexBasis: '42%' }}>
+            <Pressable
+              onPress={handleAddToCart}
+              disabled={isOutOfStock}
+              style={({ pressed }) => [
+                styles.button,
+                styles.buttonSecondary,
+                justAdded && styles.buttonAdded,
+                isOutOfStock && { opacity: 0.5 },
+                pressed && { transform: [{ scale: 0.97 }] },
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel="Add to cart"
+              accessibilityState={{ disabled: isOutOfStock, busy: isAdding }}
+            >
+              {isAdding ? (
+                <ActivityIndicator color={INK} />
+              ) : justAdded ? (
+                <View style={styles.buttonRow}>
+                  <Ionicons name="checkmark" size={17} color="#fff" />
+                  <Text style={[styles.buttonText, { color: '#fff' }]}>Added</Text>
+                </View>
+              ) : (
+                <Text style={styles.buttonText}>Add to Cart</Text>
+              )}
+            </Pressable>
+          </View>
           <Pressable
-            onPress={handleAddToCart}
+            onPress={handleBuyNow}
             disabled={isOutOfStock}
             style={({ pressed }) => [
               styles.button,
-              styles.buttonSecondary,
-              justAdded && styles.buttonAdded,
-              isOutOfStock && { opacity: 0.5 },
+              styles.buttonPrimary,
+              isOutOfStock && styles.buttonPrimaryOff,
               pressed && { transform: [{ scale: 0.97 }] },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Add to cart"
-            accessibilityState={{ disabled: isOutOfStock, busy: isAdding }}
+            accessibilityState={{ disabled: isOutOfStock }}
           >
-            {isAdding ? (
-              <ActivityIndicator color={INK} />
-            ) : justAdded ? (
-              <View style={styles.buttonRow}>
-                <Ionicons name="checkmark" size={17} color="#fff" />
-                <Text style={[styles.buttonText, { color: '#fff' }]}>Added</Text>
-              </View>
-            ) : (
-              <Text style={styles.buttonText}>Add to Cart</Text>
-            )}
+            <Text style={[styles.buttonText, { color: '#fff' }]} numberOfLines={1}>
+              {isOutOfStock ? 'Sold out' : `Buy Now · ₱${total.toFixed(2)}`}
+            </Text>
           </Pressable>
         </View>
-        <Pressable
-          onPress={handleBuyNow}
-          disabled={isOutOfStock}
-          style={({ pressed }) => [
-            styles.button,
-            styles.buttonPrimary,
-            isOutOfStock && styles.buttonPrimaryOff,
-            pressed && { transform: [{ scale: 0.97 }] },
-          ]}
-          accessibilityRole="button"
-          accessibilityState={{ disabled: isOutOfStock }}
-        >
-          <Text style={[styles.buttonText, { color: '#fff' }]} numberOfLines={1}>
-            {isOutOfStock ? 'Sold out' : `Buy Now · ₱${total.toFixed(2)}`}
-          </Text>
-        </Pressable>
-      </View>
+      )}
 
       {flying ? (
         <Animated.View pointerEvents="none" style={[styles.fly, flightStyle]}>
@@ -1213,6 +1257,10 @@ const styles = StyleSheet.create({
   },
   addedFill: { flex: 1, backgroundColor: 'rgba(250,247,242,0.5)', transformOrigin: 'left' },
 
+  staffBar: { flexDirection: 'column', gap: 10 },
+  staffNote: { flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center' },
+  staffNoteText: { fontSize: 12.5, color: MUTED },
+  staffEdit: { width: '100%' },
   buybar: {
     position: 'absolute',
     left: 0,

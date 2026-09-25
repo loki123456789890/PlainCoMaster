@@ -475,6 +475,15 @@ async function handlePlaceOrder(request) {
       throw new HttpsError('permission-denied', 'This account has been deactivated.');
     }
 
+    // Orders are for customers. A Store Manager buying from their own
+    // store would book sales that never happened into the dashboard, and
+    // neither staff role has a reason to shop from a staff account — they
+    // can sign up a customer account like anyone else. Same boundary the
+    // cart and favorites rules draw (isCustomerAccount() in firestore.rules).
+    if (userData.role === 'seller' || userData.role === 'platformAdmin') {
+      throw new HttpsError('permission-denied', 'Staff accounts cannot place orders. Use a customer account to shop.');
+    }
+
     // Read from the user document rather than accepted from the request.
     // The address is the customer's own and they can edit it freely, so
     // this is not about trust so much as about there being one source of

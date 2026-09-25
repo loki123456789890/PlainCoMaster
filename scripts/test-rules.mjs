@@ -1442,6 +1442,23 @@ await test('REVIEW-18  any signed-in shopper can read reviews; a guest cannot', 
   await assertFails(getDocs(collection(asGuest(), 'reviews')));
 });
 
+await test('STAFF-1  a customer may fill their own cart and favorites', async () => {
+  const db = asCustomer();
+  await assertSucceeds(setDoc(doc(db, 'users/customer1/cart/line1'), { productId: 'p1', quantity: 1 }));
+  await assertSucceeds(setDoc(doc(db, 'users/customer1/favorites/p1'), { name: 'Denim Jacket' }));
+});
+
+await test('STAFF-2  staff accounts cannot add to a cart or favorites, but can read them', async () => {
+  // placeOrder refuses staff too; this keeps the cart from filling with
+  // an order that could never be placed.
+  for (const [db, uid] of [[asSeller(), 'seller1'], [asAdmin(), 'admin1']]) {
+    await assertFails(setDoc(doc(db, `users/${uid}/cart/line1`), { productId: 'p1', quantity: 1 }));
+    await assertFails(setDoc(doc(db, `users/${uid}/favorites/p1`), { name: 'Denim Jacket' }));
+    await assertSucceeds(getDocs(collection(db, `users/${uid}/cart`)));
+    await assertSucceeds(getDocs(collection(db, `users/${uid}/favorites`)));
+  }
+});
+
 await test('REVIEW-19  "Not quite" may say what was different, from the known list', async () => {
   await assertSucceeds(
     setDoc(

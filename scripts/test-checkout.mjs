@@ -79,11 +79,12 @@ async function wipe() {
   await db.collection('users').doc('customer1').delete();
 }
 
-async function seed({ stock = 10, price = 850, isActive = true, address = ADDRESS } = {}) {
+async function seed({ stock = 10, price = 850, isActive = true, address = ADDRESS, role } = {}) {
   await wipe();
   const user = { uid: 'customer1', name: 'Cathy Customer', email: 'cathy@example.com' };
   if (address) user.shippingAddress = address;
   if (isActive === false) user.isActive = false;
+  if (role) user.role = role;
   await db.collection('users').doc('customer1').set(user);
 
   // p1 and p2 share a store, so every test written before multi-store
@@ -489,6 +490,18 @@ await test('CHECKOUT-22  a product with no store cannot be ordered', async () =>
   );
   assert(error.details.productIds.includes('p1'), 'the unassigned product is named');
   assertEqual(await orderCount(), 0, 'no order');
+});
+
+await test('CHECKOUT-23  staff accounts cannot place orders', async () => {
+  // A Store Manager buying from their own store would book sales that
+  // never happened into the dashboard.
+  for (const role of ['seller', 'platformAdmin']) {
+    await seed({ role });
+    const error = await expectRefusal(placeOrder(request([{ productId: 'p1', quantity: 1 }])));
+    assertEqual(error.code, 'permission-denied', `${role} refused as permission-denied`);
+    assertEqual(await stockOf('p1'), 10, `stock untouched for ${role}`);
+    assertEqual(await orderCount(), 0, `no order for ${role}`);
+  }
 });
 
 console.log('\nCheckout — the PayMongo gateway (faked, no account needed)');
