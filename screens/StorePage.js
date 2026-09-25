@@ -166,6 +166,9 @@ export default function StorePage({ navigation, route }) {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        // The app is edge-to-edge, so the last row of products would sit
+        // behind Android's navigation bar without the bottom inset.
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}

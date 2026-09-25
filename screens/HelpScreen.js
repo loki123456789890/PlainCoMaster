@@ -371,7 +371,7 @@ export default function HelpScreen({ navigation, route }) {
   const open = isOpenNow();
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <TopBar title="Help & Support" onBack={() => navigation.goBack()} stuck={scrolled} />
       <ScrollView
         showsVerticalScrollIndicator={false}

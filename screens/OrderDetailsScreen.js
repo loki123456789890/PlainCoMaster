@@ -350,7 +350,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
   const fade = (delay) => (reduceMotion ? undefined : FadeIn.duration(220).delay(delay).easing(EASE_OUT_QUART));
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       {header}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>

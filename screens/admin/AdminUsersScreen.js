@@ -735,7 +735,7 @@ export default function AdminUsersScreen({ navigation }) {
     openQuestions === null ? 'unknown' : openQuestions > 0 ? 'waiting' : 'clear';
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Where staff accounts come from, as three steps. There is no
           "create account" form behind it — see addStaffVisible above. */}
       <Sheet visible={addStaffVisible} onClose={() => setAddStaffVisible(false)}>

@@ -347,7 +347,7 @@ export default function AdminReviewsScreen({ navigation }) {
           };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <TopBar title="Reviews" onBack={() => navigation.goBack()} stuck={stuck} right={<StoreChip />} />
 
       <ScrollView

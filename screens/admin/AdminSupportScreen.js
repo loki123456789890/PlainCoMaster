@@ -274,7 +274,7 @@ export default function AdminSupportScreen({ navigation }) {
         : { icon: 'chatbubbles-outline', title: 'No support requests', text: 'Requests from customers appear here.' };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <TopBar
         title={isPlatformAdmin ? 'General support' : 'Support requests'}
         onBack={() => navigation.goBack()}

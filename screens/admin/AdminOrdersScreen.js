@@ -7,7 +7,7 @@
 // single step forward, or cancels it behind a confirmation.
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, Platform } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
@@ -399,6 +399,9 @@ function Steps({ order }) {
 
 function Toast({ toast, onUndo }) {
   const reduceMotion = useReducedMotion();
+  // Absolute, so the screen's bottom safe-area padding doesn't reach it:
+  // it clears the navigation bar on its own.
+  const insets = useSafeAreaInsets();
   const shown = useSharedValue(0);
   useEffect(() => {
     const to = toast ? 1 : 0;
@@ -410,7 +413,7 @@ function Toast({ toast, onUndo }) {
   }));
   return (
     <Animated.View
-      style={[styles.toast, style]}
+      style={[styles.toast, { bottom: insets.bottom + 20 }, style]}
       pointerEvents={toast ? 'auto' : 'none'}
       accessibilityLiveRegion="polite"
     >
@@ -889,7 +892,7 @@ export default function AdminOrdersScreen({ navigation, route }) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       {/* Header */}
       <View style={styles.header}>
         <AnimatedPressable

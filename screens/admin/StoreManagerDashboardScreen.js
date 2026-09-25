@@ -435,7 +435,7 @@ export default function StoreManagerDashboardScreen({ navigation }) {
   const weekMax = Math.max(1, ...orders.week.map((w) => w.count));
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <Sheet visible={logoutVisible} onClose={() => setLogoutVisible(false)} locked={loggingOut}>
         <Text style={styles.sheetTitle} accessibilityRole="header">
           Log out of the Staff Portal?

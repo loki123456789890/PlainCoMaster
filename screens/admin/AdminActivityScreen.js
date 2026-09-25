@@ -368,7 +368,7 @@ export default function AdminActivityScreen({ navigation, route }) {
   let index = 0;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <TopBar
         title={view.title}
         onBack={() => navigation.goBack()}
