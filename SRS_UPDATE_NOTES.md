@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 25):
+- **New use case — Reset Password** (fills the gap listed in section 26):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2279,7 +2279,83 @@ the flaw disclosure. The listing was removed afterwards.
 
 ---
 
-## 25. Still outstanding — SRS-side only, no code changes needed
+## 25. Price drop on saved items — NEW
+
+Shoppers often save an ukay piece and come back to it later rather than
+buying on the spot. Before this, Favorites showed a saved item's current
+price but not whether it had changed since it was saved.
+
+> **Status (1 Oct 2026):** built; display only. No security rules or
+> stored fields change, so nothing needs deploying and the APK used for
+> the UAT survey is unaffected.
+
+### What changed — suggested wording (extends Favorites, section 15)
+
+> When a saved item's current price is lower than its price when it was
+> saved, its card in Favorites says so under the price — for example,
+> "Down from ₱450" beneath ₱350. Nothing is shown when the price has
+> risen or not changed, or when the item is sold out or no longer
+> available.
+
+**Deliberately plain.** One line in Moss under the price, not a
+struck-through sale tag or a percentage badge, consistent with the design
+principles in PRODUCT.md. Price-drop push notifications were considered
+and left out (see Limitations).
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-W1 | Favorites shows "Down from ₱X" under a saved item's price when its current price is lower than the price X it was saved at, unless the item is sold out or no longer available. |
+
+### Use case updates
+
+**Favorites** (Customer) — whichever use case covers viewing saved
+items: add:
+
+> Each saved item whose price has dropped since it was saved shows the
+> price it came down from.
+
+### Business rules
+
+- The comparison is against the price when the customer saved the item.
+  Removing the item from Favorites and saving it again starts from the
+  price at that time.
+- Only drops are noted; a price rise is not.
+- Only Favorites shows the note. Home, Shop and store pages are
+  unchanged.
+
+### Data model changes
+
+None. A favorite already stores a copy of the product, including its
+price, when it is saved (section 15); the note compares that price with
+the live product's.
+
+### Screens — module list (section 7)
+
+- **Favorites** (Customer): product cards show the price-drop note.
+
+### Limitations
+
+- There is no notification: the customer sees a drop the next time they
+  open Favorites. Notifying them would need a server process that runs
+  when a price changes, stored device tokens, and remote push
+  notifications, which do not work in Expo Go on Android.
+- A drop that is later reversed leaves no trace; the note reflects only
+  the current price against the saved one.
+
+### Verification
+
+Lint unchanged at 0 errors. No rules change, so the rules test suite is
+unaffected. Checked on a device against production (1 Oct 2026): a test
+listing (`scripts/add-test-product.mjs`) was saved to Favorites by a
+customer account, its price lowered through Edit Product by the Store
+Manager, and Favorites then showed "Down from" the saved price under the
+new one. The listing was removed afterwards.
+
+---
+
+## 26. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
