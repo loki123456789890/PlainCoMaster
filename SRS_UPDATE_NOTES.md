@@ -2667,8 +2667,12 @@ measurements. Edit Product, on a product with Tops measurements and no
 item category: Outerwear kept the measurements without asking; Bottoms
 asked first and then showed the Bottoms measurements; Undo restored the
 Tops measurements; saving with Bottoms stored `category` and
-`measurementType` as `bottoms`. A full Add Product save was not driven,
-since it needs photo uploads.
+`measurementType` as `bottoms`. A full Add Product save, as the Store
+Manager (front photo given as an image link rather than uploaded):
+Women, Dresses, ready-to-wear, size M with a bust of 18; it was stored
+with `category` `dresses` and `measurementType` `onepiece`, and the
+shopper then saw it under the store's Dresses chip (and not the Tops
+product) with "Women's Dresses" on its product page.
 
 ---
 
