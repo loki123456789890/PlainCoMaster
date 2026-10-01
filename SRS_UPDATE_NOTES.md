@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 24):
+- **New use case — Reset Password** (fills the gap listed in section 25):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2192,7 +2192,91 @@ than eight photos are refused, on create and on edit.
 
 ---
 
-## 24. Still outstanding — SRS-side only, no code changes needed
+## 24. "Just in" and last-piece notes — NEW
+
+Before this, Home's first rail was captioned "Just added by our stores"
+even when its newest item was months old, and a shopper browsing the
+catalog could not tell a fresh listing or a last piece without opening
+each product.
+
+> **Status (1 Oct 2026):** built; display only. No security rules or
+> stored fields change, so nothing needs deploying and the APK used for
+> the UAT survey is unaffected.
+
+### What changed — suggested wording (extends Browse Products and the Home screen)
+
+> A product listed in the last three days shows a "Just in" note on its
+> photo wherever products are listed: Home, Shop, a store's page and
+> Favorites. A product with exactly one left says so beside its price —
+> "One of a kind" for ukay-ukay, "Only 1 left" for ready-to-wear — in the
+> same words the product page uses. Neither is shown on a sold-out
+> product.
+>
+> Home's first rail is titled "Just in", with the number of products
+> listed in the last three days, while there are any; otherwise it is
+> titled "New arrivals" and shows the newest products.
+
+**Deliberately plain.** The notes are stated, not promoted: no countdown,
+no flash-sale colours, no stacked badges, consistent with the design
+principles in PRODUCT.md. A timed "drop" with countdowns, reservations
+and push notifications was considered and left out (see Limitations).
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-N1 | The system shows a "Just in" note on a product listed within the last three days, in every product list, unless it is sold out. |
+| FR-N2 | The system shows "One of a kind" (ukay-ukay) or "Only 1 left" (ready-to-wear) beside the price of a product whose stock is exactly 1. |
+| FR-N3 | Home's first rail is titled "Just in" and states how many products were listed in the last three days while there are any, and is titled "New arrivals" otherwise. |
+
+### Use case updates
+
+**Browse Products** (Customer, Guest): add:
+
+> Each product in the list shows "Just in" if it was listed in the last
+> three days, and "One of a kind" or "Only 1 left" if it is the last one.
+
+### Business rules
+
+- "Listed" is the product's `createdAt`, stamped by the server when the
+  Store Manager adds it. Editing a product does not make it "Just in"
+  again.
+- A product whose stock is not recorded shows no last-piece note.
+
+### Data model changes
+
+None. Both notes are worked out from the existing `createdAt` and
+`stock` fields.
+
+### Screens — module list (section 7)
+
+- **Home** (Customer, Guest): the first rail is "Just in" or "New
+  arrivals" as above.
+- **Home**, **Shop**, **Store page** and **Favorites**: product cards
+  show the two notes.
+
+### Limitations
+
+- The three-day window is fixed in the app; it is not set per store.
+- There is no scheduled "drop": a Store Manager cannot hold products back
+  until a set time, shoppers cannot reserve an item, and there are no
+  push notifications for new listings. Holding stock for a reservation
+  would need a server process to release expired holds, and remote push
+  notifications do not work in Expo Go on Android.
+- A shopper with the app open sees a product leave "Just in" the next
+  time the list refreshes, not at the exact moment it turns three days
+  old.
+
+### Verification
+
+Lint unchanged at 0 errors. No rules change, so the rules test suite is
+unaffected. Still to check on a device: a newly listed product appears
+with "Just in" on Home and Shop, and a product with a stock of 1 shows
+the last-piece note.
+
+---
+
+## 25. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
