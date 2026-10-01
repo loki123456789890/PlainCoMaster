@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 29):
+- **New use case — Reset Password** (fills the gap listed in section 30):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2676,7 +2676,94 @@ product) with "Women's Dresses" on its product page.
 
 ---
 
-## 29. Still outstanding — SRS-side only, no code changes needed
+## 29. Photos on a review — NEW
+
+A review could say an item was "Not like the photos" but could not show
+it. The only picture on a review was the author's profile photo. A buyer
+can now add photos of the item as it arrived.
+
+> **Status (1 Oct 2026):** built and tested against the emulator. Neither
+> the Firestore rules nor the Storage rules are deployed yet. The change
+> does not affect the APK used for the UAT survey: its reviews, which
+> have no photos, are still accepted.
+
+### What changed — suggested wording
+
+> When writing or editing a review, the customer may add up to three
+> photos of the item, taken with the camera or chosen from their library.
+> Each photo is uploaded when it is picked and can be removed before
+> posting. Photos are optional and appear in the preview of the review.
+>
+> On the product page, a review's photos appear under its text; tapping
+> one opens it full screen, where the customer can swipe between them and
+> zoom. The Store Manager sees the same photos on each review in Reviews,
+> and hiding a review hides its photos with it.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-V1 | A customer writing or editing a review may add up to three photos, from the camera or the photo library. |
+| FR-V2 | Photos are optional, and the customer can remove any of them before posting or updating. |
+| FR-V3 | A review's photos appear on the product page under its text and open full screen when tapped. |
+| FR-V4 | The Store Manager sees each review's photos in Reviews. Hiding a review hides its photos. |
+
+### Use case updates
+
+**Write a Review** (Customer, section 9a): add, after the written note:
+
+> The customer may add up to three photos of the item. The system
+> uploads each one and shows it in the review's preview.
+>
+> *Alternate flow — upload refused:* the system shows "Photo not added"
+> with the reason (too large, unsupported format, no connection) and
+> keeps the rest of the review as it was.
+
+### Business rules / security (enforced by security rules)
+
+- `photoUrls` is optional; if present it is a list of at most three
+  strings, each no longer than 2000 characters, on create and on edit.
+  Only the review's author may change it.
+- A photo can be uploaded to `reviews/{customer}/{order}/` only by that
+  customer, only once that order is delivered, and only as a JPEG, PNG or
+  WebP under 5 MB.
+- Photos cannot be replaced or deleted from storage, the same as order
+  chat photos.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `reviews` | `photoUrls` (list of strings, optional, at most 3) | The buyer's photos of the item. Omitted when there are none. |
+
+### Screens — module list (section 7)
+
+- **Write a Review** (Customer): an "Add photos" row under the written
+  note, and the photos in the preview and the posted review.
+- **Product Details** (Customer): photos under each review's text, opening
+  full screen.
+- **Reviews** (Store Manager): photos on each review card.
+
+### Limitations
+
+- A photo removed before posting, or replaced by an edit, stays in
+  storage. Clearing those would be a server-side job, as for product
+  photos.
+- The Store Manager cannot hide one photo on its own; hiding applies to
+  the whole review.
+
+### Verification
+
+Rules test suite 150 → **152**: three photos are accepted on create; a
+review without photos can be given one and then have it cleared; four
+photos, a single string instead of a list, a non-string entry and a URL
+over 2000 characters are refused; a Store Manager and another customer
+cannot change a review's photos. The Storage rules load in the emulator
+without errors. Lint unchanged at 0 errors.
+
+---
+
+## 30. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
