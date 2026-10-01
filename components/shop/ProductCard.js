@@ -45,6 +45,16 @@ const lastPieceNote = (product) => {
   return product.type === 'ukay-ukay' ? 'One of a kind' : 'Only 1 left';
 };
 
+// A saved favorite remembers the price it was saved at; when the live price
+// is lower, the card says what it came down from. Only a drop is noted — a
+// rise, or a price that can't be read as a number, says nothing.
+const priceDropFrom = (savedPrice, product) => {
+  if (savedPrice == null || savedPrice === '') return null;
+  const was = Number(savedPrice);
+  const now = Number(product?.price);
+  return Number.isFinite(was) && Number.isFinite(now) && was > now ? was : null;
+};
+
 // Heart on the photo: a dip and a settle on toggle, since favoriting
 // changes state and earns more than generic press feedback.
 function Heart({ favorited, onToggle, name }) {
@@ -82,16 +92,19 @@ function Heart({ favorited, onToggle, name }) {
 }
 
 // `unavailable`: a saved favorite whose product has since been removed —
-// shown faded, with a note instead of a price.
-export default function ProductCard({ product, favorited, storeName, onPress, onToggleFavorite, style, unavailable }) {
+// shown faded, with a note instead of a price. `savedPrice`: the price a
+// favorite was saved at — only Favorites passes it.
+export default function ProductCard({ product, favorited, storeName, onPress, onToggleFavorite, style, unavailable, savedPrice }) {
   const [imageFailed, setImageFailed] = useState(false);
   const isUkay = product.type === 'ukay-ukay';
   const soldOut = !unavailable && isSoldOut(product);
   const justIn = !unavailable && !soldOut && isJustIn(product);
   const lastPiece = unavailable ? null : lastPieceNote(product);
+  const droppedFrom = unavailable || soldOut ? null : priceDropFrom(savedPrice, product);
   const spoken = [
     product.name,
     unavailable ? 'no longer available' : `₱${product.price}`,
+    droppedFrom != null && `down from ₱${droppedFrom}`,
     soldOut && 'sold out',
     justIn && 'just in',
     lastPiece && lastPiece.toLowerCase(),
@@ -158,6 +171,11 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
           ) : null}
         </View>
       )}
+      {droppedFrom != null ? (
+        <Text style={styles.drop} numberOfLines={1}>
+          Down from ₱{droppedFrom.toLocaleString('en-PH')}
+        </Text>
+      ) : null}
     </AnimatedPressable>
   );
 }
@@ -229,6 +247,9 @@ const styles = StyleSheet.create({
   priceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginHorizontal: 2 },
   price: { fontSize: 14.5, fontWeight: '600', color: Colors.light.highlight },
   lastPiece: { flexShrink: 1, fontSize: 11.5, color: Colors.light.icon },
+  // Moss, the "good news" color: a plain line under the price, not a
+  // strike-through sale tag — gold stays on the price itself.
+  drop: { marginHorizontal: 2, marginTop: 1, fontSize: 11.5, fontWeight: '500', color: Colors.light.success },
   goneRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginHorizontal: 2, marginTop: 2 },
   goneText: { fontSize: 11.5, color: Colors.light.icon },
   priceSold: { color: '#A89F97', textDecorationLine: 'line-through' },

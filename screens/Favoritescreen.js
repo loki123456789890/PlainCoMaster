@@ -103,6 +103,7 @@ export default function FavoritesScreen({ navigation, route }) {
         product={item.shown}
         favorited
         unavailable={item.unavailable}
+        savedPrice={item.saved.price}
         storeName={item.unavailable ? null : getStore(item.shown.storeId)?.name}
         onPress={() => navigation.navigate('Product', { product: item.shown })}
         onToggleFavorite={() => handleRemove(item.saved)}
