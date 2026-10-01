@@ -6,10 +6,10 @@
 // color, an ID card with its logo, category, date joined and three
 // figures, the store's description, its seller rating, a search (and the
 // category tabs, when it sells both kinds) that stays under the header,
-// and its items. Scrolling past the banner brings in a compact bar with
+// what it has listed this week, and its items. Scrolling past the banner brings in a compact bar with
 // the logo and name. Everything shown is the store's live data.
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, TextInput, RefreshControl, Platform, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, TextInput, RefreshControl, Platform, ScrollView, useWindowDimensions } from 'react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -35,7 +35,7 @@ import StarRating from '../components/ui/StarRating';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import SkeletonBlock from '../components/ui/Skeleton';
-import ProductCard from '../components/shop/ProductCard';
+import ProductCard, { isSoldOut } from '../components/shop/ProductCard';
 import Reveal from '../components/shop/Reveal';
 import StoreLogo from '../components/shop/StoreLogo';
 import { EASE_OUT_QUINT } from '../constants/motion';
@@ -56,6 +56,14 @@ const THEMES = {
   rtw: { from: '#C4623E', to: '#A94F2F', tag: Colors.light.tint, label: 'Ready-to-Wear' },
   both: { from: '#3A3531', to: '#1C1B1A', tag: Colors.light.text, label: 'Ukay-Ukay & RTW' },
 };
+// "New this week": a store's unsold pieces listed in the last seven days.
+// Longer than the cards' three-day "Just in", since one store restocks less
+// often than the whole catalogue does.
+const NEW_DAYS = 7;
+const NEW_MS = NEW_DAYS * 24 * 60 * 60 * 1000;
+const NEW_MAX = 12;
+const RAIL_CARD_WIDTH = 148;
+const RAIL_GAP = 12;
 const COMPACT_AT = 150;
 const BAR = 56;
 
@@ -111,6 +119,16 @@ export default function StorePage({ navigation, route }) {
   const sellsUkay = items.some((p) => p.type === 'ukay-ukay');
   const sellsRtw = items.some((p) => p.type === 'ready-to-wear');
   const theme = THEMES[sellsUkay && sellsRtw ? 'both' : sellsUkay ? 'ukay' : 'rtw'];
+  // Newest first, as ProductContext orders them. A listing the server
+  // hasn't stamped yet has no createdAt and waits. Shown only when the
+  // store also has older pieces: if everything is new, "All items" below
+  // already starts with it.
+  const now = Date.now();
+  const newItems = items.filter((p) => {
+    const listed = p.createdAt?.toMillis?.();
+    return typeof listed === 'number' && now - listed < NEW_MS && !isSoldOut(p);
+  });
+  const showNew = !loading && !error && newItems.length > 0 && newItems.length < items.length;
 
   const q = search.trim().toLowerCase();
   const shown = items
@@ -282,6 +300,40 @@ export default function StorePage({ navigation, route }) {
             </Reveal>
           ) : null}
         </View>
+
+        {/* What's new since a regular last looked. Above the search, which
+            only narrows the grid. */}
+        {showNew ? (
+          <Reveal delay={240} style={styles.newWrap}>
+            <View style={styles.newHead}>
+              <Text style={styles.newTitle} accessibilityRole="header">
+                New this week
+              </Text>
+              <Text style={styles.newCaption}>
+                {newItems.length} {newItems.length === 1 ? 'piece' : 'pieces'} listed in the last {NEW_DAYS} days
+              </Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.rail}
+              snapToInterval={RAIL_CARD_WIDTH + RAIL_GAP}
+              decelerationRate="fast"
+            >
+              {newItems.slice(0, NEW_MAX).map((p, i) => (
+                <Reveal key={p.id} from="right" delay={280 + Math.min(i, 4) * 70}>
+                  <ProductCard
+                    style={{ width: RAIL_CARD_WIDTH }}
+                    product={p}
+                    favorited={isFavorite(p.id)}
+                    onPress={() => navigation.navigate('Product', { product: p })}
+                    onToggleFavorite={() => handleToggleFavorite(p)}
+                  />
+                </Reveal>
+              ))}
+            </ScrollView>
+          </Reveal>
+        ) : null}
 
         {/* Search (and tabs), pinned under the bar once it gets there */}
         <Animated.View style={[styles.sticky, stickyStyle]} onLayout={(e) => setStickyY(e.nativeEvent.layout.y)}>
@@ -483,6 +535,12 @@ const styles = StyleSheet.create({
   reviewScore: { fontSize: 28, fontWeight: '600', color: Colors.light.text },
   reviewText: { fontSize: 11.5, lineHeight: 17, color: Colors.light.icon, marginTop: 3 },
   reviewNoneTitle: { fontSize: 13, fontWeight: '600', color: Colors.light.text },
+
+  newWrap: { marginTop: 22 },
+  newHead: { paddingHorizontal: 20, marginBottom: 12 },
+  newTitle: { fontSize: 16, fontWeight: '600', color: Colors.light.text },
+  newCaption: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
+  rail: { paddingHorizontal: 20, paddingBottom: 4, gap: RAIL_GAP },
 
   sticky: { paddingTop: 14, paddingBottom: 10, paddingHorizontal: 20, backgroundColor: Colors.light.background, zIndex: 6 },
   searchHalo: {
