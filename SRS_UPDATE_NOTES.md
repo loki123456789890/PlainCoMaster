@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 26):
+- **New use case — Reset Password** (fills the gap listed in section 27):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2355,7 +2355,95 @@ new one. The listing was removed afterwards.
 
 ---
 
-## 26. Still outstanding — SRS-side only, no code changes needed
+## 26. Change password while signed in — NEW
+
+Before this, the only way to change a password was Reset Password
+(section 13), which emails a link. That fails for any account whose
+email address can't receive mail, and asks a user who knows their
+password to leave the app to change it.
+
+> **Status (1 Oct 2026):** built. Firebase Authentication only: no
+> security rules, stored fields or Cloud Functions change, so nothing
+> needs deploying and the APK used for the UAT survey is unaffected.
+
+### What changed — suggested wording
+
+> A signed-in user can change their password from their account:
+> customers from Profile (Account → Change Password), Store Managers from
+> the Account section at the foot of their dashboard, and Platform Admins
+> from "Your account" at the foot of Manage Users. They enter their
+> current password, then the new password twice. When it is accepted, the
+> app confirms "Password changed" and the user keeps working; the new
+> password applies the next time they log in.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-A1 | The system lets a signed-in customer, Store Manager or Platform Admin change their password. |
+| FR-A2 | The system requires the current password before changing it, and states "That isn't your current password." when it is wrong. |
+| FR-A3 | The new password must be at least 8 characters (the same minimum as Sign Up), must differ from the current one, and must be entered twice identically; each problem is named under its field. |
+| FR-A4 | The change cannot be submitted while offline, and too many failed attempts are refused with a message to wait and try again. |
+
+### Use case updates
+
+**New use case — Change Password** (Customer, Store Manager, Platform
+Admin):
+
+> *Precondition:* the user is logged in. *Main flow:* the user opens
+> Change Password, enters their current password and the new password
+> twice, and taps Change password; the system confirms "Password
+> changed". *Alternate flows:* wrong current password; new password too
+> short, the same as the current one, or not matching its confirmation;
+> too many attempts; no connection. Each says what to fix and leaves the
+> password unchanged. *Postcondition:* the new password is required at
+> the next log in; the old one no longer works.
+
+A user who has forgotten their current password is directed to Reset
+Password, which stays as it is.
+
+### Business rules
+
+- The current password is checked again even though the user is logged
+  in, so someone holding an unlocked phone cannot take over the account.
+- The minimum length is shared with Sign Up, so the two cannot drift
+  apart.
+
+### Data model changes
+
+None. Passwords are held by Firebase Authentication, not in the database.
+
+### Screens — module list (section 7)
+
+- **Profile** (Customer): Change Password row in Account.
+- **Store Manager dashboard**: Account section below Manage.
+- **Manage Users** (Platform Admin): "Your account" row at the foot of the
+  list.
+
+All three open the same Change Password sheet.
+
+### Limitations
+
+- Per Firebase's documentation, a password change ends the account's
+  other sessions: another device signed in to the account is signed out
+  when its sign-in next renews, within about an hour, not instantly. This
+  was not tested.
+- Changing the password is not recorded in the account activity log.
+
+### Verification
+
+Lint unchanged at 0 errors. No rules change, so the rules test suite is
+unaffected. Against the local Auth emulator: a wrong current password
+was refused without signing the user out; the right one, followed by the
+change, succeeded; afterwards the old password was refused at log in and
+the new one accepted. Checked on a device against production (1 Oct
+2026) with a throwaway customer account: each validation message, a
+successful change, and logging in again with the new password. Staff
+passwords were not changed while the UAT survey uses those accounts.
+
+---
+
+## 27. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
