@@ -2773,7 +2773,8 @@ customer is now emailed when the order ships, is delivered, or is
 cancelled.
 
 > **Status (1 Oct 2026):** built and tested against the emulator, and the
-> function is deployed to production; not yet tried from a phone. It runs
+> function is deployed to production. An order marked Delivered from a
+> phone against production sent the customer the email. It runs
 > entirely in Cloud Functions, so no rules change was needed. The APK
 > used for the UAT survey is unaffected, and its customers get the
 > emails too.
