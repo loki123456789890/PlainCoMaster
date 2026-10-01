@@ -23,6 +23,7 @@ import SkeletonBlock from '../../components/ui/Skeleton';
 import StarRating from '../../components/ui/StarRating';
 import ProductImage from '../../components/ui/ProductImage';
 import Sheet from '../../components/shop/Sheet';
+import PhotoViewer from '../../components/shop/PhotoViewer';
 import Reveal from '../../components/shop/Reveal';
 import { TopBar, OfflineNotice, BigEmpty, UndoToast, useAutoClear } from '../../components/shop/TabScreen';
 import StoreChip from '../../components/admin/StoreChip';
@@ -34,6 +35,7 @@ import {
   summarizeReviews,
   formatAverage,
   mismatchReasonLabel,
+  reviewViewerPhotos,
 } from '../../utils/reviews';
 
 const INK = Colors.light.text;
@@ -201,6 +203,8 @@ export default function AdminReviewsScreen({ navigation }) {
   const [hiding, setHiding] = useState(false);
   const [restoringId, setRestoringId] = useState(null);
   const [toast, setToast] = useState(null);
+  // A buyer's photos, full screen: { review, index }, null while closed.
+  const [viewing, setViewing] = useState(null);
   useAutoClear(toast, () => setToast(null), 4000);
 
   const { isConnected } = useNetworkStatus();
@@ -470,6 +474,26 @@ export default function AdminReviewsScreen({ navigation }) {
                         </View>
 
                         {review.text ? <Text style={styles.quote}>“{review.text}”</Text> : null}
+                        {/* Seen here before a hide, since a photo is the
+                            part of a review most likely to need one. */}
+                        {review.photoUrls.length ? (
+                          <View style={styles.photos}>
+                            {review.photoUrls.map((url, i) => (
+                              <Pressable
+                                key={url}
+                                onPress={() => {
+                                  Haptics.selectionAsync();
+                                  setViewing({ review, index: i });
+                                }}
+                                style={({ pressed }) => pressed && styles.pressed}
+                                accessibilityRole="imagebutton"
+                                accessibilityLabel={`Open ${review.userName}'s photo ${i + 1} of ${review.photoUrls.length}`}
+                              >
+                                <ProductImage uri={url} style={styles.photo} />
+                              </Pressable>
+                            ))}
+                          </View>
+                        ) : null}
                         <Text style={styles.by}>{review.userName}</Text>
 
                         <View style={styles.actions}>
@@ -541,6 +565,14 @@ export default function AdminReviewsScreen({ navigation }) {
         lift={-40}
         onUndo={toast?.undo ? () => restore(toast.undo, true) : undefined}
         undoLabel="Undo hide"
+      />
+
+      <PhotoViewer
+        visible={viewing !== null}
+        photos={reviewViewerPhotos(viewing?.review)}
+        initialIndex={viewing?.index ?? 0}
+        productName={viewing?.review.productName || 'this item'}
+        onClose={() => setViewing(null)}
       />
 
       <Sheet visible={Boolean(confirming)} onClose={() => setConfirming(null)} locked={hiding}>
@@ -711,6 +743,8 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 10.5, fontWeight: '600' },
   quote: { fontSize: 13.5, lineHeight: 21, color: INK, marginBottom: 6 },
+  photos: { flexDirection: 'row', gap: 8, marginBottom: 8 },
+  photo: { width: 64, height: 64, borderRadius: 12, backgroundColor: '#E6E9E1' },
   by: { fontSize: 12, color: MUTED, marginBottom: 12 },
   actions: {
     flexDirection: 'row',

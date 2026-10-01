@@ -132,6 +132,29 @@ service firebase.storage {
       allow create: if request.auth != null && request.auth.uid == uid && isValidImage();
     }
 
+    // Review photos: the buyer's own pictures of an item as it arrived.
+    // Filed under the order they are about, and only once that order is
+    // delivered, the same condition firestore.rules puts on the review
+    // itself, so the bucket cannot fill with photos for reviews that could
+    // never be posted. Readable by any signed-in user, like the review.
+    //
+    // No update or delete, as with chat photos. A photo the buyer removes
+    // before posting is left behind in the bucket; reaping orphans is the
+    // server-side job noted on /products.
+    function deliveredOrder(uid, orderId) {
+      return firestore.exists(/databases/(default)/documents/users/$(uid)/orders/$(orderId)) &&
+        'status' in firestore.get(/databases/(default)/documents/users/$(uid)/orders/$(orderId)).data &&
+        firestore.get(/databases/(default)/documents/users/$(uid)/orders/$(orderId)).data.status == 'delivered';
+    }
+
+    match /reviews/{uid}/{orderId}/{imageId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null &&
+        request.auth.uid == uid &&
+        deliveredOrder(uid, orderId) &&
+        isValidImage();
+    }
+
     // Store logos: public like product photos, uploaded only by that
     // store's own manager — the same test firestore.rules' managesStore()
     // applies to the store document the URL goes into.

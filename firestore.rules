@@ -815,6 +815,21 @@ service cloud.firestore {
         reasons.hasOnly(['condition', 'size', 'colour', 'quality', 'photos']) &&
         (data.matchedDescription == false || reasons.size() == 0);
     }
+    // The buyer's own photos of the item as it arrived: optional, at most
+    // three (REVIEW_PHOTOS_MAX in utils/reviews.js), each a URL no longer
+    // than the 2000 characters every other stored URL gets. Rules have no
+    // loop, so the three slots are spelled out; `||` short-circuits, so a
+    // slot past the end of the list is never indexed. Absent on reviews
+    // written before photos existed, and on the survey APK's, which is
+    // why it is allowed rather than required.
+    function validReviewPhotos(data) {
+      let urls = data.get('photoUrls', []);
+      return urls is list &&
+        urls.size() <= 3 &&
+        (urls.size() < 1 || (urls[0] is string && urls[0].size() <= 2000)) &&
+        (urls.size() < 2 || (urls[1] is string && urls[1].size() <= 2000)) &&
+        (urls.size() < 3 || (urls[2] is string && urls[2].size() <= 2000));
+    }
 
     match /reviews/{reviewId} {
       // Any signed-in user, matching /products — a review the next shopper
@@ -850,9 +865,10 @@ service cloud.firestore {
         request.resource.data.keys().hasOnly(
           ['orderId', 'productId', 'productName', 'userId', 'userName',
            'rating', 'matchedDescription', 'text', 'hidden', 'createdAt',
-           'storeId', 'userPhotoUrl', 'mismatchReasons']
+           'storeId', 'userPhotoUrl', 'mismatchReasons', 'photoUrls']
         ) &&
         validMismatchReasons(request.resource.data) &&
+        validReviewPhotos(request.resource.data) &&
         // The author's profile photo, copied at write time like userName,
         // because /users is unreadable to other shoppers.
         request.resource.data.get('userPhotoUrl', '') is string &&
@@ -904,8 +920,9 @@ service cloud.firestore {
           isActiveUser() &&
           resource.data.userId == request.auth.uid &&
           request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['rating', 'matchedDescription', 'mismatchReasons', 'text', 'updatedAt']) &&
+            .hasOnly(['rating', 'matchedDescription', 'mismatchReasons', 'text', 'photoUrls', 'updatedAt']) &&
           validMismatchReasons(request.resource.data) &&
+          validReviewPhotos(request.resource.data) &&
           request.resource.data.rating is int &&
           request.resource.data.rating >= 1 &&
           request.resource.data.rating <= 5 &&

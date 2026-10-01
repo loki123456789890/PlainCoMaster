@@ -87,6 +87,7 @@ import {
   matchedDescriptionSentence,
   reviewCountLabel,
   mismatchReasonLabel,
+  reviewViewerPhotos,
 } from '../utils/reviews';
 import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../constants/motion';
 
@@ -252,6 +253,9 @@ export default function ProductScreen({ navigation, route }) {
   // opened on (null while it's closed).
   const [photoIndex, setPhotoIndex] = useState(0);
   const [viewerIndex, setViewerIndex] = useState(null);
+  // A buyer's review photos open in the same viewer as the listing's own,
+  // as { photos, index }; null while closed.
+  const [reviewViewer, setReviewViewer] = useState(null);
   const [sizeGuideVisible, setSizeGuideVisible] = useState(false);
   const [reviews, setReviews] = useState([]);
   const [reviewsLoading, setReviewsLoading] = useState(true);
@@ -1003,55 +1007,81 @@ export default function ProductScreen({ navigation, route }) {
                 </View>
 
                 {visibleReviewList.map((review) => (
-                  <View
-                    key={review.id}
-                    style={styles.review}
-                    accessible
-                    accessibilityLabel={`${review.rating} stars from ${review.userName}. ${
-                      review.matchedDescription
-                        ? 'Matched the description.'
-                        : `Didn't match the description${
-                            review.mismatchReasons.length
-                              ? `: ${review.mismatchReasons.map(mismatchReasonLabel).join(', ').toLowerCase()}`
-                              : ''
-                          }.`
-                    } ${review.text}`}
-                  >
-                    <View style={styles.reviewHead}>
-                      <Avatar uri={review.userPhotoUrl} size={28} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.reviewAuthor} numberOfLines={1}>
-                          {review.userName}
-                        </Text>
-                        <StarRating rating={review.rating} size={12} />
-                      </View>
-                      <Text style={styles.reviewDate}>
-                        {formatReviewDate(review.createdAt)}
-                        {review.updatedAt ? ' · Edited' : ''}
-                      </Text>
-                    </View>
-                    {/* Shown on every review, not only the negative ones:
-                        an answer that appears only when it's bad turns its
-                        absence into a second, unlabelled signal. A mismatch
-                        is Clay, not error red: it's feedback, not a fault. */}
-                    <View style={styles.matchRow}>
-                      <View style={[styles.matchPill, !review.matchedDescription && styles.matchPillNo]}>
-                        <Ionicons
-                          name={review.matchedDescription ? 'checkmark' : 'alert-circle-outline'}
-                          size={12}
-                          color={review.matchedDescription ? MOSS : CLAY}
-                        />
-                        <Text style={[styles.matchPillText, !review.matchedDescription && { color: CLAY }]}>
-                          {review.matchedDescription ? 'Matched the description' : "Didn't match the description"}
-                        </Text>
-                      </View>
-                      {review.mismatchReasons.map((key) => (
-                        <View key={key} style={[styles.matchPill, styles.matchPillNo]}>
-                          <Text style={[styles.matchPillText, { color: CLAY }]}>{mismatchReasonLabel(key)}</Text>
+                  <View key={review.id} style={styles.review}>
+                    {/* The words are one accessible group; the photos sit
+                        outside it, so each stays a button a screen reader
+                        can reach. */}
+                    <View
+                      style={styles.reviewBody}
+                      accessible
+                      accessibilityLabel={`${review.rating} stars from ${review.userName}. ${
+                        review.matchedDescription
+                          ? 'Matched the description.'
+                          : `Didn't match the description${
+                              review.mismatchReasons.length
+                                ? `: ${review.mismatchReasons.map(mismatchReasonLabel).join(', ').toLowerCase()}`
+                                : ''
+                            }.`
+                      } ${review.text}${
+                        review.photoUrls.length
+                          ? ` ${review.photoUrls.length} photo${review.photoUrls.length === 1 ? '' : 's'}.`
+                          : ''
+                      }`}
+                    >
+                      <View style={styles.reviewHead}>
+                        <Avatar uri={review.userPhotoUrl} size={28} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.reviewAuthor} numberOfLines={1}>
+                            {review.userName}
+                          </Text>
+                          <StarRating rating={review.rating} size={12} />
                         </View>
-                      ))}
+                        <Text style={styles.reviewDate}>
+                          {formatReviewDate(review.createdAt)}
+                          {review.updatedAt ? ' · Edited' : ''}
+                        </Text>
+                      </View>
+                      {/* Shown on every review, not only the negative ones:
+                          an answer that appears only when it's bad turns its
+                          absence into a second, unlabelled signal. A mismatch
+                          is Clay, not error red: it's feedback, not a fault. */}
+                      <View style={styles.matchRow}>
+                        <View style={[styles.matchPill, !review.matchedDescription && styles.matchPillNo]}>
+                          <Ionicons
+                            name={review.matchedDescription ? 'checkmark' : 'alert-circle-outline'}
+                            size={12}
+                            color={review.matchedDescription ? MOSS : CLAY}
+                          />
+                          <Text style={[styles.matchPillText, !review.matchedDescription && { color: CLAY }]}>
+                            {review.matchedDescription ? 'Matched the description' : "Didn't match the description"}
+                          </Text>
+                        </View>
+                        {review.mismatchReasons.map((key) => (
+                          <View key={key} style={[styles.matchPill, styles.matchPillNo]}>
+                            <Text style={[styles.matchPillText, { color: CLAY }]}>{mismatchReasonLabel(key)}</Text>
+                          </View>
+                        ))}
+                      </View>
+                      {review.text ? <Text style={styles.reviewText}>{review.text}</Text> : null}
                     </View>
-                    {review.text ? <Text style={styles.reviewText}>{review.text}</Text> : null}
+                    {review.photoUrls.length ? (
+                      <View style={styles.reviewPhotos}>
+                        {review.photoUrls.map((url, i) => (
+                          <Pressable
+                            key={url}
+                            onPress={() => {
+                              Haptics.selectionAsync();
+                              setReviewViewer({ photos: reviewViewerPhotos(review), index: i });
+                            }}
+                            style={({ pressed }) => pressed && { opacity: 0.85 }}
+                            accessibilityRole="imagebutton"
+                            accessibilityLabel={`Open ${review.userName}'s photo ${i + 1} of ${review.photoUrls.length}`}
+                          >
+                            <ProductImage uri={url} style={styles.reviewPhoto} />
+                          </Pressable>
+                        ))}
+                      </View>
+                    ) : null}
                   </View>
                 ))}
 
@@ -1247,6 +1277,14 @@ export default function ProductScreen({ navigation, route }) {
         initialIndex={viewerIndex ?? 0}
         productName={productName}
         onClose={() => setViewerIndex(null)}
+      />
+
+      <PhotoViewer
+        visible={reviewViewer !== null}
+        photos={reviewViewer?.photos}
+        initialIndex={reviewViewer?.index ?? 0}
+        productName={productName}
+        onClose={() => setReviewViewer(null)}
       />
 
       <SizeGuideSheet
@@ -1452,7 +1490,8 @@ const styles = StyleSheet.create({
   summaryCount: { fontSize: 12, color: MUTED },
   matched: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: CARD_LINE },
   matchedText: { flex: 1, fontSize: 12.5, color: INK, lineHeight: 18 },
-  review: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: CARD_LINE, gap: 8 },
+  review: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: CARD_LINE, gap: 10 },
+  reviewBody: { gap: 8 },
   reviewHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   reviewAuthor: { fontSize: 13, fontWeight: '600', color: INK },
   reviewDate: { fontSize: 11, color: MUTED },
@@ -1470,6 +1509,8 @@ const styles = StyleSheet.create({
   matchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
   matchPillText: { fontSize: 11, fontWeight: '600', color: MOSS },
   reviewText: { fontSize: 13.5, color: INK, lineHeight: 20 },
+  reviewPhotos: { flexDirection: 'row', gap: 8 },
+  reviewPhoto: { width: 72, height: 72, borderRadius: 12, backgroundColor: CARD_LINE },
   showAll: { alignSelf: 'flex-start', paddingVertical: 12 },
   noReviews: { padding: 16, borderRadius: 18, backgroundColor: '#F3EEE6', gap: 2 },
   noReviewsTitle: { fontSize: 13.5, fontWeight: '600', color: INK },

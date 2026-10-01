@@ -22,6 +22,21 @@ export const REVIEWS_COLLECTION = 'reviews';
 // letting a customer type 1,400 characters and then lose them to a denial.
 export const REVIEW_TEXT_MAX = 1000;
 
+// The buyer's own photos of the item as it arrived. Three is enough for
+// the front, a label and a flaw; matches validReviewPhotos() in
+// firestore.rules.
+export const REVIEW_PHOTOS_MAX = 3;
+
+// Under the order, because storage.rules only accepts an upload once that
+// order is delivered — the same gate the review itself has.
+export const reviewImageFolder = (uid, orderId) => `reviews/${uid}/${orderId}`;
+
+// The shape components/shop/PhotoViewer.js takes.
+export function reviewViewerPhotos(review) {
+  const urls = review?.photoUrls || [];
+  return urls.map((url, i) => ({ url, label: `${review.userName}'s photo ${i + 1} of ${urls.length}` }));
+}
+
 export const MIN_RATING = 1;
 export const MAX_RATING = 5;
 
@@ -45,6 +60,13 @@ export function mismatchReasonLabel(key) {
 export function normalizeMismatchReasons(reasons) {
   const list = Array.isArray(reasons) ? reasons : [];
   return MISMATCH_KEYS.filter((key) => list.includes(key));
+}
+
+// Strings only, at most REVIEW_PHOTOS_MAX; older reviews have none.
+export function normalizePhotoUrls(urls) {
+  return (Array.isArray(urls) ? urls : [])
+    .filter((url) => typeof url === 'string' && url)
+    .slice(0, REVIEW_PHOTOS_MAX);
 }
 
 // How many reviews a store's seller rating is computed from. Bounded
@@ -89,6 +111,7 @@ export function mapReviewDoc(docSnap) {
     // Only meaningful on a "Not quite"; older reviews have none.
     mismatchReasons: data.matchedDescription === true ? [] : normalizeMismatchReasons(data.mismatchReasons),
     text: data.text || '',
+    photoUrls: normalizePhotoUrls(data.photoUrls),
     hidden: data.hidden === true,
     createdAt: data.createdAt?.toDate ? data.createdAt.toDate() : null,
     updatedAt: data.updatedAt?.toDate ? data.updatedAt.toDate() : null,

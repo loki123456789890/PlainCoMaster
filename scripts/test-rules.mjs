@@ -1640,6 +1640,37 @@ await test('REVIEW-20  mismatch reasons must be known keys, and absent when it m
   );
 });
 
+const photo = (n) => `https://firebasestorage.googleapis.com/v0/b/x/o/reviews%2Fcustomer1%2Fdelivered1%2F${n}.jpg`;
+
+await test('REVIEW-21  a review may carry up to three of the buyer\'s photos', async () => {
+  await assertSucceeds(
+    setDoc(doc(asCustomer(), 'reviews/delivered1_p1'), reviewDoc({ photoUrls: [photo(1), photo(2), photo(3)] }))
+  );
+  // Added to, or cleared from, a review written without any.
+  await assertSucceeds(
+    updateDoc(doc(asCustomer(), 'reviews/delivered1_p3'), { photoUrls: [photo(4)], updatedAt: serverTimestamp() })
+  );
+  await assertSucceeds(
+    updateDoc(doc(asCustomer(), 'reviews/delivered1_p3'), { photoUrls: [], updatedAt: serverTimestamp() })
+  );
+});
+
+await test('REVIEW-22  review photos must be a short list of URLs, and only the author\'s', async () => {
+  const db = asCustomer();
+  await assertFails(
+    setDoc(doc(db, 'reviews/delivered1_p1'), reviewDoc({ photoUrls: [photo(1), photo(2), photo(3), photo(4)] }))
+  );
+  await assertFails(setDoc(doc(db, 'reviews/delivered1_p1'), reviewDoc({ photoUrls: photo(1) })));
+  await assertFails(setDoc(doc(db, 'reviews/delivered1_p1'), reviewDoc({ photoUrls: [photo(1), 42] })));
+  await assertFails(setDoc(doc(db, 'reviews/delivered1_p1'), reviewDoc({ photoUrls: ['x'.repeat(2001)] })));
+  await assertFails(
+    updateDoc(doc(asSeller(), 'reviews/delivered1_p3'), { photoUrls: [photo(1)] })
+  );
+  await assertFails(
+    updateDoc(doc(asOtherCustomer(), 'reviews/delivered1_p3'), { photoUrls: [photo(1)], updatedAt: serverTimestamp() })
+  );
+});
+
 // ---------------------------------------------------------------------------
 console.log('\nStore scoping — each manager sees only their own store');
 // ---------------------------------------------------------------------------

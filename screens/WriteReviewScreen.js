@@ -2,8 +2,9 @@
 //
 // Write (or revise) a review of ONE line of a delivered order, from the
 // approved review-editor preview: three numbered steps — rate it, say
-// whether it matched (and if not, what was different), add a note — then a
-// live card showing exactly what other shoppers will read. Posting is held
+// whether it matched (and if not, what was different), add a note and up to
+// three photos — then a live card showing exactly what other shoppers will
+// read. Posting is held
 // until the two required answers are in; updating is held until something
 // actually changed. Leaving with unsaved changes asks first, in a sheet
 // that lists them. Once saved, the screen turns into a calm confirmation
@@ -41,13 +42,17 @@ import StarRating from '../components/ui/StarRating';
 import ProductImage from '../components/ui/ProductImage';
 import Avatar from '../components/ui/Avatar';
 import Sheet from '../components/shop/Sheet';
+import { pickAndUploadImage, uploadErrorMessage, CHAT_PICKER_OPTIONS } from '../utils/imageUpload';
 import {
   REVIEWS_COLLECTION,
   REVIEW_TEXT_MAX,
+  REVIEW_PHOTOS_MAX,
   MISMATCH_REASONS,
   mismatchReasonLabel,
   normalizeMismatchReasons,
+  normalizePhotoUrls,
   reviewDocId,
+  reviewImageFolder,
   publicDisplayName,
 } from '../utils/reviews';
 
@@ -74,7 +79,18 @@ const NUDGES = [
   ['Store', 'The store '],
 ];
 
-const BLANK = { rating: 0, matched: null, reasons: [], text: '' };
+const BLANK = { rating: 0, matched: null, reasons: [], text: '', photos: [] };
+
+const photoCount = (n) => `${n} photo${n === 1 ? '' : 's'}`;
+
+// The shared upload messages speak to a Store Manager about product photos;
+// the one refusal a buyer can hit here is about the order, not the role.
+function reviewUploadErrorMessage(code) {
+  if (code === 'storage/unauthorized') {
+    return 'Photos can only be added to a review of a delivered order of your own.';
+  }
+  return uploadErrorMessage(code);
+}
 
 const formatDay = (date) =>
   date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
@@ -101,6 +117,9 @@ function listChanges(current, from, isEditing) {
       'Your note',
       !current.text.trim() ? 'Removed' : isEditing && from.text.trim() ? 'Edited' : 'Written',
     ]);
+  }
+  if (current.photos.join() !== from.photos.join()) {
+    changes.push(['Photos', current.photos.length ? photoCount(current.photos.length) : 'Removed']);
   }
   return changes;
 }
@@ -130,6 +149,11 @@ export default function WriteReviewScreen({ navigation, route }) {
   const [matched, setMatched] = useState(null);
   const [reasons, setReasons] = useState([]);
   const [text, setText] = useState('');
+  // Download URLs, already uploaded. A photo goes up the moment it is
+  // picked, so posting is one write rather than a wait on three uploads.
+  const [photos, setPhotos] = useState([]);
+  const [uploadProgress, setUploadProgress] = useState(null);
+  const [photoSheet, setPhotoSheet] = useState(false);
 
   // The review as it stands in Firestore — what "unsaved changes" are
   // measured against. BLANK until one is loaded or posted.
@@ -148,11 +172,12 @@ export default function WriteReviewScreen({ navigation, route }) {
   const noteRef = useRef(null);
 
   const isEditing = Boolean(posted);
-  const current = { rating, matched, reasons, text };
+  const current = { rating, matched, reasons, text, photos };
   const changes = listChanges(current, posted || BLANK, isEditing);
   const isDirty = changes.length > 0;
   const answered = rating > 0 && matched !== null;
-  const canSubmit = answered && (!isEditing || isDirty) && !submitting && !loading;
+  const uploading = uploadProgress !== null;
+  const canSubmit = answered && (!isEditing || isDirty) && !submitting && !loading && !uploading;
 
   const author = publicDisplayName(auth.currentUser?.displayName);
   const firstName = author.split(' ')[0];
@@ -179,6 +204,7 @@ export default function WriteReviewScreen({ navigation, route }) {
             matched: data.matchedDescription === true,
             reasons: data.matchedDescription === true ? [] : normalizeMismatchReasons(data.mismatchReasons),
             text: data.text || '',
+            photos: normalizePhotoUrls(data.photoUrls),
           };
           setPosted(loaded);
           setPostedAt(data.createdAt?.toDate ? data.createdAt.toDate() : null);
@@ -186,6 +212,7 @@ export default function WriteReviewScreen({ navigation, route }) {
           setMatched(loaded.matched);
           setReasons(loaded.reasons);
           setText(loaded.text);
+          setPhotos(loaded.photos);
         }
         setLoadFailed(false);
       } catch (error) {
@@ -251,6 +278,50 @@ export default function WriteReviewScreen({ navigation, route }) {
     noteRef.current?.focus();
   };
 
+  const addPhoto = async (source) => {
+    if (!auth.currentUser || photos.length >= REVIEW_PHOTOS_MAX) return;
+    setUploadProgress(0);
+    const result = await pickAndUploadImage({
+      source,
+      folder: reviewImageFolder(auth.currentUser.uid, orderId),
+      // Framed by the buyer, not the catalog: a stain or a tag isn't square.
+      pickerOptions: CHAT_PICKER_OPTIONS,
+      onProgress: setUploadProgress,
+    });
+    setUploadProgress(null);
+    if (result.cancelled) return;
+    if (!result.success) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showAppAlert('Photo not added', reviewUploadErrorMessage(result.error));
+      return;
+    }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setPhotos((list) => [...list, result.url].slice(0, REVIEW_PHOTOS_MAX));
+  };
+
+  const handleAddPhoto = () => {
+    Haptics.selectionAsync();
+    // The web build has no camera picker worth offering.
+    if (Platform.OS === 'web') {
+      addPhoto('library');
+      return;
+    }
+    setPhotoSheet(true);
+  };
+
+  // The picker opens once the sheet has slid away: iOS won't present one
+  // modal while another is still dismissing.
+  const pickFrom = (source) => {
+    Haptics.selectionAsync();
+    setPhotoSheet(false);
+    setTimeout(() => addPhoto(source), 350);
+  };
+
+  const removePhoto = (url) => {
+    Haptics.selectionAsync();
+    setPhotos((list) => list.filter((u) => u !== url));
+  };
+
   // Resolves true once saved, so "Save & leave" knows whether to leave.
   const handleSubmit = async () => {
     if (!canSubmit) return false;
@@ -280,6 +351,7 @@ export default function WriteReviewScreen({ navigation, route }) {
           matchedDescription: matched,
           mismatchReasons,
           text: trimmedText,
+          photoUrls: photos,
           updatedAt: serverTimestamp(),
         });
       } else {
@@ -299,6 +371,8 @@ export default function WriteReviewScreen({ navigation, route }) {
           matchedDescription: matched,
           mismatchReasons,
           text: trimmedText,
+          // Omitted rather than empty, like userPhotoUrl.
+          ...(photos.length ? { photoUrls: photos } : {}),
           // Never true at creation — the rule refuses it, and a review that
           // could arrive pre-hidden would bypass moderation rather than
           // pass through it.
@@ -316,7 +390,7 @@ export default function WriteReviewScreen({ navigation, route }) {
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setPosted({ rating, matched, reasons: mismatchReasons, text: trimmedText });
+      setPosted({ rating, matched, reasons: mismatchReasons, text: trimmedText, photos });
       setText(trimmedText);
       setSubmitting(false);
       setView(isEditing ? 'updated' : 'posted');
@@ -433,6 +507,13 @@ export default function WriteReviewScreen({ navigation, route }) {
             <Text style={[styles.mineText, !text.trim() && styles.mineTextEmpty]}>
               {text.trim() || 'No written note, just the rating.'}
             </Text>
+            {photos.length ? (
+              <View style={styles.mineStrip}>
+                {photos.map((url) => (
+                  <ProductImage key={url} uri={url} style={styles.mineStripPhoto} />
+                ))}
+              </View>
+            ) : null}
           </Card>
 
           {matched === false ? (
@@ -470,6 +551,7 @@ export default function WriteReviewScreen({ navigation, route }) {
 
   const footerHint = (() => {
     if (submitting || loading) return null;
+    if (uploading) return 'Adding your photo…';
     if (rating === 0) return 'Tap a star to rate this item.';
     if (matched === null) return 'Say whether it matched the listing.';
     if (isEditing) return isDirty ? 'Shoppers will see an “Edited” label.' : 'Change anything above to update.';
@@ -679,6 +761,54 @@ export default function WriteReviewScreen({ navigation, route }) {
                 </Text>
               </View>
             </View>
+
+            {/* The buyer's own photos — the strongest answer to "Not like
+                the photos", and useful on a "Yes" too. */}
+            <View style={styles.photosHead}>
+              <Text style={styles.photosTitle}>Add photos</Text>
+              <Text style={styles.optional}>
+                {photos.length}/{REVIEW_PHOTOS_MAX}
+              </Text>
+            </View>
+            <View style={styles.photoRow}>
+              {photos.map((url, i) => (
+                <View key={url} style={styles.photoSlot}>
+                  <ProductImage uri={url} style={styles.photoSlotImage} accessibilityLabel={`Your photo ${i + 1}`} />
+                  <Pressable
+                    onPress={() => removePhoto(url)}
+                    style={styles.photoRemove}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Remove photo ${i + 1}`}
+                  >
+                    <Ionicons name="close" size={14} color="#fff" />
+                  </Pressable>
+                </View>
+              ))}
+              {photos.length < REVIEW_PHOTOS_MAX ? (
+                <Pressable
+                  onPress={handleAddPhoto}
+                  disabled={uploading}
+                  style={({ pressed }) => [styles.photoSlot, styles.photoAdd, pressed && { opacity: 0.7 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add a photo of the item"
+                  accessibilityState={{ busy: uploading, disabled: uploading }}
+                >
+                  {uploading ? (
+                    <>
+                      <ActivityIndicator color={CLAY} />
+                      <Text style={styles.photoAddText}>{Math.round(uploadProgress * 100)}%</Text>
+                    </>
+                  ) : (
+                    <>
+                      <Ionicons name="camera-outline" size={22} color={CLAY} />
+                      <Text style={styles.photoAddText}>Add</Text>
+                    </>
+                  )}
+                </Pressable>
+              ) : null}
+            </View>
+            <Text style={styles.photosHelp}>The item as it arrived: the front, a tag, anything that was different.</Text>
           </Animated.View>
 
           {/* The review exactly as other shoppers will read it — the same
@@ -699,6 +829,7 @@ export default function WriteReviewScreen({ navigation, route }) {
               matched={matched}
               reasons={reasons}
               text={text}
+              photos={photos}
               dateLabel={isEditing && isDirty ? 'Edited just now' : postedAt ? formatDay(postedAt) : 'Today'}
             />
             <View style={styles.privacy}>
@@ -786,6 +917,49 @@ export default function WriteReviewScreen({ navigation, route }) {
           <Text style={styles.keepEditingText}>Keep editing</Text>
         </Pressable>
       </Sheet>
+
+      {/* Camera first: a fresh photo of the piece in hand is the useful one. */}
+      <Sheet visible={photoSheet} onClose={() => setPhotoSheet(false)}>
+        <Text style={styles.sheetTitle} accessibilityRole="header">Add a photo</Text>
+        <Text style={styles.sheetBody}>Other shoppers will see it with your review.</Text>
+        <View style={styles.photoTiles}>
+          <Pressable
+            onPress={() => pickFrom('camera')}
+            style={({ pressed }) => [styles.photoTile, styles.photoTileCamera, pressed && styles.photoTilePressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Camera, take a new photo"
+          >
+            <View style={[styles.photoTileIcon, { backgroundColor: 'rgba(255,255,255,0.18)' }]}>
+              <Ionicons name="camera-outline" size={22} color="#fff" />
+            </View>
+            <View>
+              <Text style={[styles.photoTileTitle, { color: '#fff' }]}>Camera</Text>
+              <Text style={[styles.photoTileText, { color: 'rgba(255,255,255,0.8)' }]}>Take a new photo</Text>
+            </View>
+          </Pressable>
+          <Pressable
+            onPress={() => pickFrom('library')}
+            style={({ pressed }) => [styles.photoTile, pressed && styles.photoTilePressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Library, choose from your photos"
+          >
+            <View style={styles.photoTileIcon}>
+              <Ionicons name="images-outline" size={22} color="#A94F2F" />
+            </View>
+            <View>
+              <Text style={styles.photoTileTitle}>Library</Text>
+              <Text style={styles.photoTileText}>Choose from your photos</Text>
+            </View>
+          </Pressable>
+        </View>
+        <Pressable
+          onPress={() => setPhotoSheet(false)}
+          style={({ pressed }) => [styles.keepEditing, pressed && { opacity: 0.6 }]}
+          accessibilityRole="button"
+        >
+          <Text style={styles.keepEditingText}>Cancel</Text>
+        </Pressable>
+      </Sheet>
     </SafeAreaView>
   );
 }
@@ -851,7 +1025,7 @@ function ChoiceCard({ title, caption, icon, selected, color, tint, onPress }) {
   );
 }
 
-function PublicPreview({ author, photoUrl, rating, matched, reasons, text, dateLabel }) {
+function PublicPreview({ author, photoUrl, rating, matched, reasons, text, photos, dateLabel }) {
   const note = text.trim();
   return (
     <View style={styles.preview} accessible accessibilityLabel={`Preview: ${rating} stars from ${author}. ${note}`}>
@@ -866,6 +1040,13 @@ function PublicPreview({ author, photoUrl, rating, matched, reasons, text, dateL
       <Text style={[styles.previewText, !note && styles.previewTextEmpty]}>
         {note || 'No written note, just the rating.'}
       </Text>
+      {photos.length ? (
+        <View style={styles.previewPhotos}>
+          {photos.map((url) => (
+            <ProductImage key={url} uri={url} style={styles.previewPhoto} />
+          ))}
+        </View>
+      ) : null}
       <View style={styles.previewTags}>
         {matched === true ? <PreviewTag icon="checkmark" label="Matched the description" tone="ok" /> : null}
         {matched === false ? <PreviewTag icon="alert-circle-outline" label="Didn't match the description" tone="off" /> : null}
@@ -1080,12 +1261,66 @@ const styles = StyleSheet.create({
   nudgeText: { fontSize: 11, fontWeight: '500', color: MUTED },
   counter: { marginLeft: 'auto', fontSize: 11, color: MUTED, fontVariant: ['tabular-nums'] },
 
+  photosHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 16 },
+  photosTitle: { fontSize: 13.5, fontWeight: '600', color: INK },
+  photoRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  photoSlot: { width: 84, height: 84, borderRadius: 14 },
+  photoSlotImage: { width: '100%', height: '100%', borderRadius: 14, backgroundColor: LINE },
+  photoRemove: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(34,28,24,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoAdd: {
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#E2C3B3',
+    backgroundColor: CLAY_TINT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  photoAddText: { fontSize: 11.5, fontWeight: '600', color: '#A9502F', fontVariant: ['tabular-nums'] },
+  photosHelp: { fontSize: 11.5, color: MUTED, lineHeight: 17, marginTop: 8 },
+
+  photoTiles: { flexDirection: 'row', gap: 12, marginTop: 16 },
+  photoTile: {
+    flex: 1,
+    gap: 14,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: LINE,
+    backgroundColor: CARD,
+  },
+  photoTileCamera: { backgroundColor: CLAY, borderColor: CLAY },
+  photoTilePressed: { transform: [{ scale: 0.98 }] },
+  photoTileIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#F6E6DE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoTileTitle: { fontSize: 15, fontWeight: '600', color: INK },
+  photoTileText: { fontSize: 12, color: MUTED, marginTop: 1 },
+
   preview: { marginTop: 12, borderRadius: Radius.lg, padding: 14, backgroundColor: '#221C18', gap: 10 },
   previewHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   previewName: { fontSize: 13, fontWeight: '600', color: '#F3ECE3' },
   previewSub: { fontSize: 11, color: '#A99E94', marginTop: 1 },
   previewText: { fontSize: 13, lineHeight: 19, color: '#E9E1D6' },
   previewTextEmpty: { color: '#8C8077', fontStyle: 'italic' },
+  previewPhotos: { flexDirection: 'row', gap: 6 },
+  previewPhoto: { width: 56, height: 56, borderRadius: 10, backgroundColor: '#3A322C' },
   previewTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
   previewTag: {
     flexDirection: 'row',
@@ -1181,6 +1416,8 @@ const styles = StyleSheet.create({
   mineStars: { marginTop: 8 },
   mineText: { fontSize: 13, color: INK, lineHeight: 19, marginTop: 8 },
   mineTextEmpty: { color: MUTED, fontStyle: 'italic' },
+  mineStrip: { flexDirection: 'row', gap: 6, marginTop: 10 },
+  mineStripPhoto: { width: 56, height: 56, borderRadius: 10, backgroundColor: LINE },
   nextCard: {
     marginTop: 14,
     flexDirection: 'row',
