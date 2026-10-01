@@ -261,6 +261,7 @@ const productDoc = (overrides = {}) => ({
   imageUrl: 'https://example.com/shirt.jpg',
   colors: ['brown'],
   sizes: ['M'],
+  section: 'women',
   createdAt: serverTimestamp(),
   // seller1's store. Tests acting as another seller override it.
   storeId: 'store1',
@@ -908,6 +909,76 @@ await test('VALID-6  a LEGACY product with unknown fields is still editable', as
       description: '', imageUrl: 'https://example.com/j.jpg', colors: [], sizes: [],
     })
   );
+});
+
+await test('COND-1  brand, condition and flaws are accepted on a product', async () => {
+  const db = asSeller();
+  await assertSucceeds(
+    setDoc(doc(db, 'products/cond1'), productDoc({
+      type: 'ukay-ukay', brand: 'Levi\'s', condition: 'well-loved', flaws: 'Faint mark on the left cuff.',
+    }))
+  );
+  // Brand on its own, on ready-to-wear, with no condition at all.
+  await assertSucceeds(
+    setDoc(doc(db, 'products/cond2'), productDoc({ type: 'ready-to-wear', brand: 'Uniqlo' }))
+  );
+});
+
+await test('COND-2  an ukay listing from a build without condition is still accepted', async () => {
+  // The app requires a condition, but the APK installed for the UAT survey
+  // predates it. When every build sends one, the rule tightens and this
+  // becomes assertFails (see isNewProductShape in firestore.rules).
+  const oldBuild = productDoc({ type: 'ukay-ukay' });
+  delete oldBuild.section;
+  await assertSucceeds(setDoc(doc(asSeller(), 'products/cond3'), oldBuild));
+});
+
+await test('COND-3  condition is the fixed scale, and brand/flaws are bounded strings', async () => {
+  const db = asSeller();
+  const ukay = (overrides) => productDoc({ type: 'ukay-ukay', condition: 'like-new', ...overrides });
+  await assertFails(setDoc(doc(db, 'products/cond4'), ukay({ condition: 'mint' })));
+  await assertFails(setDoc(doc(db, 'products/cond5'), ukay({ condition: 3 })));
+  await assertFails(setDoc(doc(db, 'products/cond6'), ukay({ brand: 'x'.repeat(41) })));
+  await assertFails(setDoc(doc(db, 'products/cond7'), ukay({ brand: 42 })));
+  await assertFails(setDoc(doc(db, 'products/cond8'), ukay({ flaws: 'x'.repeat(301) })));
+  // Same checks on edit, which validates the merged document.
+  await assertFails(updateDoc(doc(db, 'products/p1'), { condition: 'mint' }));
+  await assertSucceeds(updateDoc(doc(db, 'products/p1'), { condition: 'gently-used', brand: 'Lee' }));
+});
+
+await test('COND-4  an older ukay listing without a condition is still editable', async () => {
+  // Required on create only: the edit screen asks for a condition on the
+  // next save, but the rules must not lock a listing that predates it.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'products/oldUkay'), {
+      name: 'Old Ukay Tee', price: 150, type: 'ukay-ukay', stock: 1, description: '',
+      imageUrl: 'https://example.com/t.jpg', colors: [], sizes: [], storeId: 'store1',
+    });
+  });
+  await assertSucceeds(updateDoc(doc(asSeller(), 'products/oldUkay'), { stock: 0 }));
+});
+
+await test('SECT-1  every section is accepted, and so is a build without one', async () => {
+  // Same as COND-2: required by the app, not yet by the rules, so the
+  // survey APK can still add products. Becomes assertFails on tightening.
+  const noSection = productDoc();
+  delete noSection.section;
+  await assertSucceeds(setDoc(doc(asSeller(), 'products/sect1'), noSection));
+  // Every value on the list is accepted.
+  for (const value of ['women', 'men', 'unisex', 'kids']) {
+    await assertSucceeds(setDoc(doc(asSeller(), `products/sect-${value}`), productDoc({ section: value })));
+  }
+});
+
+await test('SECT-2  section is the fixed list, on create and on edit', async () => {
+  const db = asSeller();
+  await assertFails(setDoc(doc(db, 'products/sect2'), productDoc({ section: 'ladies' })));
+  await assertFails(setDoc(doc(db, 'products/sect3'), productDoc({ section: 1 })));
+  await assertFails(updateDoc(doc(db, 'products/p1'), { section: 'ladies' }));
+  // p1 was listed before Section existed (no section): it stays editable,
+  // and can be given one.
+  await assertSucceeds(updateDoc(doc(db, 'products/p1'), { stock: 4 }));
+  await assertSucceeds(updateDoc(doc(db, 'products/p1'), { section: 'unisex' }));
 });
 
 const supportDoc = (uid, overrides = {}) => ({

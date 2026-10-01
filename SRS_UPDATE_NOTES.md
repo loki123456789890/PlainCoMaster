@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 20):
+- **New use case — Reset Password** (fills the gap listed in section 22):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -1760,7 +1760,197 @@ Admin is the control.
 
 ---
 
-## 20. Still outstanding — SRS-side only, no code changes needed
+## 20. Product brand and condition — NEW
+
+Before this, the only way a store could describe how worn an ukay-ukay
+piece was, or what brand it was, was free text in the description, worded
+differently by every store and impossible to search.
+
+> **Status (1 Oct 2026):** built and tested against the emulator. The
+> security rules must be deployed (`npm run rules:deploy`) before the app
+> can save the new fields in production.
+
+### What changed — suggested wording
+
+> A Store Manager may record a product's **brand** (optional, up to 40
+> characters) when adding or editing it. An ukay-ukay product must also
+> state its **condition**, chosen from a fixed scale: *New with tags*,
+> *Like new*, *Gently used* or *Well loved*. Each grade has a one-line
+> definition that the manager sees when choosing and the shopper sees on
+> the product page. The manager may add a note on any **flaws** (up to
+> 300 characters); a *Well loved* item cannot be saved without one,
+> because that grade is defined as having visible wear or a flaw.
+> Ready-to-wear products have no condition, since they are brand-new.
+>
+> On the product page, the brand appears above the product name, and an
+> ukay-ukay product shows its condition beside the category and in a
+> Condition section with the definition and the seller's flaws note.
+> Searching the Shop, a store page or Manage Products also matches brand.
+
+Why a fixed scale rather than free text: the product page already asks
+reviewers whether the item matched its description (section 9). A
+shared scale gives "matched" a concrete meaning, and "Gently used" means
+the same thing whichever store sells the item.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-B1 | A Store Manager can set, change or clear a product's brand when adding or editing it. |
+| FR-B2 | Searching the Shop, a store page or Manage Products matches the brand as well as the name. |
+| FR-B3 | An ukay-ukay product cannot be added without a condition from the fixed scale. |
+| FR-B4 | A *Well loved* product cannot be saved without a flaws note. |
+| FR-B5 | The product page shows the brand above the name and, for ukay-ukay, the condition, its definition and any flaws note. |
+| FR-B6 | Changing a product to ready-to-wear removes its condition and flaws note when it is saved. |
+
+### Business rules / security (enforced by security rules)
+
+- `condition` must be one of the four scale values; `brand` and `flaws`
+  must be strings within their length limits, on create and on edit.
+- Requiring a condition on new ukay-ukay products is enforced by the
+  app (Add Product will not save without one), not yet by the security
+  rules: an APK built before this change is still installed for the UAT
+  survey and does not send the field, and a rule requiring it would stop
+  that build adding products. Once every installed build sends it, the
+  rule is tightened to require it (marked in firestore.rules).
+- Ukay-ukay products created before this change have no condition; they
+  can still be edited, and the Edit Product screen asks for a condition
+  before they can be saved again.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `products` | `brand` (string ≤ 40, optional) | Left off when blank. |
+| `products` | `condition` (string, one of `new-with-tags`, `like-new`, `gently-used`, `well-loved`) | Ukay-ukay only; required by the app on new ukay-ukay products. |
+| `products` | `flaws` (string ≤ 300, optional) | Ukay-ukay only; required in the app for `well-loved`. |
+
+### Limitations
+
+- The Shop has no filter by brand or condition yet; brand is matched by
+  search only.
+- The product cards in the Shop grid do not show brand or condition;
+  they appear on the product page.
+
+### Verification
+
+Rules test suite 137 → **141**: brand, condition and flaws are accepted;
+an ukay-ukay product from a build without condition is still accepted
+(until the rule is tightened, above); an unknown
+condition, a non-string brand and over-length brand or flaws are refused
+on create and on edit; an older ukay-ukay product without a condition
+can still be edited.
+
+---
+
+## 21. Product Section (who it's for) and the Shop's Section filter — NEW
+
+Before this, a shopper looking for women's or men's clothing had to
+scroll the whole catalogue: products recorded nothing about who they
+were for.
+
+> **Status (1 Oct 2026):** built and tested against the emulator. The
+> security rules must be deployed (`npm run rules:deploy`) before the app
+> can save products in production — every new product now carries this
+> field, so an old rule set would refuse them. The deploy does not affect
+> the APK used for the UAT survey: it can still add products, without a
+> Section.
+
+### What changed — suggested wording
+
+> Every product records who it is for, chosen by the Store Manager from
+> four options: *Women*, *Men*, *Unisex* or *Kids*. It is required when
+> adding a product of either type. The product page shows it beside the
+> category (for example "Women's").
+>
+> The Shop has a Section filter under the Ready-to-Wear / Ukay-Ukay tabs:
+> *All*, *Women*, *Men* and *Kids*. A *Unisex* product appears under both
+> Women and Men. The Section filter, the category tabs and the search box
+> combine: a shopper can view, for example, women's ukay-ukay items
+> matching "denim".
+
+Why it is a filter and not separate tabs or sections: PlainCo presents
+one catalogue (see PRODUCT.md, "One catalog, both worlds"). Splitting it
+into separate women's and men's areas would fragment it; a filter narrows
+the same catalogue instead.
+
+On data privacy: this describes the **product**, not the customer.
+Section 12's decision not to collect customers' gender is unchanged.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-D1 | The Store Manager must choose a Section (Women, Men, Unisex or Kids) when adding a product, and can change it when editing. |
+| FR-D2 | The product page shows the product's Section beside its category. |
+| FR-D3 | The Shop offers a Section filter (All, Women, Men, Kids). Unisex products appear under Women and under Men. |
+| FR-D4 | The Section filter combines with the category tabs and the search box; "Clear search & filters" resets all three. |
+| FR-D5 | A product listed before Section existed appears under All only, and must be given a Section the next time it is saved in Edit Product. |
+
+### Use case updates
+
+**Add Product** (Store Manager): add, after the brand:
+
+> The Store Manager selects who the product is for: Women, Men, Unisex or
+> Kids.
+>
+> *Alternate flow — no Section selected:* the system highlights the
+> Section field with "Pick who it's for." and does not save the product.
+
+**Edit Product** (Store Manager): add:
+
+> *Alternate flow — product created before Section existed:* the product
+> opens with no Section selected and the note "Needed to save"; the Store
+> Manager must select one before any change can be saved.
+
+**Browse Products** (Customer): add:
+
+> The customer may select a Section (All, Women, Men or Kids) to narrow
+> the products shown. The selection combines with the category tab and
+> the search text.
+
+### Business rules / security (enforced by security rules)
+
+- `section` must be one of `women`, `men`, `unisex` or `kids`, on create
+  and on edit.
+- Requiring a Section on every new product is enforced by the app, not
+  yet by the security rules, for the same reason as condition (section
+  20): the UAT survey APK predates the field. The rule is tightened once
+  every installed build sends it.
+- Products created before this change have none; they can still be
+  edited.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `products` | `section` (string, one of `women`, `men`, `unisex`, `kids`) | Required by the app on new products. |
+
+### Screens — module list (section 7)
+
+- **Add Product / Edit Product** (Store Manager): new Section field.
+- **Shop** (Customer): new Section filter under the category tabs.
+- **Product Details** (Customer): Section shown beside the category.
+
+### Limitations
+
+- The Section filter is on the Shop only, not on a store's own page or
+  Home.
+- Existing products show only under All until a Store Manager edits them
+  and picks a Section. (`scripts/seed-catalog.mjs` fills it in for the
+  products it seeded.)
+
+### Verification
+
+Rules test suite 141 → **143**: each of the four values is accepted, and
+so is a product from a build without a Section (until the rule is
+tightened); an unknown value is
+refused on create and on edit; a product listed before Section existed
+can still be edited and given one.
+
+---
+
+## 22. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all

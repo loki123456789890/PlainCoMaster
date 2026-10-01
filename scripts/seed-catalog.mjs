@@ -27,7 +27,9 @@
  * and "stock levels are accurate", for an app behaving exactly right.
  *
  * Re-running is safe: products are matched by name, and an existing one is
- * left alone apart from its stock.
+ * left alone apart from its stock, and apart from filling in a section,
+ * condition or flaws note it was seeded before those fields existed. A
+ * value a manager has already set is never overwritten.
  */
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
@@ -88,7 +90,10 @@ const RTW = 'ready-to-wear';
 // Every image was opened and checked before being written here; each one
 // is a photograph of the garment it is named after. Colours are drawn
 // from COLOR_PALETTE in constants/productOptions.js, and sizes from
-// SIZE_OPTIONS, so the filters have real values to work with.
+// SIZE_OPTIONS, so the filters have real values to work with. Every piece
+// says who it's for (section), and every ukay piece its condition, as Add
+// Product requires of a new listing; each condition is the grade its own
+// description already describes.
 const CATALOG = [
   {
     name: 'Essential White Tee',
@@ -98,6 +103,7 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=900&q=80',
     colors: ['White'],
     sizes: ['S', 'M', 'L', 'XL'],
+    section: 'unisex',
   },
   {
     name: 'Plain Cotton Tee',
@@ -107,6 +113,7 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1562157873-818bc0726f68?w=900&q=80',
     colors: ['Red', 'Black', 'White', 'Navy', 'Yellow'],
     sizes: ['S', 'M', 'L', 'XL', 'XXL'],
+    section: 'unisex',
   },
   {
     name: 'Satin Jogger Pants',
@@ -116,6 +123,7 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?w=900&q=80',
     colors: ['Pink', 'Beige'],
     sizes: ['S', 'M', 'L'],
+    section: 'women',
   },
   {
     name: 'Rust Bomber Jacket',
@@ -125,6 +133,7 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1591047139829-d91aecb6caea?w=900&q=80',
     colors: ['Brown'],
     sizes: ['M', 'L', 'XL'],
+    section: 'men',
   },
   {
     name: 'Graphic Print Tee',
@@ -134,6 +143,8 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1576566588028-4147f3842f27?w=900&q=80',
     colors: ['Beige'],
     sizes: ['M', 'L'],
+    condition: 'gently-used',
+    section: 'unisex',
   },
   {
     name: 'Knit Fringe Poncho',
@@ -143,6 +154,9 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1434389677669-e08b4cac3105?w=900&q=80',
     colors: ['Beige', 'White'],
     sizes: ['M', 'L'],
+    condition: 'well-loved',
+    flaws: 'One small pull on the back hem, not visible when worn.',
+    section: 'women',
   },
   {
     name: 'Leather Biker Jacket',
@@ -152,6 +166,8 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1551028719-00167b16eac5?w=900&q=80',
     colors: ['Black'],
     sizes: ['S', 'M', 'L'],
+    condition: 'gently-used',
+    section: 'men',
   },
   {
     name: 'Straight-Cut Jeans',
@@ -161,8 +177,15 @@ const CATALOG = [
     imageUrl: 'https://images.unsplash.com/photo-1542272604-787c3835535d?w=900&q=80',
     colors: ['Blue', 'Navy', 'Black'],
     sizes: ['S', 'M', 'L', 'XL'],
+    condition: 'gently-used',
+    section: 'unisex',
   },
 ];
+
+// Fields added to the catalogue after it was first seeded. An existing
+// product missing one of these gets the catalogue's value; one that has
+// it keeps its own.
+const FILLABLE = ['section', 'condition', 'flaws'];
 
 console.log(`\n${APPLY ? 'APPLYING' : 'DRY RUN — nothing will be written'}\n`);
 
@@ -199,12 +222,28 @@ for (const p of existing) {
 const byName = new Set(existing.map((p) => (p.name || '').trim().toLowerCase()));
 const toAdd = CATALOG.filter((p) => !byName.has(p.name.toLowerCase()));
 const lowStock = existing.filter((p) => Number(p.stock) < MIN_STOCK);
+const catalogByName = new Map(CATALOG.map((p) => [p.name.toLowerCase(), p]));
+const toFill = existing
+  .map((p) => {
+    const entry = catalogByName.get((p.name || '').trim().toLowerCase());
+    if (!entry) return null;
+    const fields = {};
+    for (const key of FILLABLE) {
+      if (entry[key] && !p[key]) fields[key] = entry[key];
+    }
+    return Object.keys(fields).length ? { product: p, fields } : null;
+  })
+  .filter(Boolean);
 
 console.log(`\nWould add ${toAdd.length} product(s):`);
 for (const p of toAdd) {
   console.log(`  ${p.type === UKAY ? 'Ukay-Ukay    ' : 'Ready-to-Wear'}  P${p.price}  ${p.name}`);
 }
 console.log(`\nWould raise stock to ${MIN_STOCK} on ${lowStock.length} existing product(s).`);
+console.log(`\nWould fill in missing fields on ${toFill.length} existing product(s):`);
+for (const { product, fields } of toFill) {
+  console.log(`  ${product.name}: ${Object.entries(fields).map(([k, v]) => `${k} = ${v}`).join(', ')}`);
+}
 
 if (!APPLY) {
   console.log('\nRe-run with --apply to write.\n');
@@ -220,6 +259,11 @@ for (const p of toAdd) {
     ...p, stock: MIN_STOCK, storeId: STORE_ID, createdAt: serverTimestamp(),
   });
   console.log(`  added   ${p.name}`);
+}
+
+for (const { product, fields } of toFill) {
+  await updateDoc(doc(db, 'products', product.id), fields);
+  console.log(`  filled  ${product.name}`);
 }
 
 for (const p of lowStock) {

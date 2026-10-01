@@ -170,6 +170,8 @@ export const ProductProvider = ({ children }) => {
         imageUrl: productData.imageUrl,
         colors: productData.colors || [],
         sizes: productData.sizes || [],
+        // Always set: Add Product will not save without one.
+        section: productData.section,
         createdAt: serverTimestamp(),
         storeId,
       };
@@ -184,6 +186,13 @@ export const ProductProvider = ({ children }) => {
       if (productData.measurementType) {
         docData.measurementType = productData.measurementType;
       }
+      // Optional too, and omitted the same way when blank. condition and
+      // flaws are only ever sent for ukay-ukay (the caller drops them for
+      // ready-to-wear), and Add Product will not save an ukay listing
+      // without a condition.
+      if (productData.brand) docData.brand = productData.brand;
+      if (productData.condition) docData.condition = productData.condition;
+      if (productData.flaws) docData.flaws = productData.flaws;
       const docRef = await addDoc(collection(db, 'products'), docData);
       // Not awaited: the product exists at this point, so the caller's
       // success path shouldn't wait on (or fail with) the log write.

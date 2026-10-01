@@ -216,7 +216,13 @@ export default function AdminProductsScreen({ navigation, route }) {
   // narrows it instead of silently dropping back to the whole catalog.
   const shown = products
     .filter(activeFilter.test)
-    .filter((p) => !q || (p.name || '').toLowerCase().includes(q) || (p.type || '').toLowerCase().includes(q));
+    .filter(
+      (p) =>
+        !q ||
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.brand || '').toLowerCase().includes(q) ||
+        (p.type || '').toLowerCase().includes(q)
+    );
 
   const openActions = (product) => {
     Haptics.selectionAsync();

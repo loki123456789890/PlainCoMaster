@@ -520,7 +520,18 @@ service cloud.firestore {
         data.get('imageUrl', '') is string &&
         data.get('imageUrl', '').size() <= 2000 &&
         data.get('colors', []) is list &&
-        data.get('sizes', []) is list;
+        data.get('sizes', []) is list &&
+        // Optional, and absent on every product written before they
+        // existed. condition is one of the fixed scale in
+        // constants/productOptions.js CONDITION_OPTIONS, never free text,
+        // so "Gently used" means the same thing from every store.
+        data.get('brand', '') is string &&
+        data.get('brand', '').size() <= 40 &&
+        data.get('condition', 'like-new') in ['new-with-tags', 'like-new', 'gently-used', 'well-loved'] &&
+        data.get('flaws', '') is string &&
+        data.get('flaws', '').size() <= 300 &&
+        // Who it's for, from constants/productOptions.js SECTION_OPTIONS.
+        data.get('section', 'unisex') in ['women', 'men', 'unisex', 'kids'];
     }
     // Create-only: the exact key set AdminAddProductScreen writes, with a
     // non-empty name and a server-set createdAt. measurements and
@@ -529,11 +540,23 @@ service cloud.firestore {
     //
     // storeId is required: a product with no store has no manager, so no
     // one could ever edit, restock or remove it (see managesStore).
+    //
+    // brand, section, condition and flaws are allowed but NOT required
+    // here. The app requires section on every new product and condition on
+    // every new ukay-ukay one (Add Product will not save without them), but
+    // an APK built before they existed is still installed for the UAT
+    // survey, and it sends neither. Requiring them here would make Add
+    // Product fail on that build mid-survey. Their values are still checked
+    // whenever they are sent (productFieldsAreWellTyped).
+    //
+    // TO TIGHTEN once every installed build sends them: add 'section' to
+    // the hasAll() list below, and require 'condition' when type is
+    // 'ukay-ukay'. scripts/test-rules.mjs SECT-1 and COND-2 say what to flip.
     function isNewProductShape() {
       return request.resource.data.keys().hasOnly(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',
            'colors', 'sizes', 'createdAt', 'measurements', 'measurementType',
-           'storeId']
+           'storeId', 'brand', 'condition', 'flaws', 'section']
         ) &&
         request.resource.data.keys().hasAll(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',

@@ -7,7 +7,10 @@
 // header floats over the photo and turns solid, with the product's name,
 // once the photo has scrolled away. Adding to the cart flies the photo into
 // the cart button and brings up a short "Added to cart" panel instead of a
-// dialog. Everything shown is the product's live data.
+// dialog. Everything shown is the product's live data. Beside the category
+// sit who it's for (Women's, Men's, Unisex, Kids') and, for an ukay-ukay
+// piece, its condition, which also gets a Condition section with the
+// seller's note on any flaws.
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -47,7 +50,13 @@ import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
 import { useStores, useStoreRatings, storeReviewCountLabel } from '../context/StoreContext';
 import { auth } from '../firebaseConfig';
-import { COLOR_PALETTE, DEFAULT_COLORS, DEFAULT_SIZES } from '../constants/productOptions';
+import {
+  COLOR_PALETTE,
+  DEFAULT_COLORS,
+  DEFAULT_SIZES,
+  conditionOption,
+  sectionOption,
+} from '../constants/productOptions';
 import { Colors } from '../constants/theme';
 import SkeletonBlock from '../components/ui/Skeleton';
 import ProductImage from '../components/ui/ProductImage';
@@ -235,6 +244,12 @@ export default function ProductScreen({ navigation, route }) {
     : `${parsedStockValue} in stock`;
 
   const hasDescription = Boolean(product?.description && product.description.trim().length > 0);
+  const brand = product?.brand?.trim() || '';
+  // Products listed before Section existed have none and show none.
+  const section = sectionOption(product?.section);
+  // Ukay-ukay only; older ukay listings have none and simply show none.
+  const condition = isUkay ? conditionOption(product?.condition) : null;
+  const flaws = condition ? product?.flaws?.trim() || '' : '';
 
   // The size guide only earns its link when the store recorded something.
   const hasMeasurements = Boolean(
@@ -583,17 +598,34 @@ export default function ProductScreen({ navigation, route }) {
         </View>
 
         <View style={styles.sheet}>
-          <Reveal delay={60}>
+          <Reveal delay={60} style={styles.chips}>
             <View style={[styles.chip, isUkay && styles.chipUkay]}>
               <TypeIcon ukay={isUkay} color={isUkay ? MOSS : CLAY} />
               <Text style={[styles.chipText, isUkay && { color: MOSS }]}>{isUkay ? 'Ukay-Ukay' : 'Ready-to-Wear'}</Text>
             </View>
+            {section ? (
+              <View style={styles.sectionChip}>
+                <Text style={styles.sectionChipText}>{section.tag}</Text>
+              </View>
+            ) : null}
+            {condition ? (
+              <View style={styles.conditionChip} accessibilityLabel={`Condition: ${condition.label}`}>
+                <Text style={styles.conditionChipText}>{condition.label}</Text>
+              </View>
+            ) : null}
           </Reveal>
 
           <Reveal delay={110} style={styles.titleRow}>
-            <Text style={styles.name} accessibilityRole="header">
-              {productName}
-            </Text>
+            <View style={{ flex: 1 }}>
+              {brand ? (
+                <Text style={styles.brand} numberOfLines={1}>
+                  {brand}
+                </Text>
+              ) : null}
+              <Text style={styles.name} accessibilityRole="header">
+                {productName}
+              </Text>
+            </View>
             <Text style={styles.bigPrice}>₱{unitPrice.toFixed(2)}</Text>
           </Reveal>
 
@@ -768,6 +800,25 @@ export default function ProductScreen({ navigation, route }) {
               </Pressable>
             </View>
           </Reveal>
+
+          {condition ? (
+            <Reveal delay={380} style={styles.block}>
+              <View style={styles.blockHead}>
+                <Text style={styles.blockTitle}>Condition</Text>
+                <Text style={[styles.blockMeta, styles.conditionMeta]}>{condition.label}</Text>
+              </View>
+              <Text style={styles.desc}>{condition.detail}</Text>
+              {flaws ? (
+                <View style={styles.flaws}>
+                  <Ionicons name="information-circle-outline" size={16} color="#6B5A2E" />
+                  <Text style={styles.flawsText}>
+                    <Text style={{ fontWeight: '600' }}>Flaws noted by the seller: </Text>
+                    {flaws}
+                  </Text>
+                </View>
+              ) : null}
+            </Reveal>
+          ) : null}
 
           {hasDescription ? (
             <Reveal delay={400} style={styles.block}>
@@ -1087,8 +1138,20 @@ const styles = StyleSheet.create({
   },
   chipUkay: { backgroundColor: '#E8ECE3' },
   chipText: { fontSize: 11, fontWeight: '600', letterSpacing: 0.66, textTransform: 'uppercase', color: CLAY },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+  conditionChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#C9D3BE',
+  },
+  conditionChipText: { fontSize: 11.5, fontWeight: '600', color: '#37412F' },
+  sectionChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: LINE },
+  sectionChipText: { fontSize: 11.5, fontWeight: '600', color: INK },
+  brand: { fontSize: 12.5, fontWeight: '600', letterSpacing: 0.3, color: MUTED, marginBottom: 2 },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginTop: 10, marginBottom: 4 },
-  name: { flex: 1, fontSize: 24, fontWeight: '600', letterSpacing: -0.5, lineHeight: 29, color: INK },
+  name: { fontSize: 24, fontWeight: '600', letterSpacing: -0.5, lineHeight: 29, color: INK },
   bigPrice: { fontSize: 24, fontWeight: '600', color: PRICE, lineHeight: 29 },
   ratingLine: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 18 },
   ratingValue: { fontSize: 12.5, fontWeight: '600', color: INK },
@@ -1168,6 +1231,17 @@ const styles = StyleSheet.create({
   qtyValue: { minWidth: 34, textAlign: 'center', fontSize: 15, fontWeight: '600', color: INK },
 
   desc: { fontSize: 13.5, lineHeight: 22, color: '#453E38' },
+  conditionMeta: { fontWeight: '600', color: '#37412F' },
+  flaws: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#F6EFE3',
+  },
+  flawsText: { flex: 1, fontSize: 12.5, lineHeight: 19, color: '#6B5A2E' },
 
   reviewsError: { fontSize: 13, color: MUTED, lineHeight: 19 },
   summary: { padding: 16, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: CARD_LINE, gap: 12, marginBottom: 4 },

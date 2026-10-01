@@ -2,7 +2,8 @@
 //
 // The catalogue, in the approved home/shop preview's design: a header that
 // stays put (title and count, search, category tabs with a sliding
-// indicator) over a two-column grid, and the tab bar underneath.
+// indicator, and a row of Section chips) over a two-column grid, and the
+// tab bar underneath.
 //
 // Opened with a storeId (from "Shop by store" or a product's "Sold by"),
 // the route shows that store's own page instead — see StorePage.js.
@@ -46,6 +47,7 @@ import TabBar from '../components/shop/TabBar';
 import StorePage from './StorePage';
 import Reveal from '../components/shop/Reveal';
 import { EASE_OUT_QUINT } from '../constants/motion';
+import { SECTION_FILTERS, matchesSection } from '../constants/productOptions';
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -115,6 +117,32 @@ function FilterTabs({ active, onSelect }) {
   );
 }
 
+// Who it's for, under the category tabs. Quieter than the tabs on
+// purpose — it narrows the category rather than competing with it — and
+// combines with it and with search.
+function SectionChips({ active, onSelect }) {
+  return (
+    <View style={styles.sections} accessibilityRole="radiogroup" accessibilityLabel="Section">
+      {SECTION_FILTERS.map((f) => {
+        const on = f.key === active;
+        return (
+          <Pressable
+            key={f.key}
+            onPress={() => onSelect(f.key)}
+            style={({ pressed }) => [styles.section, on && styles.sectionOn, pressed && { transform: [{ scale: 0.95 }] }]}
+            hitSlop={{ top: 6, bottom: 6 }}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: on }}
+            accessibilityLabel={f.key === 'all' ? 'Everyone' : f.label}
+          >
+            <Text style={[styles.sectionText, on && styles.sectionTextOn]}>{f.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 // Loading placeholder shaped like the grid, so nothing shifts when it fills.
 function GridSkeleton() {
   return (
@@ -161,6 +189,7 @@ function Catalogue({ navigation, route }) {
   const { isFavorite, toggleFavorite } = useFavorites();
   const { stores, getStore } = useStores();
   const [activeFilter, setActiveFilter] = useState(route.params?.filterType || 'all');
+  const [activeSection, setActiveSection] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -210,9 +239,16 @@ function Catalogue({ navigation, route }) {
     setActiveFilter(key);
   };
 
+  const handleSelectSection = (key) => {
+    if (key === activeSection) return;
+    Haptics.selectionAsync();
+    setActiveSection(key);
+  };
+
   const clearAll = () => {
     setSearchQuery('');
     setActiveFilter('all');
+    setActiveSection('all');
   };
 
   // Items per store, for "Shop by store". A store with nothing listed is
@@ -229,11 +265,19 @@ function Catalogue({ navigation, route }) {
   // Seller ratings, side by side in the store row.
   const ratings = useStoreRatings(browsableStores.map((s) => s.id));
 
-  // Category and search compose (AND): typing never resets the tab.
+  // Category, Section and search compose (AND): none of them resets the
+  // others.
   const query = searchQuery.trim().toLowerCase();
   const filteredProducts = products
     .filter((p) => activeFilter === 'all' || p.type === activeFilter)
-    .filter((p) => !query || p.name?.toLowerCase().includes(query) || (TYPE_WORDS[p.type] || '').includes(query));
+    .filter((p) => matchesSection(p, activeSection))
+    .filter(
+      (p) =>
+        !query ||
+        p.name?.toLowerCase().includes(query) ||
+        p.brand?.toLowerCase().includes(query) ||
+        (TYPE_WORDS[p.type] || '').includes(query)
+    );
 
   const count = filteredProducts.length;
 
@@ -350,13 +394,21 @@ function Catalogue({ navigation, route }) {
     </>
   );
 
+  const filtering = activeFilter !== 'all' || activeSection !== 'all';
+  // "Women · Ukay-Ukay", naming only the filters actually set.
+  const scope = [
+    activeSection !== 'all' ? SECTION_FILTERS.find((f) => f.key === activeSection).label : null,
+    activeFilter !== 'all' ? FILTER_LABEL[activeFilter] : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const emptyTitle = query
     ? 'No products found'
-    : activeFilter === 'all'
+    : !filtering
     ? 'No products available'
     : 'No products in this category yet';
   const emptyMessage = query
-    ? `Nothing matches "${searchQuery.trim()}"${activeFilter !== 'all' ? ` in ${FILTER_LABEL[activeFilter]}` : ''}. Try a different keyword or category.`
+    ? `Nothing matches "${searchQuery.trim()}"${scope ? ` in ${scope}` : ''}. Try a different keyword or category.`
     : null;
 
   return (
@@ -382,7 +434,7 @@ function Catalogue({ navigation, route }) {
             <TextInput
               ref={searchRef}
               style={styles.searchInput}
-              placeholder="Search by name or category"
+              placeholder="Search by name, brand or category"
               placeholderTextColor="#8E857B"
               value={searchQuery}
               onChangeText={setSearchQuery}
@@ -410,6 +462,7 @@ function Catalogue({ navigation, route }) {
         </View>
 
         <FilterTabs active={activeFilter} onSelect={handleSelectFilter} />
+        <SectionChips active={activeSection} onSelect={handleSelectSection} />
       </View>
 
       {loading ? (
@@ -448,7 +501,7 @@ function Catalogue({ navigation, route }) {
             <NoResults
               title={emptyTitle}
               message={emptyMessage}
-              onClear={query || activeFilter !== 'all' ? clearAll : null}
+              onClear={query || filtering ? clearAll : null}
             />
           }
         />
@@ -546,6 +599,20 @@ const styles = StyleSheet.create({
   tab: { flexGrow: 1, height: 38, paddingHorizontal: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   tabText: { fontSize: 13, fontWeight: '500', color: Colors.light.icon },
   tabTextOn: { fontWeight: '600', color: Colors.light.text },
+
+  sections: { flexDirection: 'row', gap: 6, marginTop: 10 },
+  section: {
+    height: 30,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionOn: { backgroundColor: Colors.light.text, borderColor: Colors.light.text },
+  sectionText: { fontSize: 12.5, fontWeight: '500', color: Colors.light.icon },
+  sectionTextOn: { fontWeight: '600', color: Colors.light.background },
 
   grid: { paddingHorizontal: 20, paddingTop: 6, paddingBottom: 24 },
   row: { gap: 12 },

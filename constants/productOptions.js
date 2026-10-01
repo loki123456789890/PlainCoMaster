@@ -16,6 +16,62 @@ export const COLOR_PALETTE = [
 
 export const SIZE_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL'];
 
+// Who a piece is for. Required on every new product, of either type, so the
+// Shop's Section filter has something to work with; products listed before
+// it existed have none and appear under "All" only. The keys are also
+// listed in firestore.rules (productFieldsAreWellTyped); keep the two in
+// step.
+//
+// `label` is the picker and filter wording; `tag` is the product page's.
+export const SECTION_OPTIONS = [
+  { key: 'women', label: 'Women', tag: "Women's" },
+  { key: 'men', label: 'Men', tag: "Men's" },
+  { key: 'unisex', label: 'Unisex', tag: 'Unisex' },
+  { key: 'kids', label: 'Kids', tag: "Kids'" },
+];
+
+export const sectionOption = (key) => SECTION_OPTIONS.find((option) => option.key === key) || null;
+
+// The Shop's filter. Unisex isn't a filter of its own: a unisex piece is
+// one a woman or a man could buy, so it appears under both.
+export const SECTION_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'women', label: 'Women' },
+  { key: 'men', label: 'Men' },
+  { key: 'kids', label: 'Kids' },
+];
+
+export const matchesSection = (product, filterKey) => {
+  if (filterKey === 'all') return true;
+  if (product.section === filterKey) return true;
+  return product.section === 'unisex' && (filterKey === 'women' || filterKey === 'men');
+};
+
+// How worn an ukay-ukay piece is. Ready-to-wear has no condition: the type
+// already says it's brand-new. One fixed scale rather than free text, so
+// "Gently used" means the same thing from every store, and a shopper can
+// hold a review's "did it match the description?" against it. The keys
+// are also listed in firestore.rules (productFieldsAreWellTyped); keep the
+// two in step.
+//
+// `detail` is shown to shoppers on the product page and to the manager
+// when picking one, so it's worded for both.
+export const CONDITION_OPTIONS = [
+  { key: 'new-with-tags', label: 'New with tags', detail: 'Never worn. The original tags are still on.' },
+  { key: 'like-new', label: 'Like new', detail: 'Worn once or twice. No signs of wear.' },
+  { key: 'gently-used', label: 'Gently used', detail: 'Light signs of wear, nothing that stands out.' },
+  { key: 'well-loved', label: 'Well loved', detail: 'Visible wear or a small flaw, described by the seller.' },
+];
+
+export const conditionOption = (key) => CONDITION_OPTIONS.find((option) => option.key === key) || null;
+
+// "Well loved" is defined as having a flaw, so it can't be saved without
+// saying what the flaw is.
+export const CONDITION_NEEDS_FLAWS = 'well-loved';
+
+export const BRAND_MAX = 40;
+export const FLAWS_MAX = 300;
+
 // Fallback only, for products saved before per-product colors/sizes
 // existed — not used by the admin forms themselves, which require a real
 // selection on every save.

@@ -31,6 +31,11 @@ import {
   MEASUREMENT_TYPE_OPTIONS,
   emptyMeasurementEntry,
   buildMeasurementsPayload,
+  conditionOption,
+  sectionOption,
+  CONDITION_NEEDS_FLAWS,
+  BRAND_MAX,
+  FLAWS_MAX,
 } from '../../constants/productOptions';
 import { Colors } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
@@ -39,6 +44,8 @@ import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Sheet from '../../components/shop/Sheet';
 import DeleteProductPanel from '../../components/admin/DeleteProductPanel';
+import ConditionPicker from '../../components/admin/ConditionPicker';
+import SectionPicker from '../../components/admin/SectionPicker';
 import { TopBar, OfflineNotice, UndoToast, useAutoClear } from '../../components/shop/TabScreen';
 
 const INK = Colors.light.text;
@@ -60,6 +67,16 @@ const TYPE_OPTIONS = [
   { key: 'ready-to-wear', label: 'Ready-to-Wear', color: CLAY, bg: '#FDF6F2' },
 ];
 const typeLabel = (type) => (type === 'ukay-ukay' ? 'Ukay-Ukay' : 'Ready-to-Wear');
+const conditionLabel = (key) => conditionOption(key)?.label || 'Not set';
+const sectionLabel = (key) => sectionOption(key)?.label || '—';
+
+const NO_ERRORS = { name: '', section: '', condition: '', flaws: '', price: '', stock: '', imageUrl: '', colors: '', sizes: '' };
+
+// What a save would write for condition and flaws. Both belong to
+// ukay-ukay only, so switching the type to ready-to-wear removes them even
+// though the form keeps them (a switch back brings them back).
+const savedCondition = (form) => (form.type === 'ukay-ukay' ? form.condition : null);
+const savedFlaws = (form) => (form.type === 'ukay-ukay' ? form.flaws.trim() : '');
 
 const peso = (value) => `₱${(Number(value) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 
@@ -108,8 +125,16 @@ const hasMeasurementValues = (measurements) =>
 // and as the snapshot every change is judged (and undone) against.
 const formFromProduct = (product) => ({
   name: product.name || '',
+  brand: product.brand || '',
+  // Like condition, products listed before Section existed load with none,
+  // and validate() asks for one before they can be saved again.
+  section: product.section || null,
   price: product.price != null ? String(product.price) : '',
   type: product.type || 'ready-to-wear',
+  // Ukay products listed before condition existed load with none, and
+  // validate() asks for one before they can be saved again.
+  condition: product.condition || null,
+  flaws: product.flaws || '',
   stock: product.stock != null ? String(product.stock) : '',
   description: product.description || '',
   // Products are stored with imageUrl (see ProductContext.js).
@@ -128,8 +153,20 @@ function diffForm(form, original) {
   if (form.imageUrl !== original.imageUrl) changes.push({ key: 'imageUrl', label: 'Photo', edited: true });
   if (form.name !== original.name)
     changes.push({ key: 'name', label: 'Name', from: original.name || '—', to: form.name || '—' });
+  if (form.brand.trim() !== original.brand.trim())
+    changes.push({ key: 'brand', label: 'Brand', from: original.brand || '—', to: form.brand.trim() || '—' });
+  if (form.section !== original.section)
+    changes.push({ key: 'section', label: 'Section', from: sectionLabel(original.section), to: sectionLabel(form.section) });
   if (form.type !== original.type)
     changes.push({ key: 'type', label: 'Type', from: typeLabel(original.type), to: typeLabel(form.type) });
+  if (savedCondition(form) !== savedCondition(original))
+    changes.push({
+      key: 'condition',
+      label: 'Condition',
+      from: savedCondition(original) ? conditionLabel(original.condition) : '—',
+      to: savedCondition(form) ? conditionLabel(form.condition) : '—',
+    });
+  if (savedFlaws(form) !== savedFlaws(original)) changes.push({ key: 'flaws', label: 'Flaws', edited: true });
   if (form.description !== original.description)
     changes.push({ key: 'description', label: 'Description', edited: true });
   if (form.price !== original.price)
@@ -237,7 +274,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
 
   const [measurementsExpanded, setMeasurementsExpanded] = useState(false);
   const [pendingMeasurementType, setPendingMeasurementType] = useState(null);
-  const [errors, setErrors] = useState({ name: '', price: '', stock: '', imageUrl: '', colors: '', sizes: '' });
+  const [errors, setErrors] = useState(NO_ERRORS);
   // Separate from `deleting` — sharing one flag meant deleting flipped the
   // Save button to "Saving..." mid-delete.
   const [saving, setSaving] = useState(false);
@@ -312,7 +349,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
   const undoAll = () => {
     Haptics.selectionAsync();
     setFormData(original);
-    setErrors({ name: '', price: '', stock: '', imageUrl: '', colors: '', sizes: '' });
+    setErrors(NO_ERRORS);
   };
 
   // Writes the download URL into the same imageUrl field a pasted link
@@ -343,6 +380,14 @@ export default function AdminEditProductScreen({ navigation, route }) {
     if (formData.type === type) return;
     Haptics.selectionAsync();
     setFormData((prev) => ({ ...prev, type }));
+    clearFieldError('condition');
+    clearFieldError('flaws');
+  };
+
+  const handleConditionChange = (condition) => {
+    setFormData((prev) => ({ ...prev, condition }));
+    clearFieldError('condition');
+    if (condition !== CONDITION_NEEDS_FLAWS) clearFieldError('flaws');
   };
 
   const stepStock = (delta) => {
@@ -463,10 +508,16 @@ export default function AdminEditProductScreen({ navigation, route }) {
 
   // Validates every field at once and surfaces every error inline.
   const validate = () => {
-    const nextErrors = { name: '', price: '', stock: '', imageUrl: '', colors: '', sizes: '' };
+    const nextErrors = { ...NO_ERRORS };
     if (!formData.imageUrl.trim()) nextErrors.imageUrl = 'Add a photo or an image link.';
     else if (imageFailed) nextErrors.imageUrl = "This image couldn't load. Try a different one.";
     if (!formData.name.trim()) nextErrors.name = 'Give the product a name.';
+    if (!formData.section) nextErrors.section = "Pick who it's for.";
+    if (formData.type === 'ukay-ukay') {
+      if (!formData.condition) nextErrors.condition = "Pick the condition it's in.";
+      else if (formData.condition === CONDITION_NEEDS_FLAWS && !formData.flaws.trim())
+        nextErrors.flaws = 'Say what the wear or flaw is, so shoppers know before buying.';
+    }
     if (!formData.price.trim()) {
       nextErrors.price = 'Enter a price.';
     } else {
@@ -513,6 +564,12 @@ export default function AdminEditProductScreen({ navigation, route }) {
       imageUrl: formData.imageUrl,
       colors: formData.colors,
       sizes: formData.sizes,
+      // Blank brand, and condition/flaws on anything that isn't ukay-ukay,
+      // are removed rather than saved empty — same as Add leaving them off.
+      brand: formData.brand.trim() || deleteField(),
+      section: formData.section,
+      condition: savedCondition(formData) || deleteField(),
+      flaws: savedFlaws(formData) || deleteField(),
       // updateDoc (unlike addDoc) needs an explicit deleteField() to remove
       // a field the product had — omitting the key would leave a stale
       // `measurements` map (or `measurementType`) in place.
@@ -653,7 +710,18 @@ export default function AdminEditProductScreen({ navigation, route }) {
             </View>
           ) : null}
 
-          <Card title="Details" edited={changed('name') || changed('type') || changed('description')}>
+          <Card
+            title="Details"
+            edited={
+              changed('name') ||
+              changed('brand') ||
+              changed('section') ||
+              changed('type') ||
+              changed('condition') ||
+              changed('flaws') ||
+              changed('description')
+            }
+          >
             <FieldLabel changed={changed('name')} was={`was "${original.name}"`} onUndo={() => revert('name')}>
               Name
             </FieldLabel>
@@ -667,6 +735,38 @@ export default function AdminEditProductScreen({ navigation, route }) {
             />
             <FieldError>{errors.name}</FieldError>
 
+            <FieldLabel
+              changed={changed('brand')}
+              was={original.brand ? `was "${original.brand}"` : 'was blank'}
+              onUndo={() => revert('brand')}
+              note={changed('brand') ? null : 'Optional'}
+            >
+              Brand
+            </FieldLabel>
+            <Field
+              value={formData.brand}
+              onChangeText={setField('brand')}
+              changed={changed('brand')}
+              placeholder="e.g. Uniqlo, Levi's"
+              maxLength={BRAND_MAX}
+              autoCorrect={false}
+              accessibilityLabel="Brand, optional"
+            />
+
+            <View style={{ marginBottom: 12 }}>
+              <FieldLabel
+                changed={changed('section')}
+                was={original.section ? `was ${sectionLabel(original.section)}` : 'was not set'}
+                onUndo={() => revert('section')}
+                note={changed('section') ? null : formData.section ? 'Unisex shows under Women and Men' : 'Needed to save'}
+              >
+                Section
+              </FieldLabel>
+              <SectionPicker value={formData.section} onChange={setField('section')} error={errors.section} />
+              <FieldError>{errors.section}</FieldError>
+            </View>
+
+            <FieldLabel>Type</FieldLabel>
             <View style={styles.types}>
               {TYPE_OPTIONS.map((option) => {
                 const on = formData.type === option.key;
@@ -697,6 +797,52 @@ export default function AdminEditProductScreen({ navigation, route }) {
               </View>
             ) : null}
 
+            {ukay ? (
+              <Animated.View
+                style={{ marginBottom: 12 }}
+                entering={reduceMotion ? undefined : FadeIn.duration(250).easing(EASE_OUT_QUART)}
+              >
+                <FieldLabel
+                  changed={changed('condition')}
+                  was={savedCondition(original) ? `was ${conditionLabel(original.condition)}` : 'was not set'}
+                  onUndo={() => revert('condition')}
+                  note={changed('condition') ? null : formData.condition ? 'Shown on the product page' : 'Needed to save'}
+                >
+                  Condition
+                </FieldLabel>
+                <ConditionPicker value={formData.condition} onChange={handleConditionChange} error={errors.condition} />
+                <FieldError>{errors.condition}</FieldError>
+
+                <View style={{ marginTop: 12 }}>
+                  <FieldLabel
+                    changed={changed('flaws')}
+                    was="edited"
+                    onUndo={() => revert('flaws')}
+                    note={
+                      changed('flaws')
+                        ? null
+                        : formData.condition === CONDITION_NEEDS_FLAWS
+                          ? 'Required for Well loved'
+                          : 'Optional'
+                    }
+                  >
+                    Flaws
+                  </FieldLabel>
+                  <Field
+                    value={formData.flaws}
+                    onChangeText={setField('flaws')}
+                    changed={changed('flaws')}
+                    error={errors.flaws}
+                    multiline
+                    maxLength={FLAWS_MAX}
+                    placeholder="e.g. Small pull on the back hem, faint mark on the left cuff."
+                    accessibilityLabel="Flaws"
+                  />
+                  <FieldError>{errors.flaws}</FieldError>
+                </View>
+              </Animated.View>
+            ) : null}
+
             <FieldLabel
               changed={changed('description')}
               was="edited"
@@ -710,7 +856,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
               onChangeText={setField('description')}
               changed={changed('description')}
               multiline
-              placeholder="Condition, material, fit…"
+              placeholder="Material, fit, how it wears…"
               accessibilityLabel="Product description"
             />
           </Card>

@@ -115,7 +115,13 @@ export default function StorePage({ navigation, route }) {
   const q = search.trim().toLowerCase();
   const shown = items
     .filter((p) => filter === 'all' || p.type === filter)
-    .filter((p) => !q || p.name?.toLowerCase().includes(q) || (TYPE_WORDS[p.type] || '').includes(q));
+    .filter(
+      (p) =>
+        !q ||
+        p.name?.toLowerCase().includes(q) ||
+        p.brand?.toLowerCase().includes(q) ||
+        (TYPE_WORDS[p.type] || '').includes(q)
+    );
 
   const handleToggleFavorite = (product) => {
     if (!auth.currentUser) {

@@ -36,12 +36,17 @@ import {
   MEASUREMENT_TYPE_OPTIONS,
   emptyMeasurementEntry,
   buildMeasurementsPayload,
+  CONDITION_NEEDS_FLAWS,
+  BRAND_MAX,
+  FLAWS_MAX,
 } from '../../constants/productOptions';
 import { Colors } from '../../constants/theme';
 import { EASE_OUT_QUART, EASE_OUT_QUINT } from '../../constants/motion';
 import { pickAndUploadProductImage, uploadErrorMessage } from '../../utils/imageUpload';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import ConditionPicker from '../../components/admin/ConditionPicker';
+import SectionPicker from '../../components/admin/SectionPicker';
 import { TopBar, OfflineNotice } from '../../components/shop/TabScreen';
 
 const INK = Colors.light.text;
@@ -86,8 +91,16 @@ const SECTIONS = [
 
 const EMPTY_FORM = {
   name: '',
+  brand: '',
+  // Who it's for. No default: guessing would file pieces under the wrong
+  // Section filter without the manager ever having chosen.
+  section: null,
   price: '',
   type: 'ready-to-wear',
+  // Ukay-ukay only. Kept while the type is switched back and forth so a
+  // stray tap doesn't throw it away, but never saved for ready-to-wear.
+  condition: null,
+  flaws: '',
   stock: '',
   description: '',
   imageUrl: '',
@@ -114,8 +127,12 @@ function buildInitialForm(source) {
   if (!source) return EMPTY_FORM;
   return {
     name: source.name ? `${source.name} (Copy)` : '',
+    brand: source.brand || '',
+    section: source.section || null,
     price: source.price != null ? String(source.price) : '',
     type: source.type || 'ready-to-wear',
+    condition: source.condition || null,
+    flaws: source.flaws || '',
     stock: source.stock != null ? String(source.stock) : '',
     description: source.description || '',
     imageUrl: source.imageUrl || '',
@@ -217,6 +234,9 @@ export default function AdminAddProductScreen({ navigation, route }) {
   const [pendingMeasurementType, setPendingMeasurementType] = useState(null);
   const [errors, setErrors] = useState({
     name: '',
+    section: '',
+    condition: '',
+    flaws: '',
     price: '',
     stock: '',
     imageUrl: '',
@@ -293,6 +313,12 @@ export default function AdminAddProductScreen({ navigation, route }) {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setFormData((prev) => ({ ...prev, imageUrl: result.url }));
     clearFieldError('imageUrl');
+  };
+
+  const handleConditionChange = (condition) => {
+    setFormData((prev) => ({ ...prev, condition }));
+    clearFieldError('condition');
+    if (condition !== CONDITION_NEEDS_FLAWS) clearFieldError('flaws');
   };
 
   const handleTypeChange = (type) => {
@@ -397,6 +423,10 @@ export default function AdminAddProductScreen({ navigation, route }) {
   const lostList = [];
   if (formData.imageUrl.trim()) lostList.push('Photo');
   if (formData.name.trim()) lostList.push('Name');
+  if (formData.brand.trim()) lostList.push('Brand');
+  if (formData.section) lostList.push('Section');
+  if (formData.type === 'ukay-ukay' && formData.condition) lostList.push('Condition');
+  if (formData.type === 'ukay-ukay' && formData.flaws.trim()) lostList.push('Flaws');
   if (formData.price.trim()) lostList.push('Price');
   if (formData.stock.trim() && !autoStock) lostList.push('Stock');
   if (formData.description.trim()) lostList.push('Description');
@@ -423,9 +453,12 @@ export default function AdminAddProductScreen({ navigation, route }) {
 
   // Which required sections are complete. Measurements are optional and
   // never block saving.
+  const conditionDone =
+    formData.type !== 'ukay-ukay' ||
+    (Boolean(formData.condition) && (formData.condition !== CONDITION_NEEDS_FLAWS || Boolean(formData.flaws.trim())));
   const checks = {
     photo: Boolean(formData.imageUrl.trim()) && !imageFailed,
-    details: Boolean(formData.name.trim()),
+    details: Boolean(formData.name.trim()) && Boolean(formData.section) && conditionDone,
     price: parseFloat(formData.price) > 0 && formData.stock.trim() !== '' && Number(formData.stock) >= 0,
     variants: formData.colors.length > 0 && formData.sizes.length > 0,
   };
@@ -457,6 +490,9 @@ export default function AdminAddProductScreen({ navigation, route }) {
   const validate = () => {
     const nextErrors = {
       name: '',
+      section: '',
+      condition: '',
+      flaws: '',
       price: '',
       stock: '',
       imageUrl: '',
@@ -466,6 +502,12 @@ export default function AdminAddProductScreen({ navigation, route }) {
     if (!formData.imageUrl.trim()) nextErrors.imageUrl = 'Add a photo or an image link.';
     else if (imageFailed) nextErrors.imageUrl = "This image couldn't load. Try a different one.";
     if (!formData.name.trim()) nextErrors.name = 'Give the product a name.';
+    if (!formData.section) nextErrors.section = "Pick who it's for.";
+    if (formData.type === 'ukay-ukay') {
+      if (!formData.condition) nextErrors.condition = "Pick the condition it's in.";
+      else if (formData.condition === CONDITION_NEEDS_FLAWS && !formData.flaws.trim())
+        nextErrors.flaws = 'Say what the wear or flaw is, so shoppers know before buying.';
+    }
     if (!formData.price.trim()) {
       nextErrors.price = 'Enter a price.';
     } else {
@@ -488,7 +530,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
     setTried(true);
     const firstBad = nextErrors.imageUrl
       ? 'photo'
-      : nextErrors.name
+      : nextErrors.name || nextErrors.section || nextErrors.condition || nextErrors.flaws
         ? 'details'
         : nextErrors.price || nextErrors.stock
           ? 'price'
@@ -508,9 +550,17 @@ export default function AdminAddProductScreen({ navigation, route }) {
     setLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const measurementsResult = buildMeasurementsPayload(formData.measurements, formData.measurementType);
+    const isUkay = formData.type === 'ukay-ukay';
 
     const result = await addProduct({
       name: formData.name,
+      // Optional; ProductContext leaves a blank one off the product.
+      brand: formData.brand.trim(),
+      section: formData.section,
+      // Ukay-ukay only: ready-to-wear is new by definition, so a condition
+      // picked before switching type is dropped here.
+      condition: isUkay ? formData.condition : null,
+      flaws: isUkay ? formData.flaws.trim() : '',
       // Real numbers, not the TextInput strings, so firestore.rules can
       // validate checkout's stock decrement with a numeric comparison.
       // Both were validated above.
@@ -762,7 +812,31 @@ export default function AdminAddProductScreen({ navigation, route }) {
             />
             <FieldError>{errors.name}</FieldError>
 
-            <FieldLabel>Type</FieldLabel>
+            <View style={{ marginTop: 14 }}>
+              <FieldLabel note="Optional">Brand</FieldLabel>
+              <Field
+                value={formData.brand}
+                onChangeText={setField('brand')}
+                placeholder="e.g. Uniqlo, Levi's"
+                maxLength={BRAND_MAX}
+                autoCorrect={false}
+                accessibilityLabel="Brand, optional"
+              />
+            </View>
+
+            <View style={{ marginTop: 14 }}>
+              <FieldLabel note="Unisex shows under Women and Men">Section</FieldLabel>
+              <SectionPicker
+                value={formData.section}
+                onChange={setField('section')}
+                error={errors.section}
+              />
+              <FieldError>{errors.section}</FieldError>
+            </View>
+
+            <View style={{ marginTop: 14 }}>
+              <FieldLabel>Type</FieldLabel>
+            </View>
             <View style={styles.types}>
               {TYPE_OPTIONS.map((option) => {
                 const on = formData.type === option.key;
@@ -803,13 +877,42 @@ export default function AdminAddProductScreen({ navigation, route }) {
               </Animated.View>
             ) : null}
 
+            {/* Condition is what a secondhand shopper trusts sight-unseen,
+                so an ukay listing can't be saved without one. */}
+            {ukay ? (
+              <Animated.View
+                style={{ marginTop: 14 }}
+                entering={reduceMotion ? undefined : FadeIn.duration(250).easing(EASE_OUT_QUART)}
+              >
+                <FieldLabel note="Shown on the product page">Condition</FieldLabel>
+                <ConditionPicker value={formData.condition} onChange={handleConditionChange} error={errors.condition} />
+                <FieldError>{errors.condition}</FieldError>
+
+                <View style={{ marginTop: 14 }}>
+                  <FieldLabel note={formData.condition === CONDITION_NEEDS_FLAWS ? 'Required for Well loved' : 'Optional'}>
+                    Flaws
+                  </FieldLabel>
+                  <Field
+                    value={formData.flaws}
+                    onChangeText={setField('flaws')}
+                    error={errors.flaws}
+                    multiline
+                    maxLength={FLAWS_MAX}
+                    placeholder="e.g. Small pull on the back hem, faint mark on the left cuff."
+                    accessibilityLabel="Flaws"
+                  />
+                  <FieldError>{errors.flaws}</FieldError>
+                </View>
+              </Animated.View>
+            ) : null}
+
             <View style={{ marginTop: 14 }}>
               <FieldLabel note="Optional">Description</FieldLabel>
               <Field
                 value={formData.description}
                 onChangeText={setField('description')}
                 multiline
-                placeholder="Condition, material, fit… A clear description helps shoppers trust what they're buying."
+                placeholder="Material, fit, how it wears… A clear description helps shoppers trust what they're buying."
                 accessibilityLabel="Product description"
               />
             </View>
