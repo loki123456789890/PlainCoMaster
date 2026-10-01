@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 27):
+- **New use case — Reset Password** (fills the gap listed in section 28):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2443,7 +2443,94 @@ passwords were not changed while the UAT survey uses those accounts.
 
 ---
 
-## 27. Still outstanding — SRS-side only, no code changes needed
+## 27. "New this week" on a store's page — NEW
+
+A store's page (section 16) listed everything it sells in one grid,
+newest first. A regular shopper returning to an ukay store, where every
+piece is one of a kind, had no quick way to see what had arrived since
+their last visit.
+
+> **Status (1 Oct 2026):** built; display only. No security rules or
+> stored fields change, so nothing needs deploying and the APK used for
+> the UAT survey is unaffected.
+
+### What changed — suggested wording (extends the store page, section 16)
+
+> A store's page shows a "New this week" row above its search: the
+> store's products listed in the last seven days that are not sold out,
+> newest first, with how many there are — for example, "3 pieces listed
+> in the last 7 days". The row scrolls sideways and shows up to twelve.
+> It is not shown when the store has listed nothing in that time, or when
+> everything the store sells is new, since "All items" below already
+> starts with those.
+
+**Deliberately plain.** A heading and a count, not a banner or a
+countdown, consistent with the design principles in PRODUCT.md. Garment
+tabs (Dresses, Tops, Bottoms) and a "Sale" tab were considered at the
+same time; see Limitations.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-T1 | A store's page shows the store's products listed within the last seven days, excluding sold-out ones, in a "New this week" row with their count. |
+| FR-T2 | The row is not shown when the store has no such products, or when every product the store sells is one of them. |
+| FR-T3 | The store's search and Ukay-Ukay / Ready-to-Wear tabs narrow "All items" only, not the "New this week" row. |
+
+### Use case updates
+
+**View Store Page** (Customer, use case 2.5): add:
+
+> Below the store's rating, the customer sees what the store has listed
+> this week, and can open any of those products or save it to Favorites
+> from there.
+
+### Business rules
+
+- "Listed" is the product's `createdAt`, as for "Just in" (section 24).
+  Editing a product does not make it new again.
+- The window is seven days, not the three of "Just in": one store adds
+  stock less often than the whole catalog does, so three days would
+  leave most stores' rows empty. A product listed in the last three days
+  also carries its own "Just in" note in the row.
+
+### Data model changes
+
+None. The row is worked out from the existing `createdAt` and `stock`
+fields.
+
+### Screens — module list (section 7)
+
+- **Store page** (Customer): "New this week" row between the rating and
+  the search.
+
+### Limitations
+
+- The seven-day window is fixed in the app; it is not set per store.
+- There are no garment tabs (Dresses, Tops, Bottoms) yet. Products do
+  not have a required garment type: the nearest field, the measurement
+  type, is saved only when a Store Manager enters measurements, so tabs
+  built on it would leave products out.
+- There is no "Sale" section. Products have no original or sale price,
+  and a sale section is the flash-sale pattern PRODUCT.md rules out;
+  Favorites already notes a price drop on a saved item (section 25).
+- There is no "Follow" for stores, and no notification when a store
+  lists something new.
+
+### Verification
+
+Lint unchanged at 0 errors. No rules change, so the rules test suite is
+unaffected. Checked in the web build against the local emulators, with
+products backdated in the emulator: a store with two new pieces, one new
+but sold-out piece and two older ones showed the row with "3 pieces" —
+the sold-out and older pieces left out — and all six in "All items"; a
+store whose only product was new showed no row; and the store search
+still stayed pinned under the header when scrolled. Not yet checked on a
+device.
+
+---
+
+## 28. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
