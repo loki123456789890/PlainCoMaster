@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 23):
+- **New use case — Reset Password** (fills the gap listed in section 24):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2081,7 +2081,118 @@ store's manager, a customer, a deactivated manager or a Platform Admin.
 
 ---
 
-## 23. Still outstanding — SRS-side only, no code changes needed
+## 23. Product photos, zoom and flaw disclosure — NEW
+
+Before this, a product had one photo, and an ukay piece only had to
+describe a flaw if it was graded "Well loved". A "Gently used" piece with
+a stain could be listed without mentioning it.
+
+> **Status (1 Oct 2026):** built; rules tested against the emulator. The
+> security rules must be deployed (`npm run rules:deploy`) before a Store
+> Manager can save a product with the new photos in production. The deploy
+> does not affect the APK used for the UAT survey: the new fields are
+> optional in the rules, and required by the app instead.
+
+### What changed — suggested wording (extends Add/Edit Product and View Product Details)
+
+> A product has up to four photos, one per slot: Front, Back, Label & size
+> tag, and Fabric close-up. An ukay-ukay listing requires the first three;
+> a ready-to-wear listing requires only the Front, since it is new and the
+> same across its stock.
+>
+> Every ukay-ukay listing must answer "Did you find any flaws?" with no
+> default answer. "No flaws found" states that the seller checked for
+> stains, holes, fading and damage. "Yes, it has flaws" requires the kind
+> of flaw (Stain, Hole or tear, Fading, Pilling, Stretched, Zipper or
+> button, Other), a note saying where it is, and at least one photo of it
+> (up to three). A "Well loved" listing cannot answer "No flaws found".
+>
+> On the product page the photos form a gallery the shopper can swipe and
+> open full screen, where each photo can be zoomed by pinching or
+> double-tapping. Flaw photos are part of the gallery and are also shown
+> beside the flaw description.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-P1 | A Store Manager can add, replace and remove a photo in each of the four slots, by camera, gallery or image link. |
+| FR-P2 | The system refuses to add an ukay-ukay listing without Front, Back and Label & size tag photos, or a ready-to-wear listing without a Front photo. |
+| FR-P3 | The system refuses to save an ukay-ukay listing until the flaw question is answered; a "Yes" needs at least one flaw kind, a note, and one to three flaw photos. |
+| FR-P4 | The product page shows every photo as a swipeable gallery with each photo's label, and opens a full-screen viewer with pinch and double-tap zoom. |
+| FR-P5 | The product page's Condition section states "No flaws found" or lists the flaws found, with their photos. |
+
+### Use case updates
+
+**Add Product** (Store Manager): add:
+
+> The Store Manager fills the required photo slots for the item type. For
+> an ukay-ukay item, they answer whether it has flaws; if it does, they
+> pick the kinds, describe where, and add a photo of each.
+>
+> *Alternative flow:* a required photo or the flaw answer is missing — the
+> system names what is still needed and does not save.
+
+**Edit Product** (Store Manager): add:
+
+> The same rules apply, except that a listing created before photo slots
+> existed may be saved without its Back or Label photo; the screen asks
+> for them. A required photo the listing already has can be replaced but
+> not removed.
+
+**View Product Details** (Customer): add:
+
+> The customer may swipe through the product's photos and tap one to view
+> it full screen and zoom in. For an ukay-ukay item, the Condition section
+> shows whether the seller found flaws and, if so, what and where, with
+> photos.
+
+### Business rules / security (enforced by security rules)
+
+- `flawCheck` is `none` or `found`, or absent.
+- `flawTags` is a list of at most 7 keys from the fixed flaw list.
+- `photos` is a list of at most 8 entries.
+- None of the three is required by the rules yet, so the survey APK keeps
+  working; the app requires them.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `products` | `photos` (list ≤ 8 of `{ kind, url }`, optional) | Every photo besides the Front. `kind` is `back`, `label`, `fabric` or `flaw`. |
+| `products` | `flawCheck` (`none` \| `found`, optional) | Ukay-ukay only. |
+| `products` | `flawTags` (list of keys, optional) | Ukay-ukay only, with `found`. |
+
+The Front photo stays in `imageUrl`, so the catalog, cart, orders and
+older builds are unchanged.
+
+### Screens — module list (section 7)
+
+- **Add Product** and **Edit Product** (Store Manager): the Photo card
+  becomes a Photos card with one tile per slot; the Condition area gains
+  the flaw question, flaw kinds, note and flaw photos.
+- **Product Details** (Customer): photo gallery, full-screen zoom viewer,
+  and the flaw disclosure in the Condition section.
+
+### Limitations
+
+- The app cannot tell whether a photo shows what its slot says (a "Back"
+  photo that is really the front). The labels guide the seller; buyer
+  reviews ("Didn't match the description") are the check.
+- Rules can bound the size of `photos` but not the shape of each entry;
+  the app reads it defensively.
+- Replaced photos stay in Cloud Storage, as before (see storage.rules).
+
+### Verification
+
+Rules test suite 145 → **148**: a product with photos, a flaw answer and
+flaw kinds is accepted on create and on edit, and a build that sends none
+of them still is; an unknown flaw answer or kind, a non-list, and more
+than eight photos are refused, on create and on edit.
+
+---
+
+## 24. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all

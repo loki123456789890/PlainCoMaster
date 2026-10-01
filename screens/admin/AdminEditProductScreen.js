@@ -4,6 +4,11 @@
 // and an Undo, a "Remove from the shop" area (mark sold out, or delete with
 // a press-and-hold button), and a footer that counts unsaved changes.
 // Leaving with unsaved edits lists them, old → new, before discarding.
+//
+// Photos and the flaw answer work as on Add Product, with one difference:
+// a listing from before photo slots existed isn't blocked from saving a
+// price or stock change because it lacks a back or label photo. It is
+// asked to add them, and can't remove a required one it already has.
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
@@ -36,15 +41,22 @@ import {
   CONDITION_NEEDS_FLAWS,
   BRAND_MAX,
   FLAWS_MAX,
+  FLAW_PHOTOS_MAX,
+  PHOTO_SLOTS,
+  requiredPhotoSlots,
+  photosFromProduct,
+  buildPhotosPayload,
+  flawTypeLabel,
 } from '../../constants/productOptions';
 import { Colors } from '../../constants/theme';
 import { EASE_OUT_QUART } from '../../constants/motion';
-import { pickAndUploadProductImage, uploadErrorMessage } from '../../utils/imageUpload';
 import Button from '../../components/ui/Button';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Sheet from '../../components/shop/Sheet';
 import DeleteProductPanel from '../../components/admin/DeleteProductPanel';
 import ConditionPicker from '../../components/admin/ConditionPicker';
+import FlawDisclosure from '../../components/admin/FlawDisclosure';
+import PhotoSlots from '../../components/admin/PhotoSlots';
 import SectionPicker from '../../components/admin/SectionPicker';
 import { TopBar, OfflineNotice, UndoToast, useAutoClear } from '../../components/shop/TabScreen';
 
@@ -70,13 +82,33 @@ const typeLabel = (type) => (type === 'ukay-ukay' ? 'Ukay-Ukay' : 'Ready-to-Wear
 const conditionLabel = (key) => conditionOption(key)?.label || 'Not set';
 const sectionLabel = (key) => sectionOption(key)?.label || '—';
 
-const NO_ERRORS = { name: '', section: '', condition: '', flaws: '', price: '', stock: '', imageUrl: '', colors: '', sizes: '' };
+const NO_ERRORS = {
+  photos: '',
+  name: '',
+  section: '',
+  condition: '',
+  flawCheck: '',
+  flawTags: '',
+  flaws: '',
+  flawPhotos: '',
+  price: '',
+  stock: '',
+  colors: '',
+  sizes: '',
+};
 
-// What a save would write for condition and flaws. Both belong to
-// ukay-ukay only, so switching the type to ready-to-wear removes them even
-// though the form keeps them (a switch back brings them back).
+const FLAW_CHECK_LABELS = { none: 'None found', found: 'Has flaws' };
+
+// What a save would write for condition and the flaw answer. They belong
+// to ukay-ukay only, so switching the type to ready-to-wear removes them
+// even though the form keeps them (a switch back brings them back). The
+// kind, note and photos of a flaw only travel with a "found".
 const savedCondition = (form) => (form.type === 'ukay-ukay' ? form.condition : null);
-const savedFlaws = (form) => (form.type === 'ukay-ukay' ? form.flaws.trim() : '');
+const savedFlawCheck = (form) => (form.type === 'ukay-ukay' ? form.flawCheck : null);
+const flawsFound = (form) => savedFlawCheck(form) === 'found';
+const savedFlaws = (form) => (flawsFound(form) ? form.flaws.trim() : '');
+const savedFlawTags = (form) => (flawsFound(form) ? form.flawTags : []);
+const savedFlawPhotos = (form) => (flawsFound(form) ? form.flawPhotos : []);
 
 const peso = (value) => `₱${(Number(value) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
 
@@ -134,11 +166,17 @@ const formFromProduct = (product) => ({
   // Ukay products listed before condition existed load with none, and
   // validate() asks for one before they can be saved again.
   condition: product.condition || null,
+  // Listings from before the flaw question load unanswered, and validate()
+  // asks for an answer before an ukay one can be saved again. One written
+  // before it with a flaw note answers "found", since the note says so.
+  flawCheck: product.flawCheck || (product.flaws?.trim() ? 'found' : null),
+  flawTags: product.flawTags || [],
   flaws: product.flaws || '',
   stock: product.stock != null ? String(product.stock) : '',
   description: product.description || '',
-  // Products are stored with imageUrl (see ProductContext.js).
-  imageUrl: product.imageUrl || '',
+  // { photos: { front, back, label, fabric }, flawPhotos: [] }. The front
+  // is the product's imageUrl (see ProductContext.js).
+  ...photosFromProduct(product),
   // Legacy products predating per-product colors/sizes pre-select nothing
   // rather than guessing, so the manager makes a real choice on next save.
   colors: product.colors || [],
@@ -150,7 +188,8 @@ const formFromProduct = (product) => ({
 // it. Drives the dots, the footer count, the discard list and the toast.
 function diffForm(form, original) {
   const changes = [];
-  if (form.imageUrl !== original.imageUrl) changes.push({ key: 'imageUrl', label: 'Photo', edited: true });
+  const photosChanged = PHOTO_SLOTS.filter((slot) => form.photos[slot.key].trim() !== original.photos[slot.key].trim());
+  if (photosChanged.length) changes.push({ key: 'photos', label: 'Photos', edited: true });
   if (form.name !== original.name)
     changes.push({ key: 'name', label: 'Name', from: original.name || '—', to: form.name || '—' });
   if (form.brand.trim() !== original.brand.trim())
@@ -166,7 +205,22 @@ function diffForm(form, original) {
       from: savedCondition(original) ? conditionLabel(original.condition) : '—',
       to: savedCondition(form) ? conditionLabel(form.condition) : '—',
     });
-  if (savedFlaws(form) !== savedFlaws(original)) changes.push({ key: 'flaws', label: 'Flaws', edited: true });
+  if (savedFlawCheck(form) !== savedFlawCheck(original))
+    changes.push({
+      key: 'flawCheck',
+      label: 'Flaws',
+      from: FLAW_CHECK_LABELS[savedFlawCheck(original)] || '—',
+      to: FLAW_CHECK_LABELS[savedFlawCheck(form)] || '—',
+    });
+  const tagsBefore = savedFlawTags(original);
+  const tagsAfter = savedFlawTags(form);
+  const tagsAdded = tagsAfter.filter((x) => !tagsBefore.includes(x)).map(flawTypeLabel);
+  const tagsRemoved = tagsBefore.filter((x) => !tagsAfter.includes(x)).map(flawTypeLabel);
+  if (tagsAdded.length || tagsRemoved.length)
+    changes.push({ key: 'flawTags', label: 'Flaw kinds', added: tagsAdded, removed: tagsRemoved });
+  if (savedFlaws(form) !== savedFlaws(original)) changes.push({ key: 'flaws', label: 'Flaw note', edited: true });
+  if (JSON.stringify(savedFlawPhotos(form)) !== JSON.stringify(savedFlawPhotos(original)))
+    changes.push({ key: 'flawPhotos', label: 'Flaw photos', edited: true });
   if (form.description !== original.description)
     changes.push({ key: 'description', label: 'Description', edited: true });
   if (form.price !== original.price)
@@ -279,38 +333,18 @@ export default function AdminEditProductScreen({ navigation, route }) {
   // Save button to "Saving..." mid-delete.
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [photoOpen, setPhotoOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [leaveAction, setLeaveAction] = useState(null);
   const [toast, setToast] = useState('');
   useAutoClear(toast, () => setToast(''), 3200);
   const leaving = useRef(false);
 
-  // The existing photo is a known-good URL, so it shows immediately; only
-  // a newly typed link waits for typing to pause.
-  const [previewUri, setPreviewUri] = useState(product.imageUrl || '');
-  const [imageFailed, setImageFailed] = useState(false);
-
-  // Upload runs alongside the URL field: products that predate Storage
-  // carry an external URL, and opening the editor must not imply it's now
-  // invalid. Both paths write the same imageUrl string.
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  // Photo tiles whose image failed to load, by tile id, as PhotoSlots
+  // reports them. A listing with a broken photo can't be saved.
+  const [broken, setBroken] = useState({});
 
   const scrollRef = useRef(null);
-
-  useEffect(() => {
-    const trimmed = formData.imageUrl.trim();
-    if (!trimmed) {
-      setPreviewUri('');
-      setImageFailed(false);
-      return undefined;
-    }
-    if (trimmed === previewUri) return undefined;
-    setImageFailed(false);
-    const timer = setTimeout(() => setPreviewUri(trimmed), 500);
-    return () => clearTimeout(timer);
-  }, [formData.imageUrl, previewUri]);
+  const photosY = useRef(0);
 
   const clearFieldError = (field) => {
     setErrors((prev) => (prev[field] ? { ...prev, [field]: '' } : prev));
@@ -346,48 +380,74 @@ export default function AdminEditProductScreen({ navigation, route }) {
     clearFieldError(key);
   };
 
+  // Slot tiles have the slot's key as their id; flaw photo tiles are
+  // 'flaw-<index>', and 'flaw-new' is the empty tile that adds one.
+  // A replaced photo is deliberately NOT deleted from the bucket: nothing
+  // is saved yet, and a product pointing at a removed file is worse than an
+  // orphan (see storage.rules).
+  const setPhoto = (id, url) => {
+    if (id.startsWith('flaw-')) {
+      setFormData((prev) => {
+        const index = id === 'flaw-new' ? prev.flawPhotos.length : Number(id.slice(5));
+        const flawPhotos = [...prev.flawPhotos];
+        flawPhotos[index] = url;
+        return { ...prev, flawPhotos };
+      });
+      clearFieldError('flawPhotos');
+      return;
+    }
+    setFormData((prev) => ({ ...prev, photos: { ...prev.photos, [id]: url } }));
+    clearFieldError('photos');
+  };
+
+  const removePhoto = (id) => {
+    if (id.startsWith('flaw-')) {
+      const index = Number(id.slice(5));
+      setFormData((prev) => ({ ...prev, flawPhotos: prev.flawPhotos.filter((_, i) => i !== index) }));
+      return;
+    }
+    setFormData((prev) => ({ ...prev, photos: { ...prev.photos, [id]: '' } }));
+  };
+
+  const handleBroken = (id, isBroken) =>
+    setBroken((prev) => (Boolean(prev[id]) === isBroken ? prev : { ...prev, [id]: isBroken }));
+
+  const handleFlawCheckChange = (flawCheck) => {
+    setFormData((prev) => ({ ...prev, flawCheck }));
+    clearFieldError('flawCheck');
+  };
+
+  const toggleFlawTag = (key) => {
+    setFormData((prev) => ({
+      ...prev,
+      flawTags: prev.flawTags.includes(key) ? prev.flawTags.filter((t) => t !== key) : [...prev.flawTags, key],
+    }));
+    clearFieldError('flawTags');
+  };
+
   const undoAll = () => {
     Haptics.selectionAsync();
     setFormData(original);
     setErrors(NO_ERRORS);
   };
 
-  // Writes the download URL into the same imageUrl field a pasted link
-  // goes into. The old photo is deliberately NOT deleted when one replaces
-  // it: nothing is saved yet, and a product pointing at a removed file is
-  // worse than an orphan in the bucket (see storage.rules).
-  const handleUploadImage = async (source) => {
-    if (uploading) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setUploading(true);
-    setUploadProgress(0);
-    const result = await pickAndUploadProductImage({ source, onProgress: setUploadProgress });
-    setUploading(false);
-    setUploadProgress(0);
-    if (result.cancelled) return;
-    if (!result.success) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showAppAlert('Upload Failed', uploadErrorMessage(result.error));
-      return;
-    }
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setFormData((prev) => ({ ...prev, imageUrl: result.url }));
-    clearFieldError('imageUrl');
-    setPhotoOpen(false);
-  };
-
   const handleTypeChange = (type) => {
     if (formData.type === type) return;
     Haptics.selectionAsync();
     setFormData((prev) => ({ ...prev, type }));
-    clearFieldError('condition');
-    clearFieldError('flaws');
+    ['photos', 'condition', 'flawCheck', 'flawTags', 'flaws', 'flawPhotos'].forEach(clearFieldError);
   };
 
+  // Well loved is defined as having a flaw, so picking it answers the flaw
+  // question for the manager (they still say what it is and show it).
   const handleConditionChange = (condition) => {
-    setFormData((prev) => ({ ...prev, condition }));
+    setFormData((prev) => ({
+      ...prev,
+      condition,
+      ...(condition === CONDITION_NEEDS_FLAWS ? { flawCheck: 'found' } : {}),
+    }));
     clearFieldError('condition');
-    if (condition !== CONDITION_NEEDS_FLAWS) clearFieldError('flaws');
+    if (condition === CONDITION_NEEDS_FLAWS) clearFieldError('flawCheck');
   };
 
   const stepStock = (delta) => {
@@ -469,6 +529,16 @@ export default function AdminEditProductScreen({ navigation, route }) {
     }));
   };
 
+  const ukayForm = formData.type === 'ukay-ukay';
+  const requiredSlots = requiredPhotoSlots(formData.type);
+  // Required slots this listing doesn't have filled. Only the front, and
+  // any it had when the editor opened, block a save; the rest are asked
+  // for (see the note at the top).
+  const emptyRequired = PHOTO_SLOTS.filter((slot) => requiredSlots.includes(slot.key) && !formData.photos[slot.key].trim());
+  const blockingSlots = emptyRequired.filter((slot) => slot.key === 'front' || original.photos[slot.key].trim());
+  const brokenSlot = PHOTO_SLOTS.some((slot) => broken[slot.key] && formData.photos[slot.key].trim());
+  const brokenFlawPhoto = flawsFound(formData) && formData.flawPhotos.some((_, i) => broken[`flaw-${i}`]);
+
   const changes = diffForm(formData, original);
   const changed = (key) => changes.some((c) => c.key === key);
   const isDirty = changes.length > 0;
@@ -509,14 +579,22 @@ export default function AdminEditProductScreen({ navigation, route }) {
   // Validates every field at once and surfaces every error inline.
   const validate = () => {
     const nextErrors = { ...NO_ERRORS };
-    if (!formData.imageUrl.trim()) nextErrors.imageUrl = 'Add a photo or an image link.';
-    else if (imageFailed) nextErrors.imageUrl = "This image couldn't load. Try a different one.";
+    if (blockingSlots.length)
+      nextErrors.photos = `Still needed: ${blockingSlots.map((slot) => slot.label).join(', ')}. You can replace a required photo, not remove it.`;
+    else if (brokenSlot) nextErrors.photos = "A photo couldn't load. Replace it or remove it.";
     if (!formData.name.trim()) nextErrors.name = 'Give the product a name.';
     if (!formData.section) nextErrors.section = "Pick who it's for.";
-    if (formData.type === 'ukay-ukay') {
+    if (ukayForm) {
       if (!formData.condition) nextErrors.condition = "Pick the condition it's in.";
-      else if (formData.condition === CONDITION_NEEDS_FLAWS && !formData.flaws.trim())
-        nextErrors.flaws = 'Say what the wear or flaw is, so shoppers know before buying.';
+      if (!formData.flawCheck) nextErrors.flawCheck = 'Say whether you found any flaws.';
+      else if (formData.flawCheck === 'none' && formData.condition === CONDITION_NEEDS_FLAWS)
+        nextErrors.flawCheck = 'Well loved means it has a flaw. Pick "Yes" and show it.';
+      else if (formData.flawCheck === 'found') {
+        if (!formData.flawTags.length) nextErrors.flawTags = 'Pick what kind of flaw it is.';
+        if (!formData.flaws.trim()) nextErrors.flaws = 'Say where it is and how noticeable it is.';
+        if (!formData.flawPhotos.length) nextErrors.flawPhotos = 'Add a photo of the flaw.';
+        else if (brokenFlawPhoto) nextErrors.flawPhotos = "A flaw photo couldn't load. Replace it or remove it.";
+      }
     }
     if (!formData.price.trim()) {
       nextErrors.price = 'Enter a price.';
@@ -539,8 +617,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
     const hasErrors = Object.values(nextErrors).some(Boolean);
     if (hasErrors) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      if (nextErrors.imageUrl) setPhotoOpen(true);
-      else scrollRef.current?.scrollTo({ y: 0, animated: !reduceMotion });
+      scrollRef.current?.scrollTo({ y: nextErrors.photos ? Math.max(0, photosY.current - 12) : 0, animated: !reduceMotion });
     }
     return !hasErrors;
   };
@@ -561,7 +638,10 @@ export default function AdminEditProductScreen({ navigation, route }) {
       type: formData.type,
       stock: Number(formData.stock),
       description: formData.description,
-      imageUrl: formData.imageUrl,
+      // The front stays in imageUrl, which the catalog, cart, orders and
+      // older builds read; every other photo goes in `photos`.
+      imageUrl: formData.photos.front.trim(),
+      photos: buildPhotosPayload(formData.photos, formData.flawPhotos, flawsFound(formData)),
       colors: formData.colors,
       sizes: formData.sizes,
       // Blank brand, and condition/flaws on anything that isn't ukay-ukay,
@@ -569,6 +649,8 @@ export default function AdminEditProductScreen({ navigation, route }) {
       brand: formData.brand.trim() || deleteField(),
       section: formData.section,
       condition: savedCondition(formData) || deleteField(),
+      flawCheck: savedFlawCheck(formData) || deleteField(),
+      flawTags: savedFlawTags(formData).length ? savedFlawTags(formData) : deleteField(),
       flaws: savedFlaws(formData) || deleteField(),
       // updateDoc (unlike addDoc) needs an explicit deleteField() to remove
       // a field the product had — omitting the key would leave a stale
@@ -614,7 +696,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
   const busy = saving || deleting;
   const priceValue = parseFloat(formData.price);
   const stockValue = parseInt(formData.stock, 10);
-  const ukay = formData.type === 'ukay-ukay';
+  const ukay = ukayForm;
   const measurementType = MEASUREMENT_TYPES[formData.measurementType];
   const selectedSizes = SIZE_OPTIONS.filter((size) => formData.sizes.includes(size));
   const savedStock = parseInt(original.stock, 10);
@@ -642,29 +724,28 @@ export default function AdminEditProductScreen({ navigation, route }) {
           <View style={styles.shopper}>
             <Text style={styles.shopperLabel}>SHOPPER VIEW</Text>
             <View style={styles.shopperImage}>
-              {previewUri && !imageFailed ? (
+              {formData.photos.front.trim() && !broken.front ? (
                 <Image
-                  key={previewUri}
-                  source={{ uri: previewUri }}
+                  key={formData.photos.front}
+                  source={{ uri: formData.photos.front.trim() }}
                   style={StyleSheet.absoluteFill}
                   resizeMode="cover"
-                  onError={() => setImageFailed(true)}
                 />
               ) : (
                 <Ionicons
-                  name={imageFailed ? 'alert-circle-outline' : 'image-outline'}
+                  name={broken.front ? 'alert-circle-outline' : 'image-outline'}
                   size={26}
-                  color={imageFailed ? '#F2A99F' : MUTED}
+                  color={broken.front ? '#F2A99F' : MUTED}
                 />
               )}
               <Pressable
                 onPress={() => {
                   Haptics.selectionAsync();
-                  setPhotoOpen(true);
+                  scrollRef.current?.scrollTo({ y: Math.max(0, photosY.current - 12), animated: !reduceMotion });
                 }}
                 style={({ pressed }) => [styles.photoButton, pressed && { transform: [{ scale: 0.94 }] }]}
                 accessibilityRole="button"
-                accessibilityLabel="Change photo"
+                accessibilityLabel="Go to photos"
               >
                 <Ionicons name="camera-outline" size={15} color={INK} />
               </Pressable>
@@ -689,26 +770,45 @@ export default function AdminEditProductScreen({ navigation, route }) {
               </Text>
             </View>
           </View>
-          {changed('imageUrl') || errors.imageUrl || imageFailed ? (
-            <View style={styles.photoNote}>
-              {errors.imageUrl || imageFailed ? (
-                <Text style={styles.error}>{errors.imageUrl || "This image couldn't load. Try a different one."}</Text>
-              ) : (
-                <>
-                  <View style={styles.changedDot} />
-                  <Text style={styles.was}>New photo, not saved yet</Text>
-                  <Pressable
-                    onPress={() => revert('imageUrl')}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel="Undo photo"
-                  >
-                    <Text style={styles.undo}>Undo</Text>
-                  </Pressable>
-                </>
-              )}
-            </View>
-          ) : null}
+          <View onLayout={(e) => (photosY.current = e.nativeEvent.layout.y)}>
+            <Card title="Photos" edited={changed('photos')}>
+              {emptyRequired.length && !blockingSlots.length && !errors.photos ? (
+                <View style={[styles.warn, { marginBottom: 12 }]}>
+                  <Ionicons name="camera-outline" size={16} color="#6B5A2E" />
+                  <Text style={styles.warnText}>
+                    Ukay listings now show the {emptyRequired.map((slot) => slot.label.toLowerCase()).join(' and ')}{' '}
+                    too. Add {emptyRequired.length > 1 ? 'them' : 'it'} so shoppers can check before buying.
+                  </Text>
+                </View>
+              ) : null}
+              <PhotoSlots
+                slots={PHOTO_SLOTS.map((slot) => ({
+                  id: slot.key,
+                  label: slot.label,
+                  hint: slot.hint,
+                  url: formData.photos[slot.key],
+                  required: requiredSlots.includes(slot.key),
+                  changed: formData.photos[slot.key].trim() !== original.photos[slot.key].trim(),
+                }))}
+                onSet={setPhoto}
+                onRemove={removePhoto}
+                onBrokenChange={handleBroken}
+                flagMissing={Boolean(errors.photos)}
+                disabled={!isConnected}
+              />
+              <FieldError>{errors.photos}</FieldError>
+              {changed('photos') ? (
+                <Pressable
+                  onPress={() => revert('photos')}
+                  hitSlop={8}
+                  style={{ alignSelf: 'flex-start', marginTop: 10 }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.undo}>Undo photo changes</Text>
+                </Pressable>
+              ) : null}
+            </Card>
+          </View>
 
           <Card
             title="Details"
@@ -718,7 +818,10 @@ export default function AdminEditProductScreen({ navigation, route }) {
               changed('section') ||
               changed('type') ||
               changed('condition') ||
+              changed('flawCheck') ||
+              changed('flawTags') ||
               changed('flaws') ||
+              changed('flawPhotos') ||
               changed('description')
             }
           >
@@ -815,30 +918,80 @@ export default function AdminEditProductScreen({ navigation, route }) {
 
                 <View style={{ marginTop: 12 }}>
                   <FieldLabel
-                    changed={changed('flaws')}
-                    was="edited"
-                    onUndo={() => revert('flaws')}
-                    note={
-                      changed('flaws')
-                        ? null
-                        : formData.condition === CONDITION_NEEDS_FLAWS
-                          ? 'Required for Well loved'
-                          : 'Optional'
-                    }
+                    changed={changed('flawCheck')}
+                    was={`was ${FLAW_CHECK_LABELS[savedFlawCheck(original)]?.toLowerCase() || 'not answered'}`}
+                    onUndo={() => revert('flawCheck')}
+                    note={changed('flawCheck') ? null : formData.flawCheck ? 'Shown on the product page' : 'Needed to save'}
                   >
-                    Flaws
+                    Any flaws?
                   </FieldLabel>
-                  <Field
-                    value={formData.flaws}
-                    onChangeText={setField('flaws')}
-                    changed={changed('flaws')}
-                    error={errors.flaws}
-                    multiline
-                    maxLength={FLAWS_MAX}
-                    placeholder="e.g. Small pull on the back hem, faint mark on the left cuff."
-                    accessibilityLabel="Flaws"
-                  />
-                  <FieldError>{errors.flaws}</FieldError>
+                  <FlawDisclosure
+                    value={formData.flawCheck}
+                    onChange={handleFlawCheckChange}
+                    tags={formData.flawTags}
+                    onToggleTag={toggleFlawTag}
+                    noneBlocked={formData.condition === CONDITION_NEEDS_FLAWS}
+                    error={errors.flawCheck}
+                    tagsError={errors.flawTags}
+                  >
+                    <View style={{ marginTop: 14 }}>
+                      <FieldLabel changed={changed('flaws')} was="edited" onUndo={() => revert('flaws')}>
+                        Where, and how noticeable?
+                      </FieldLabel>
+                      <Field
+                        value={formData.flaws}
+                        onChangeText={setField('flaws')}
+                        changed={changed('flaws')}
+                        error={errors.flaws}
+                        multiline
+                        maxLength={FLAWS_MAX}
+                        placeholder="e.g. Small pull on the back hem, faint mark on the left cuff."
+                        accessibilityLabel="Where the flaws are"
+                      />
+                      <FieldError>{errors.flaws}</FieldError>
+                    </View>
+                    <View style={{ marginTop: 14 }}>
+                      <FieldLabel
+                        changed={changed('flawPhotos')}
+                        was="edited"
+                        onUndo={() => revert('flawPhotos')}
+                        note={changed('flawPhotos') ? null : `Up to ${FLAW_PHOTOS_MAX}`}
+                      >
+                        Photos of the flaws
+                      </FieldLabel>
+                      <PhotoSlots
+                        slots={[
+                          ...formData.flawPhotos.map((url, i) => ({
+                            id: `flaw-${i}`,
+                            label: `Flaw ${i + 1}`,
+                            hint: 'Close enough that shoppers can see exactly what it is.',
+                            url,
+                            required: true,
+                            changed: url !== original.flawPhotos[i],
+                          })),
+                          ...(formData.flawPhotos.length < FLAW_PHOTOS_MAX
+                            ? [
+                                {
+                                  id: 'flaw-new',
+                                  label: formData.flawPhotos.length ? 'Add another' : 'Flaw photo',
+                                  hint: 'Close enough that shoppers can see exactly what it is.',
+                                  url: '',
+                                  required: formData.flawPhotos.length === 0,
+                                  icon: 'add',
+                                },
+                              ]
+                            : []),
+                        ]}
+                        onSet={setPhoto}
+                        onRemove={removePhoto}
+                        onBrokenChange={handleBroken}
+                        flagMissing={Boolean(errors.flawPhotos)}
+                        disabled={!isConnected}
+                      />
+                      <FieldError>{errors.flawPhotos}</FieldError>
+                    </View>
+                  </FlawDisclosure>
+                  <FieldError>{errors.flawCheck}</FieldError>
                 </View>
               </Animated.View>
             ) : null}
@@ -1181,66 +1334,10 @@ export default function AdminEditProductScreen({ navigation, route }) {
       {/* Lifted clear of the footer. */}
       <UndoToast text={toast} lift={48} />
 
-      {/* Change photo: the same two upload paths and link field as Add. */}
-      <Sheet visible={photoOpen} onClose={() => setPhotoOpen(false)} locked={uploading}>
-        <Text style={styles.sheetTitle} accessibilityRole="header">
-          Change photo
-        </Text>
-        <Text style={styles.sheetText}>One photo per product. Shoppers see it first.</Text>
-        <View style={styles.photoRow}>
-          {[
-            { source: 'camera', icon: 'camera-outline', label: 'Take photo' },
-            { source: 'library', icon: 'images-outline', label: 'From gallery' },
-          ].map((b) => (
-            <Pressable
-              key={b.source}
-              onPress={() => handleUploadImage(b.source)}
-              disabled={uploading || !isConnected}
-              style={({ pressed }) => [
-                styles.uploadButton,
-                (uploading || !isConnected) && { opacity: 0.5 },
-                pressed && { transform: [{ scale: 0.97 }] },
-              ]}
-              accessibilityRole="button"
-            >
-              <Ionicons name={b.icon} size={17} color={CLAY} />
-              <Text style={styles.uploadButtonText}>{b.label}</Text>
-            </Pressable>
-          ))}
-        </View>
-        {uploading ? (
-          <View style={{ gap: 4, marginBottom: 12 }} accessibilityLiveRegion="polite">
-            <View style={styles.uploadTrack}>
-              <View style={[styles.uploadFill, { width: `${Math.round(uploadProgress * 100)}%` }]} />
-            </View>
-            <Text style={styles.labelNote}>Uploading… {Math.round(uploadProgress * 100)}%</Text>
-          </View>
-        ) : null}
-        <View style={styles.or}>
-          <View style={styles.orLine} />
-          <Text style={styles.orText}>or paste an image link</Text>
-          <View style={styles.orLine} />
-        </View>
-        <Field
-          value={formData.imageUrl}
-          onChangeText={setField('imageUrl')}
-          changed={changed('imageUrl')}
-          error={errors.imageUrl}
-          placeholder="https://example.com/image.jpg"
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          accessibilityLabel="Product image link"
-        />
-        <FieldError>{errors.imageUrl}</FieldError>
-        <View style={{ height: 14 }} />
-        <Button label="Done" fontSize={15.5} onPress={() => setPhotoOpen(false)} fullWidth />
-      </Sheet>
-
       {/* Delete: what it affects, the gentler option, then press and hold. */}
       <Sheet visible={deleteOpen} onClose={() => setDeleteOpen(false)} locked={deleting}>
         <DeleteProductPanel
-          product={{ ...product, imageUrl: original.imageUrl || product.imageUrl }}
+          product={{ ...product, imageUrl: original.photos.front || product.imageUrl }}
           meta={`${typeLabel(original.type)} · ${peso(original.price)}`}
           onSoldOut={
             savedStock !== 0
@@ -1381,7 +1478,6 @@ const styles = StyleSheet.create({
   priceWas: { fontSize: 12.5, color: '#8B8178', textDecorationLine: 'line-through' },
   shopperMeta: { fontSize: 11.5, color: '#BDB3A9', marginTop: 4 },
   shopperMetaStrong: { color: CREAM, fontWeight: '500' },
-  photoNote: { flexDirection: 'row', alignItems: 'center', gap: 6, marginHorizontal: 4, marginBottom: 10 },
 
   card: {
     padding: 16,
@@ -1618,26 +1714,6 @@ const styles = StyleSheet.create({
 
   sheetTitle: { fontSize: 19, fontWeight: '600', color: INK, marginTop: 2 },
   sheetText: { fontSize: 13, lineHeight: 20, color: MUTED, marginTop: 4, marginBottom: 12 },
-  photoRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  uploadButton: {
-    flex: 1,
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#D9B3A3',
-    backgroundColor: '#FBF1EC',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  uploadButtonText: { fontSize: 12.5, fontWeight: '600', color: CLAY },
-  uploadTrack: { height: 4, borderRadius: 2, backgroundColor: '#EDE5DA', overflow: 'hidden' },
-  uploadFill: { height: '100%', backgroundColor: CLAY },
-  or: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 2, marginBottom: 10 },
-  orLine: { flex: 1, height: 1, backgroundColor: LINE },
-  orText: { fontSize: 11, color: MUTED },
 
   impact: {
     backgroundColor: '#fff',

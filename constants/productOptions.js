@@ -60,17 +60,104 @@ export const CONDITION_OPTIONS = [
   { key: 'new-with-tags', label: 'New with tags', detail: 'Never worn. The original tags are still on.' },
   { key: 'like-new', label: 'Like new', detail: 'Worn once or twice. No signs of wear.' },
   { key: 'gently-used', label: 'Gently used', detail: 'Light signs of wear, nothing that stands out.' },
-  { key: 'well-loved', label: 'Well loved', detail: 'Visible wear or a small flaw, described by the seller.' },
+  { key: 'well-loved', label: 'Well loved', detail: 'Visible wear or a small flaw, described and shown by the seller.' },
 ];
 
 export const conditionOption = (key) => CONDITION_OPTIONS.find((option) => option.key === key) || null;
 
-// "Well loved" is defined as having a flaw, so it can't be saved without
-// saying what the flaw is.
+// "Well loved" is defined as having a flaw, so it can't be saved with a
+// "no flaws found" answer.
 export const CONDITION_NEEDS_FLAWS = 'well-loved';
 
 export const BRAND_MAX = 40;
 export const FLAWS_MAX = 300;
+
+// Whether the seller checked an ukay piece for flaws, and what they found.
+// Asked on every ukay listing with no default answer, so "no flaws" is
+// something a seller said rather than something the form assumed. 'found'
+// needs at least one FLAW_TYPES key, a note (`flaws`) and a photo.
+export const FLAW_CHECK_OPTIONS = [
+  { key: 'none', label: 'No flaws found', detail: 'I checked for stains, holes, fading and damage. Nothing to point out.' },
+  { key: 'found', label: 'Yes, it has flaws', detail: "I'll say what they are and show them." },
+];
+
+// One fixed list rather than free text, for the same reason as the
+// condition scale. The keys are also listed in firestore.rules
+// (productFieldsAreWellTyped); keep the two in step.
+export const FLAW_TYPES = [
+  { key: 'stain', label: 'Stain' },
+  { key: 'hole', label: 'Hole or tear' },
+  { key: 'fading', label: 'Fading' },
+  { key: 'pilling', label: 'Pilling' },
+  { key: 'stretched', label: 'Stretched' },
+  { key: 'hardware', label: 'Zipper or button' },
+  { key: 'other', label: 'Other' },
+];
+
+export const flawTypeLabel = (key) => FLAW_TYPES.find((option) => option.key === key)?.label || null;
+
+// The photos a listing can have besides its flaws. The front is stored in
+// `imageUrl`, as it always was, so the catalog grid, cart, orders and
+// older builds keep reading the one field they know. The rest go in
+// `photos`, a list of { kind, url }, with any flaw photos as kind 'flaw'.
+//
+// Ukay needs the back and the label too: a secondhand shopper can't hold
+// the piece, so the back and the size tag are what they'd check first.
+// Ready-to-wear is new and the same across its stock, so only the front
+// is required there.
+export const PHOTO_SLOTS = [
+  { key: 'front', label: 'Front', hint: 'The whole piece from the front, laid flat or on a hanger.' },
+  { key: 'back', label: 'Back', hint: 'The whole piece from the back.' },
+  { key: 'label', label: 'Label & size tag', hint: 'The brand label and the size tag, close enough to read.' },
+  { key: 'fabric', label: 'Fabric close-up', hint: 'Up close, so shoppers can see the weave and texture.' },
+];
+
+export const FLAW_PHOTOS_MAX = 3;
+
+export const requiredPhotoSlots = (type) => (type === 'ukay-ukay' ? ['front', 'back', 'label'] : ['front']);
+
+export const EMPTY_PHOTOS = { front: '', back: '', label: '', fabric: '' };
+
+// The photo slots and flaw photos as the forms hold them, from a product.
+export const photosFromProduct = (product) => {
+  const stored = Array.isArray(product?.photos) ? product.photos : [];
+  const urlOf = (kind) => stored.find((photo) => photo?.kind === kind && typeof photo.url === 'string')?.url || '';
+  return {
+    photos: { front: product?.imageUrl || '', back: urlOf('back'), label: urlOf('label'), fabric: urlOf('fabric') },
+    flawPhotos: stored
+      .filter((photo) => photo?.kind === 'flaw' && typeof photo.url === 'string' && photo.url)
+      .map((photo) => photo.url),
+  };
+};
+
+// What a save writes to `photos`: every filled slot but the front, in
+// slot order, then the flaw photos. Flaw photos only travel with a
+// "found" answer on an ukay piece.
+export const buildPhotosPayload = (photos, flawPhotos, withFlaws) => [
+  ...PHOTO_SLOTS.filter((slot) => slot.key !== 'front' && photos[slot.key]?.trim()).map((slot) => ({
+    kind: slot.key,
+    url: photos[slot.key].trim(),
+  })),
+  ...(withFlaws ? flawPhotos.filter(Boolean).map((url) => ({ kind: 'flaw', url })) : []),
+];
+
+// Every photo a shopper sees, in order, each with the label shown under
+// it. A product listed before `photos` existed has just its front.
+// Defensive about the stored list, which the rules can only bound in size.
+export const productGallery = (product) => {
+  const { photos, flawPhotos } = photosFromProduct(product);
+  const showFlaws = product?.type === 'ukay-ukay' && product?.flawCheck === 'found';
+  return [
+    ...PHOTO_SLOTS.filter((slot) => photos[slot.key]).map((slot) => ({
+      kind: slot.key,
+      url: photos[slot.key],
+      label: slot.label,
+    })),
+    ...(showFlaws
+      ? flawPhotos.map((url, i) => ({ kind: 'flaw', url, label: flawPhotos.length > 1 ? `Flaw ${i + 1}` : 'Flaw' }))
+      : []),
+  ];
+};
 
 // Fallback only, for products saved before per-product colors/sizes
 // existed — not used by the admin forms themselves, which require a real

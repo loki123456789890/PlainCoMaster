@@ -530,6 +530,22 @@ service cloud.firestore {
         data.get('condition', 'like-new') in ['new-with-tags', 'like-new', 'gently-used', 'well-loved'] &&
         data.get('flaws', '') is string &&
         data.get('flaws', '').size() <= 300 &&
+        // Whether the seller checked an ukay piece for flaws, and the kinds
+        // found, from constants/productOptions.js FLAW_CHECK_OPTIONS and
+        // FLAW_TYPES. Optional here and required by the app, like
+        // condition, so the survey APK can still add products.
+        data.get('flawCheck', 'none') in ['none', 'found'] &&
+        data.get('flawTags', []) is list &&
+        data.get('flawTags', []).size() <= 7 &&
+        data.get('flawTags', []).hasOnly(['stain', 'hole', 'fading', 'pilling', 'stretched', 'hardware', 'other']) &&
+        // Every photo besides the front (imageUrl): back, label, fabric and
+        // up to three of flaws, so seven at most; eight leaves room.
+        // HONEST LIMITATION: rules have no loop, so the entries' shape
+        // ({ kind, url }) is not checked here. The size cap bounds what a
+        // malformed list can cost, and the app reads it defensively
+        // (productGallery in constants/productOptions.js).
+        data.get('photos', []) is list &&
+        data.get('photos', []).size() <= 8 &&
         // Who it's for, from constants/productOptions.js SECTION_OPTIONS.
         data.get('section', 'unisex') in ['women', 'men', 'unisex', 'kids'];
     }
@@ -556,7 +572,8 @@ service cloud.firestore {
       return request.resource.data.keys().hasOnly(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',
            'colors', 'sizes', 'createdAt', 'measurements', 'measurementType',
-           'storeId', 'brand', 'condition', 'flaws', 'section']
+           'storeId', 'brand', 'condition', 'flaws', 'section',
+           'flawCheck', 'flawTags', 'photos']
         ) &&
         request.resource.data.keys().hasAll(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',

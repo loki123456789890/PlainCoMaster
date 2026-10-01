@@ -1,15 +1,14 @@
 // utils/imageUpload.js
 //
 // Uploading a product photo to Cloud Storage and getting back the URL that
-// goes into a product's `imageUrl` field.
+// goes into a product's `imageUrl` field (the front) or its `photos` list
+// (back, label, fabric, flaws — see components/admin/PhotoSlots.js).
 //
-// Deliberately NO schema change: the download URL is a string and lands in
-// the same `imageUrl` field a pasted URL always did. That matters because
-// isNewProductShape() in firestore.rules allowlists an exact key set, and
-// productFieldsAreWellTyped() caps imageUrl at 2000 characters — a
-// Firebase download URL runs about 150, so both rules keep applying
-// unchanged. Products created before this existed keep working, and a
-// manager who would rather paste a URL still can.
+// The download URL is a plain string, the same as a pasted URL, so either
+// can fill any slot. productFieldsAreWellTyped() in firestore.rules caps
+// imageUrl at 2000 characters — a Firebase download URL runs about 150.
+// Products created before uploads existed keep working, and a manager who
+// would rather paste a URL still can.
 //
 // Shaped like the rest of the app's async helpers (ProductContext,
 // CartContext): resolves to { success, ... } rather than throwing, so call

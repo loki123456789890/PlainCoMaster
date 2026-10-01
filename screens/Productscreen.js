@@ -9,8 +9,13 @@
 // the cart button and brings up a short "Added to cart" panel instead of a
 // dialog. Everything shown is the product's live data. Beside the category
 // sit who it's for (Women's, Men's, Unisex, Kids') and, for an ukay-ukay
-// piece, its condition, which also gets a Condition section with the
-// seller's note on any flaws.
+// piece, its condition, which also gets a Condition section with what the
+// seller found when they checked it for flaws.
+//
+// The photo is a gallery when the listing has more than one (front, back,
+// label, fabric, flaws): swipe through it, tap to open it full screen and
+// zoom (components/shop/PhotoViewer.js). Flaw photos are in the gallery
+// too, not tucked away, and also sit beside the flaws they show.
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -19,6 +24,7 @@ import {
   Pressable,
   ActivityIndicator,
   AccessibilityInfo,
+  ScrollView,
   useWindowDimensions,
 } from 'react-native';
 import { showAppAlert } from '../utils/appAlert';
@@ -56,6 +62,8 @@ import {
   DEFAULT_SIZES,
   conditionOption,
   sectionOption,
+  productGallery,
+  flawTypeLabel,
 } from '../constants/productOptions';
 import { Colors } from '../constants/theme';
 import SkeletonBlock from '../components/ui/Skeleton';
@@ -65,6 +73,7 @@ import Avatar from '../components/ui/Avatar';
 import Reveal from '../components/shop/Reveal';
 import StoreLogo from '../components/shop/StoreLogo';
 import SizeGuideSheet, { measuredFields, measurementUnit } from '../components/shop/SizeGuideSheet';
+import PhotoViewer from '../components/shop/PhotoViewer';
 import StaffPreviewDock, { DOCK_HEIGHT, STRIP_HEIGHT } from '../components/shop/StaffPreviewDock';
 import { TopBar, BigEmpty } from '../components/shop/TabScreen';
 import {
@@ -139,6 +148,38 @@ function TypeIcon({ ukay, color }) {
   );
 }
 
+// One page of the photo gallery at the top. Each keeps its own loading
+// state, and only fetches once it's the page shown or next to it.
+function HeroPhoto({ uri, width, height, load, label, onPress }) {
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={failed}
+      style={{ width, height }}
+      accessibilityRole="imagebutton"
+      accessibilityLabel={label}
+      accessibilityHint="Opens the photos full screen, where you can zoom in"
+    >
+      {!loaded && !failed ? <SkeletonBlock style={StyleSheet.absoluteFill} /> : null}
+      {failed ? (
+        <View style={styles.imageFallback}>
+          <Ionicons name="image-outline" size={40} color={MUTED} />
+          <Text style={styles.imageFallbackText}>Photo unavailable</Text>
+        </View>
+      ) : load ? (
+        <ProductImage
+          uri={uri}
+          style={StyleSheet.absoluteFill}
+          onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
+        />
+      ) : null}
+    </Pressable>
+  );
+}
+
 // A round button floating over the photo. Its cream backing fades out as
 // the header turns solid behind it.
 function FloatButton({ solid, children, style, ...props }) {
@@ -206,8 +247,10 @@ export default function ProductScreen({ navigation, route }) {
   const [justAdded, setJustAdded] = useState(false);
   const [added, setAdded] = useState(null); // { text } while the panel is up
   const [needSize, setNeedSize] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
-  const [imageFailed, setImageFailed] = useState(false);
+  // Which gallery photo is showing, and which one the full-screen viewer
+  // opened on (null while it's closed).
+  const [photoIndex, setPhotoIndex] = useState(0);
+  const [viewerIndex, setViewerIndex] = useState(null);
   const [sizeGuideVisible, setSizeGuideVisible] = useState(false);
   const [reviews, setReviews] = useState([]);
   const [reviewsLoading, setReviewsLoading] = useState(true);
@@ -249,7 +292,19 @@ export default function ProductScreen({ navigation, route }) {
   const section = sectionOption(product?.section);
   // Ukay-ukay only; older ukay listings have none and simply show none.
   const condition = isUkay ? conditionOption(product?.condition) : null;
-  const flaws = condition ? product?.flaws?.trim() || '' : '';
+  // What the seller found when they checked it for flaws. Listings from
+  // before the question have no answer, and show their flaw note (if any)
+  // as they always did.
+  const flawCheck = isUkay ? product?.flawCheck || null : null;
+  const flawTags = flawCheck === 'found' && Array.isArray(product?.flawTags) ? product.flawTags.map(flawTypeLabel).filter(Boolean) : [];
+  const flaws = isUkay && (condition || flawCheck === 'found') ? product?.flaws?.trim() || '' : '';
+
+  // Every photo, front first. A listing with no photo at all still gets
+  // one page, so the layout (and the placeholder) stays the same.
+  const storedGallery = productGallery(product);
+  const gallery = storedGallery.length ? storedGallery : [{ kind: 'front', url: productImage, label: 'Front' }];
+  const flawGalleryStart = gallery.findIndex((photo) => photo.kind === 'flaw');
+  const flawPhotos = flawGalleryStart >= 0 ? gallery.slice(flawGalleryStart) : [];
 
   // The size guide only earns its link when the store recorded something.
   const hasMeasurements = Boolean(
@@ -315,6 +370,14 @@ export default function ProductScreen({ navigation, route }) {
 
   // ---- scrolling: the photo drifts and zooms, the header turns solid
   const heroHeight = Math.min(440, Math.round(width * 1.13));
+  // The gallery can shrink under the page (a seller removes a photo).
+  useEffect(() => {
+    if (photoIndex > gallery.length - 1) setPhotoIndex(0);
+  }, [gallery.length, photoIndex]);
+  const openViewer = (index) => {
+    Haptics.selectionAsync();
+    setViewerIndex(index);
+  };
   const scrollRef = useAnimatedRef();
   const scrollY = useSharedValue(0);
   const solid = useSharedValue(0);
@@ -574,22 +637,47 @@ export default function ProductScreen({ navigation, route }) {
         {/* Photo */}
         <View style={[styles.hero, { height: heroHeight }]}>
           <Animated.View style={[StyleSheet.absoluteFill, heroStyle, { transformOrigin: 'top' }]}>
-            {!imageLoaded && !imageFailed && <SkeletonBlock style={StyleSheet.absoluteFill} />}
-            {imageFailed ? (
-              <View style={styles.imageFallback}>
-                <Ionicons name="image-outline" size={40} color={MUTED} />
-                <Text style={styles.imageFallbackText}>Photo unavailable</Text>
+            <ScrollView
+              horizontal
+              pagingEnabled
+              scrollEnabled={gallery.length > 1}
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(e) => setPhotoIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
+            >
+              {gallery.map((photo, i) => (
+                <HeroPhoto
+                  key={`${i}-${photo.url}`}
+                  uri={photo.url}
+                  width={width}
+                  height={heroHeight}
+                  // The shown photo and its neighbours only: the rest wait
+                  // until they're swiped toward, to spare mobile data.
+                  load={Math.abs(i - photoIndex) <= 1}
+                  label={`${photo.label} photo of ${productName}${gallery.length > 1 ? `, ${i + 1} of ${gallery.length}` : ''}`}
+                  onPress={() => openViewer(i)}
+                />
+              ))}
+            </ScrollView>
+          </Animated.View>
+          {/* What the shown photo is, how many there are, and that it opens
+              to zoom. Sits above the sheet's rounded overlap. */}
+          <View style={styles.heroMeta} pointerEvents="none">
+            {gallery.length > 1 ? (
+              <View style={[styles.heroPill, gallery[photoIndex]?.kind === 'flaw' && styles.heroPillFlaw]}>
+                <Text style={styles.heroPillText}>{gallery[photoIndex]?.label}</Text>
               </View>
             ) : (
-              <ProductImage
-                uri={productImage}
-                style={StyleSheet.absoluteFill}
-                onLoad={() => setImageLoaded(true)}
-                onError={() => setImageFailed(true)}
-                accessibilityLabel={`Photo of ${productName}`}
-              />
+              <View />
             )}
-          </Animated.View>
+            <View style={styles.heroPill}>
+              <Ionicons name="expand-outline" size={12} color={CREAM} />
+              {gallery.length > 1 ? (
+                <Text style={styles.heroPillText}>
+                  {photoIndex + 1} / {gallery.length}
+                </Text>
+              ) : null}
+            </View>
+          </View>
           {isOutOfStock ? (
             <View style={[styles.soldOutTag, { top: insets.top + 64 }]}>
               <Text style={styles.soldOutTagText}>Sold out</Text>
@@ -811,17 +899,60 @@ export default function ProductScreen({ navigation, route }) {
             </View>
           </Reveal>
 
-          {condition ? (
+          {condition || flawCheck ? (
             <Reveal delay={380} style={styles.block}>
               <View style={styles.blockHead}>
                 <Text style={styles.blockTitle}>Condition</Text>
-                <Text style={[styles.blockMeta, styles.conditionMeta]}>{condition.label}</Text>
+                {condition ? <Text style={[styles.blockMeta, styles.conditionMeta]}>{condition.label}</Text> : null}
               </View>
-              <Text style={styles.desc}>{condition.detail}</Text>
-              {flaws ? (
+              {condition ? <Text style={styles.desc}>{condition.detail}</Text> : null}
+              {flawCheck === 'none' ? (
+                <View style={styles.noFlaws}>
+                  <Ionicons name="checkmark-circle-outline" size={16} color={MOSS} />
+                  <Text style={styles.noFlawsText}>
+                    <Text style={{ fontWeight: '600' }}>No flaws found. </Text>
+                    The seller checked it for stains, holes, fading and damage.
+                  </Text>
+                </View>
+              ) : flawCheck === 'found' ? (
+                <View style={styles.flawsBox}>
+                  <View style={styles.flawsHead}>
+                    <Ionicons name="information-circle-outline" size={16} color="#6B5A2E" />
+                    <Text style={styles.flawsTitle}>Flaws the seller found</Text>
+                  </View>
+                  {flawTags.length ? (
+                    <View style={styles.flawTags}>
+                      {flawTags.map((label) => (
+                        <View key={label} style={styles.flawTag}>
+                          <Text style={styles.flawTagText}>{label}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
+                  {flaws ? <Text style={styles.flawsText}>{flaws}</Text> : null}
+                  {flawPhotos.length ? (
+                    <View style={styles.flawThumbs}>
+                      {flawPhotos.map((photo, i) => (
+                        <Pressable
+                          key={`${i}-${photo.url}`}
+                          onPress={() => openViewer(flawGalleryStart + i)}
+                          style={({ pressed }) => [styles.flawThumb, pressed && { transform: [{ scale: 0.95 }] }]}
+                          accessibilityRole="imagebutton"
+                          accessibilityLabel={`${photo.label}, opens full screen`}
+                        >
+                          <ProductImage uri={photo.url} style={StyleSheet.absoluteFill} />
+                          <View style={styles.flawThumbZoom}>
+                            <Ionicons name="expand-outline" size={11} color={CREAM} />
+                          </View>
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : null}
+                </View>
+              ) : flaws ? (
                 <View style={styles.flaws}>
                   <Ionicons name="information-circle-outline" size={16} color="#6B5A2E" />
-                  <Text style={styles.flawsText}>
+                  <Text style={[styles.flawsText, { flex: 1 }]}>
                     <Text style={{ fontWeight: '600' }}>Flaws noted by the seller: </Text>
                     {flaws}
                   </Text>
@@ -1106,6 +1237,14 @@ export default function ProductScreen({ navigation, route }) {
         </Animated.View>
       ) : null}
 
+      <PhotoViewer
+        visible={viewerIndex !== null}
+        photos={gallery}
+        initialIndex={viewerIndex ?? 0}
+        productName={productName}
+        onClose={() => setViewerIndex(null)}
+      />
+
       <SizeGuideSheet
         visible={sizeGuideVisible}
         onClose={() => setSizeGuideVisible(false)}
@@ -1127,6 +1266,26 @@ const styles = StyleSheet.create({
   imageFallbackText: { fontSize: 13, color: MUTED, fontWeight: '600' },
   soldOutTag: { position: 'absolute', left: 16, backgroundColor: INK, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
   soldOutTagText: { color: CREAM, fontSize: 12, fontWeight: '600' },
+  heroMeta: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 28 + 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  heroPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(28,27,26,0.62)',
+  },
+  heroPillFlaw: { backgroundColor: 'rgba(107,90,46,0.85)' },
+  heroPillText: { fontSize: 11.5, fontWeight: '600', color: CREAM },
 
   sheet: {
     marginTop: -28,
@@ -1251,7 +1410,36 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: '#F6EFE3',
   },
-  flawsText: { flex: 1, fontSize: 12.5, lineHeight: 19, color: '#6B5A2E' },
+  flawsText: { fontSize: 12.5, lineHeight: 19, color: '#6B5A2E' },
+  noFlaws: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#EEF0EA',
+  },
+  noFlawsText: { flex: 1, fontSize: 12.5, lineHeight: 19, color: '#37412F' },
+  flawsBox: { marginTop: 10, padding: 12, borderRadius: 14, backgroundColor: '#F6EFE3', gap: 8 },
+  flawsHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  flawsTitle: { fontSize: 12.5, fontWeight: '600', color: '#6B5A2E' },
+  flawTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
+  flawTag: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999, borderWidth: 1, borderColor: '#E3D3B3', backgroundColor: '#FBF6EC' },
+  flawTagText: { fontSize: 11, fontWeight: '600', color: '#6B5A2E' },
+  flawThumbs: { flexDirection: 'row', gap: 8, marginTop: 2 },
+  flawThumb: { width: 72, height: 72, borderRadius: 12, overflow: 'hidden' },
+  flawThumbZoom: {
+    position: 'absolute',
+    right: 4,
+    bottom: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(28,27,26,0.6)',
+  },
 
   reviewsError: { fontSize: 13, color: MUTED, lineHeight: 19 },
   summary: { padding: 16, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: CARD_LINE, gap: 12, marginBottom: 4 },

@@ -193,6 +193,11 @@ export const ProductProvider = ({ children }) => {
       if (productData.brand) docData.brand = productData.brand;
       if (productData.condition) docData.condition = productData.condition;
       if (productData.flaws) docData.flaws = productData.flaws;
+      // The flaw answer (ukay only), the kinds of flaw, and every photo
+      // besides the front (which is imageUrl). See constants/productOptions.js.
+      if (productData.flawCheck) docData.flawCheck = productData.flawCheck;
+      if (productData.flawTags?.length) docData.flawTags = productData.flawTags;
+      if (productData.photos?.length) docData.photos = productData.photos;
       const docRef = await addDoc(collection(db, 'products'), docData);
       // Not awaited: the product exists at this point, so the caller's
       // success path shouldn't wait on (or fail with) the log write.

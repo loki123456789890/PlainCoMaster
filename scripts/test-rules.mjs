@@ -981,6 +981,50 @@ await test('SECT-2  section is the fixed list, on create and on edit', async () 
   await assertSucceeds(updateDoc(doc(db, 'products/p1'), { section: 'unisex' }));
 });
 
+await test('PHOTO-1  photos, the flaw answer and flaw kinds are accepted on a product', async () => {
+  const db = asSeller();
+  await assertSucceeds(
+    setDoc(doc(db, 'products/photo1'), productDoc({
+      type: 'ukay-ukay', condition: 'gently-used', flawCheck: 'found', flawTags: ['stain', 'fading'],
+      flaws: 'Faint mark on the left cuff.',
+      photos: [
+        { kind: 'back', url: 'https://example.com/back.jpg' },
+        { kind: 'label', url: 'https://example.com/label.jpg' },
+        { kind: 'flaw', url: 'https://example.com/cuff.jpg' },
+      ],
+    }))
+  );
+  await assertSucceeds(
+    setDoc(doc(db, 'products/photo2'), productDoc({ type: 'ukay-ukay', condition: 'like-new', flawCheck: 'none' }))
+  );
+  // And on edit: the answer can be given to a listing that predates it.
+  await assertSucceeds(
+    updateDoc(doc(db, 'products/p1'), { flawCheck: 'none', photos: [{ kind: 'back', url: 'https://example.com/b.jpg' }] })
+  );
+});
+
+await test('PHOTO-2  a build without photos or the flaw answer is still accepted', async () => {
+  // Required by the app (Add Product), not by the rules, so the survey
+  // APK keeps working. Same arrangement as COND-2.
+  await assertSucceeds(
+    setDoc(doc(asSeller(), 'products/photo3'), productDoc({ type: 'ukay-ukay', condition: 'like-new' }))
+  );
+});
+
+await test('PHOTO-3  the flaw answer and kinds are fixed lists, photos a bounded list', async () => {
+  const db = asSeller();
+  const ukay = (overrides) => productDoc({ type: 'ukay-ukay', condition: 'like-new', ...overrides });
+  await assertFails(setDoc(doc(db, 'products/photo4'), ukay({ flawCheck: 'maybe' })));
+  await assertFails(setDoc(doc(db, 'products/photo5'), ukay({ flawCheck: true })));
+  await assertFails(setDoc(doc(db, 'products/photo6'), ukay({ flawTags: ['stain', 'smells'] })));
+  await assertFails(setDoc(doc(db, 'products/photo7'), ukay({ flawTags: 'stain' })));
+  await assertFails(setDoc(doc(db, 'products/photo8'), ukay({ photos: 'https://example.com/a.jpg' })));
+  const nine = Array.from({ length: 9 }, (_, i) => ({ kind: 'flaw', url: `https://example.com/${i}.jpg` }));
+  await assertFails(setDoc(doc(db, 'products/photo9'), ukay({ photos: nine })));
+  await assertFails(updateDoc(doc(db, 'products/p1'), { flawTags: ['smells'] }));
+  await assertFails(updateDoc(doc(db, 'products/p1'), { photos: nine }));
+});
+
 const supportDoc = (uid, overrides = {}) => ({
   message: 'My order has not arrived.',
   userId: uid,
