@@ -1803,6 +1803,50 @@ the same thing whichever store sells the item.
 | FR-B5 | The product page shows the brand above the name and, for ukay-ukay, the condition, its definition and any flaws note. |
 | FR-B6 | Changing a product to ready-to-wear removes its condition and flaws note when it is saved. |
 
+### Use case updates
+
+**Add Product** (Store Manager): add to the main flow, after the product
+name and type are entered:
+
+> 1. The Store Manager optionally enters the brand.
+> 2. If the type is Ukay-Ukay, the system displays the condition scale
+>    with each grade's definition, and the Store Manager selects one.
+> 3. The Store Manager optionally describes any flaws.
+>
+> *Alternate flow — no condition selected (ukay-ukay):* the system
+> highlights the Condition field with "Pick the condition it's in." and
+> does not save the product.
+>
+> *Alternate flow — Well loved without a flaws note:* the system
+> highlights the Flaws field with "Say what the wear or flaw is, so
+> shoppers know before buying." and does not save the product.
+
+**Edit Product** (Store Manager): add:
+
+> The Store Manager may change the brand, condition and flaws note.
+> Changed fields are marked and can be undone individually, like the
+> other fields.
+>
+> *Alternate flow — ukay-ukay product created before condition existed:*
+> the product opens with no condition selected and the note "Needed to
+> save"; the Store Manager must select a condition before any change can
+> be saved.
+
+**View Product Details** (Customer): add:
+
+> The system displays the brand, if recorded, above the product name. For
+> an ukay-ukay product with a recorded condition, it also displays the
+> condition beside the category, and a Condition section with the grade's
+> definition and the seller's flaws note.
+
+### Screens — module list (section 7)
+
+- **Add Product / Edit Product** (Store Manager): new Brand field; for
+  ukay-ukay, new Condition and Flaws fields.
+- **Product Details** (Customer): brand, condition label and Condition
+  section.
+- **Shop, Store page, Manage Products**: search also matches brand.
+
 ### Business rules / security (enforced by security rules)
 
 - `condition` must be one of the four scale values; `brand` and `flaws`
@@ -1984,6 +2028,20 @@ proportionality principle already applied to customer data (section 12).
 | FR-L2 | The store page and the store's card in "Shop by store" show the location, when set. |
 | FR-L3 | The product page shows "Ships from \<location\>" under "Sold by", when set. |
 | FR-L4 | A Store Manager cannot set another store's location; a Platform Admin cannot set any store's location. |
+
+### Use case updates
+
+**Edit Store Profile** (Store Manager): add:
+
+> The Store Manager may enter the city or area the store ships from. The
+> live preview shows it as it is typed. Saving with the field empty
+> removes the location.
+
+**View Store** and **View Product Details** (Customer): add:
+
+> If the store has recorded a location, the system displays it on the
+> store's page and its "Shop by store" card, and as "Ships from
+> \<location\>" under "Sold by" on each of the store's products.
 
 ### Business rules / security (enforced by security rules)
 
