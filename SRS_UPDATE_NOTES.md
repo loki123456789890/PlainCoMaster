@@ -2682,10 +2682,11 @@ A review could say an item was "Not like the photos" but could not show
 it. The only picture on a review was the author's profile photo. A buyer
 can now add photos of the item as it arrived.
 
-> **Status (1 Oct 2026):** built and tested against the emulator. Neither
-> the Firestore rules nor the Storage rules are deployed yet. The change
-> does not affect the APK used for the UAT survey: its reviews, which
-> have no photos, are still accepted.
+> **Status (1 Oct 2026):** built and tested against the emulator; the
+> Firestore and Storage rules are deployed, and a review with a photo was
+> posted from a phone against production. The change does not affect the
+> APK used for the UAT survey: its reviews, which have no photos, are
+> still accepted.
 
 ### What changed — suggested wording
 
