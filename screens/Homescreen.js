@@ -22,13 +22,14 @@ import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import SkeletonBlock from '../components/ui/Skeleton';
-import ProductCard from '../components/shop/ProductCard';
+import ProductCard, { isJustIn, isSoldOut, JUST_IN_DAYS } from '../components/shop/ProductCard';
 import TabBar, { goToTab } from '../components/shop/TabBar';
 import Reveal from '../components/shop/Reveal';
 
 const RAIL_CARD_WIDTH = 148;
 const RAIL_GAP = 12;
 const NEW_ARRIVALS = 6;
+const JUST_IN_MAX = 12;
 const UKAY_FINDS = 10;
 
 const getTimeGreeting = () => {
@@ -185,8 +186,17 @@ export default function HomeScreen({ navigation }) {
   const firstName = profile.name.split(' ')[0];
 
   // Newest first: ProductContext's query is already orderBy('createdAt',
-  // 'desc'), so `products` arrives in that order.
-  const newArrivals = products.slice(0, NEW_ARRIVALS);
+  // 'desc'), so `products` arrives in that order. The rail is "Just in"
+  // while anything was listed in the last few days — all of those, topped
+  // up with the next newest so it never looks bare (each card carries its
+  // own "Just in" note, so the older ones don't pass for new). Otherwise
+  // it's plain "New arrivals".
+  const justInCount = products.filter((p) => isJustIn(p) && !isSoldOut(p)).length;
+  const newArrivals = products.slice(0, Math.max(NEW_ARRIVALS, Math.min(justInCount, JUST_IN_MAX)));
+  const arrivalsTitle = justInCount ? 'Just in' : 'New arrivals';
+  const arrivalsCaption = justInCount
+    ? `${justInCount} new in the last ${JUST_IN_DAYS} days`
+    : 'The latest from our stores';
   const ukay = products.filter((p) => p.type === 'ukay-ukay');
   const rtwCount = products.filter((p) => p.type === 'ready-to-wear').length;
   const ukayFinds = ukay.slice(0, UKAY_FINDS);
@@ -338,8 +348,8 @@ export default function HomeScreen({ navigation }) {
           </View>
 
           <SectionHead
-            title="New arrivals"
-            caption="Just added by our stores"
+            title={loading ? 'New arrivals' : arrivalsTitle}
+            caption={loading ? 'The latest from our stores' : arrivalsCaption}
             onSeeAll={() => openShop({ filterType: 'all' })}
             delay={300}
           />

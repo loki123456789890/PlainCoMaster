@@ -3,8 +3,9 @@
 // One product, as Home's rails and the Shop grid show it (the approved
 // home/shop preview): a 4:5 photo with the category tag and the heart on
 // it, then the name and the price. Sold out is a veil over the photo and a
-// struck-through price. Store name is optional — the all-stores views pass
-// it, a store's own page doesn't.
+// struck-through price; a fresh listing gets a "Just in" note on the photo
+// and a last piece a note beside the price. Store name is optional — the
+// all-stores views pass it, a store's own page doesn't.
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import Animated, {
@@ -25,6 +26,23 @@ import ProductImage from '../ui/ProductImage';
 export const isSoldOut = (product) => {
   const n = parseInt(product?.stock, 10);
   return !Number.isNaN(n) && n === 0;
+};
+
+// "Just in": listed in the last three days. A listing the server hasn't
+// stamped yet (createdAt still null on the local write) isn't just in yet.
+export const JUST_IN_DAYS = 3;
+const JUST_IN_MS = JUST_IN_DAYS * 24 * 60 * 60 * 1000;
+export const isJustIn = (product, now = Date.now()) => {
+  const listed = product?.createdAt?.toMillis?.();
+  return typeof listed === 'number' && now - listed < JUST_IN_MS;
+};
+
+// The last piece, worded as the product page words it: ukay-ukay is one
+// of a kind, ready-to-wear is down to its last one. Plain text beside the
+// price, not a badge — scarcity is stated, not shouted.
+const lastPieceNote = (product) => {
+  if (parseInt(product?.stock, 10) !== 1) return null;
+  return product.type === 'ukay-ukay' ? 'One of a kind' : 'Only 1 left';
 };
 
 // Heart on the photo: a dip and a settle on toggle, since favoriting
@@ -69,6 +87,15 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
   const [imageFailed, setImageFailed] = useState(false);
   const isUkay = product.type === 'ukay-ukay';
   const soldOut = !unavailable && isSoldOut(product);
+  const justIn = !unavailable && !soldOut && isJustIn(product);
+  const lastPiece = unavailable ? null : lastPieceNote(product);
+  const spoken = [
+    product.name,
+    unavailable ? 'no longer available' : `₱${product.price}`,
+    soldOut && 'sold out',
+    justIn && 'just in',
+    lastPiece && lastPiece.toLowerCase(),
+  ].filter(Boolean);
 
   return (
     <AnimatedPressable
@@ -76,7 +103,7 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
       onPress={onPress}
       rippleColor={Colors.light.border}
       accessibilityRole="button"
-      accessibilityLabel={`${product.name}, ${unavailable ? 'no longer available' : `₱${product.price}`}${soldOut ? ', sold out' : ''}`}
+      accessibilityLabel={spoken.join(', ')}
     >
       <View style={[styles.photo, unavailable && styles.photoGone]}>
         {imageFailed || !product.imageUrl ? (
@@ -95,6 +122,11 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
           <Text style={styles.tagText}>{isUkay ? 'Ukay' : 'RTW'}</Text>
         </View>
         <Heart favorited={favorited} onToggle={onToggleFavorite} name={product.name} />
+        {justIn ? (
+          <View style={styles.justIn} pointerEvents="none">
+            <Text style={styles.justInText}>Just in</Text>
+          </View>
+        ) : null}
         {soldOut ? (
           <View style={styles.soldVeil} pointerEvents="none">
             <View style={styles.soldPill}>
@@ -117,7 +149,14 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
           <Text style={styles.goneText}>No longer available</Text>
         </View>
       ) : (
-        <Text style={[styles.price, soldOut && styles.priceSold]}>₱{Number(product.price).toLocaleString('en-PH')}</Text>
+        <View style={styles.priceRow}>
+          <Text style={[styles.price, soldOut && styles.priceSold]}>₱{Number(product.price).toLocaleString('en-PH')}</Text>
+          {lastPiece ? (
+            <Text style={styles.lastPiece} numberOfLines={1}>
+              {lastPiece}
+            </Text>
+          ) : null}
+        </View>
       )}
     </AnimatedPressable>
   );
@@ -175,7 +214,21 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
   },
   store: { marginHorizontal: 2, marginBottom: 2, fontSize: 11.5, color: Colors.light.icon },
-  price: { marginHorizontal: 2, fontSize: 14.5, fontWeight: '600', color: Colors.light.highlight },
+  // Same frosted canvas as the heart, so it reads as a note on the photo
+  // rather than a sale sticker.
+  justIn: {
+    position: 'absolute',
+    left: 8,
+    bottom: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(250,247,242,0.9)',
+  },
+  justInText: { fontSize: 10.5, fontWeight: '600', color: Colors.light.text },
+  priceRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginHorizontal: 2 },
+  price: { fontSize: 14.5, fontWeight: '600', color: Colors.light.highlight },
+  lastPiece: { flexShrink: 1, fontSize: 11.5, color: Colors.light.icon },
   goneRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginHorizontal: 2, marginTop: 2 },
   goneText: { fontSize: 11.5, color: Colors.light.icon },
   priceSold: { color: '#A89F97', textDecorationLine: 'line-through' },
