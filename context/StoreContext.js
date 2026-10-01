@@ -48,6 +48,8 @@ export const StoreProvider = ({ children }) => {
               // The store profile its manager edits (AdminStoreProfileScreen).
               logoUrl: data.logoUrl || null,
               description: data.description || '',
+              // City or area it ships from, e.g. "Cubao, Quezon City".
+              location: data.location || '',
             };
           });
           list.sort((a, b) => a.name.localeCompare(b.name));

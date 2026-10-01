@@ -91,7 +91,9 @@ const STORE_ID = 'sandbox-store';
 const MANAGER_EMAIL = 'sam@example.com';
 const ADMIN_EMAIL = 'ada@example.com';
 
-await writeDoc(`stores/${STORE_ID}`, { name: 'Sandbox Ukay', createdAt: new Date() });
+// Has a location and the other store doesn't, so both the 'Ships from'
+// line and its absence can be seen.
+await writeDoc(`stores/${STORE_ID}`, { name: 'Sandbox Ukay', location: 'Cubao, Quezon City', createdAt: new Date() });
 // A second store with its own manager, so a cart holding both products
 // checks out as two orders — one per store — and each manager can be
 // seen to get only their own.

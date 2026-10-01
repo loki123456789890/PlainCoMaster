@@ -325,6 +325,7 @@ function Catalogue({ navigation, route }) {
                         s.name,
                         `${count} ${count === 1 ? 'item' : 'items'}`,
                         rated ? `rated ${formatAverage(rating.average)} out of 5` : isNew ? 'new store' : null,
+                        s.location ? `ships from ${s.location}` : null,
                       ]
                         .filter(Boolean)
                         .join(', ');
@@ -363,6 +364,14 @@ function Catalogue({ navigation, route }) {
                                 </>
                               ) : null}
                             </View>
+                            {s.location ? (
+                              <View style={styles.storeCardMetaRow}>
+                                <Ionicons name="location-outline" size={12} color={Colors.light.icon} />
+                                <Text style={styles.storeCardMeta} numberOfLines={1}>
+                                  {s.location}
+                                </Text>
+                              </View>
+                            ) : null}
                           </View>
                           <Ionicons name="chevron-forward" size={16} color="#B3AAA0" style={styles.storeChevron} />
                         </AnimatedPressable>

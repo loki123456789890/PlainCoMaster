@@ -1867,6 +1867,30 @@ await test('PROFILE-2  a store manager can edit their own store\'s logo and desc
   await assertSucceeds(updateDoc(store1(asAdmin()), { name: 'Tindahan ni Sam 2' }));
 });
 
+await test('LOC-1  a store manager can set and remove where their store ships from', async () => {
+  const store1 = (db) => doc(db, 'stores/store1');
+  await assertSucceeds(updateDoc(store1(asSeller()), { location: 'Cubao, Quezon City' }));
+  // Saved together with the rest of the profile, as Store Profile does.
+  await assertSucceeds(updateDoc(store1(asSeller()), {
+    logoUrl: deleteField(), description: 'Preloved denim.', location: 'Quezon City',
+  }));
+  await assertSucceeds(updateDoc(store1(asSeller()), { location: deleteField() }));
+  // An older build saves only logo and description; that must keep working.
+  await assertSucceeds(updateDoc(store1(asSeller()), { description: 'From the survey APK.' }));
+});
+
+await test('LOC-2  location is short text, and only the store\'s own manager sets it', async () => {
+  const store1 = (db) => doc(db, 'stores/store1');
+  await assertFails(updateDoc(store1(asSeller()), { location: 'x'.repeat(61) }));
+  await assertFails(updateDoc(store1(asSeller()), { location: '   ' }));
+  await assertFails(updateDoc(store1(asSeller()), { location: 42 }));
+  await assertFails(updateDoc(store1(asOtherSeller()), { location: 'Makati' }));
+  await assertFails(updateDoc(store1(asCustomer()), { location: 'Makati' }));
+  await assertFails(updateDoc(store1(asDeactivatedSeller()), { location: 'Makati' }));
+  // The Platform Admin's branch is the name only.
+  await assertFails(updateDoc(store1(asAdmin()), { location: 'Makati' }));
+});
+
 await test('PROFILE-3  a review may carry the author\'s photo', async () => {
   const review = (overrides) => setDoc(doc(asCustomer(), 'reviews/delivered1_p1'), {
     orderId: 'delivered1', productId: 'p1', productName: 'Denim Jacket',

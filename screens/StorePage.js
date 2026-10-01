@@ -208,7 +208,15 @@ export default function StorePage({ navigation, route }) {
                   <Text style={styles.catTagText}>{theme.label}</Text>
                 </View>
               ) : null}
-              {items.length && since ? <Text style={styles.metaText}>·</Text> : null}
+              {/* Where it ships from, when the store has said. */}
+              {items.length && store?.location ? <Text style={styles.metaText}>·</Text> : null}
+              {store?.location ? (
+                <View style={styles.metaPlace} accessibilityLabel={`Ships from ${store.location}`}>
+                  <Ionicons name="location-outline" size={13} color={Colors.light.icon} />
+                  <Text style={styles.metaText}>{store.location}</Text>
+                </View>
+              ) : null}
+              {(items.length || store?.location) && since ? <Text style={styles.metaText}>·</Text> : null}
               {since ? <Text style={styles.metaText}>{since}</Text> : null}
             </View>
             <View style={styles.stats}>
@@ -448,6 +456,7 @@ const styles = StyleSheet.create({
   idName: { marginTop: 10, marginBottom: 2, fontSize: 21, fontWeight: '600', letterSpacing: -0.4, lineHeight: 26, color: Colors.light.text },
   meta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   metaText: { fontSize: 12, color: Colors.light.icon },
+  metaPlace: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   catTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
   catTagText: { fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', color: '#fff' },
   stats: { flexDirection: 'row', marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#F1EBE3' },

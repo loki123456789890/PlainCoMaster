@@ -1,8 +1,8 @@
 // Store profile, from the approved store-tools preview: a live preview of
 // the store's header as shoppers see it, a logo card, an "About your store"
-// box with a character ring, the store's locked details, and a save button
-// pinned to the bottom. Each edited card is tagged "Changed", and leaving
-// with unsaved edits asks first.
+// box with a character ring, where it ships from, the store's locked
+// details, and a save button pinned to the bottom. Each edited card is
+// tagged "Changed", and leaving with unsaved edits asks first.
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
@@ -43,11 +43,16 @@ const ERR = '#B42318';
 const LINE = Colors.light.border;
 const CARD_LINE = '#EEE7DD';
 
-// Matches the cap in firestore.rules.
+// Match the caps in firestore.rules.
 const DESCRIPTION_MAX = 300;
+const LOCATION_MAX = 60;
 const DESCRIPTION_WARN = 260;
 const COUNT_R = 8;
 const COUNT_C = 2 * Math.PI * COUNT_R;
+
+// "new logo", "new logo and location", "new logo, store description and location".
+const unsavedList = (items) =>
+  items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 
 function ChangedTag({ on }) {
   if (!on) return null;
@@ -56,7 +61,8 @@ function ChangedTag({ on }) {
 
 /**
  * What shoppers see about this store: its logo and a short description,
- * shown on the store page, in "Shop by store", and in order chat. The
+ * shown on the store page, in "Shop by store", and in order chat, and the
+ * city or area it ships from, shown there and on its products. The
  * name is not editable here — renaming a store rewrites what every past
  * order and review says it was, so it stays with the Platform Admin.
  */
@@ -70,6 +76,8 @@ export default function AdminStoreProfileScreen({ navigation }) {
 
   const [logoUrl, setLogoUrl] = useState(null);
   const [description, setDescription] = useState('');
+  const [location, setLocation] = useState('');
+  const [locationFocused, setLocationFocused] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -85,6 +93,7 @@ export default function AdminStoreProfileScreen({ navigation }) {
     if (loaded || !store) return;
     setLogoUrl(store.logoUrl || null);
     setDescription(store.description || '');
+    setLocation(store.location || '');
     setLoaded(true);
   }, [store, loaded]);
 
@@ -92,7 +101,8 @@ export default function AdminStoreProfileScreen({ navigation }) {
   // catches up, both go back to false on their own.
   const logoChanged = loaded && (logoUrl || null) !== (store?.logoUrl || null);
   const aboutChanged = loaded && description.trim() !== (store?.description || '');
-  const dirty = logoChanged || aboutChanged;
+  const locationChanged = loaded && location.trim() !== (store?.location || '');
+  const dirty = logoChanged || aboutChanged || locationChanged;
 
   // Every way off this screen — the back arrow, Android's back button, the
   // iOS swipe — asks before dropping unsaved edits.
@@ -128,14 +138,17 @@ export default function AdminStoreProfileScreen({ navigation }) {
   const handleSave = async () => {
     if (!dirty || saving) return;
     const trimmed = description.trim();
+    const trimmedLocation = location.trim();
     setSaving(true);
     try {
-      // Exactly the two fields the manager branch of the rule allows.
+      // Exactly the fields the manager branch of the rule allows.
       await updateDoc(doc(db, 'stores', storeId), {
         logoUrl: logoUrl || deleteField(),
         description: trimmed || deleteField(),
+        location: trimmedLocation || deleteField(),
       });
       setDescription(trimmed);
+      setLocation(trimmedLocation);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setToast('Store profile updated. Shoppers see it now.');
     } catch (error) {
@@ -184,6 +197,9 @@ export default function AdminStoreProfileScreen({ navigation }) {
     ? ` · On PlainCo since ${store.createdAt.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`
     : '';
   const saveLabel = !isConnected ? 'Offline' : dirty ? 'Save store profile' : 'No changes to save';
+  const unsaved = [logoChanged && 'new logo', aboutChanged && 'store description', locationChanged && 'location'].filter(
+    Boolean
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -216,6 +232,7 @@ export default function AdminStoreProfileScreen({ navigation }) {
               </Text>
               <Text style={styles.previewMeta}>
                 {storeProducts.length} item{storeProducts.length === 1 ? '' : 's'}
+                {location.trim() ? ` · ${location.trim()}` : ''}
                 {since}
               </Text>
               <Text style={[styles.previewAbout, !description.trim() && { color: '#B3AAA0' }]} numberOfLines={3}>
@@ -332,6 +349,36 @@ export default function AdminStoreProfileScreen({ navigation }) {
             </View>
           </Reveal>
 
+          <Reveal delay={170} style={styles.card}>
+            <View style={styles.cardHead}>
+              <Text style={styles.cardTitle}>Ships from</Text>
+              <ChangedTag on={locationChanged} />
+            </View>
+            <View style={[styles.locationField, locationFocused && styles.textareaFocused]}>
+              <Ionicons name="location-outline" size={17} color={locationFocused ? CLAY : MUTED} />
+              <TextInput
+                value={location}
+                onChangeText={setLocation}
+                onFocus={() => setLocationFocused(true)}
+                onBlur={() => setLocationFocused(false)}
+                placeholder="e.g. Cubao, Quezon City"
+                placeholderTextColor={MUTED}
+                maxLength={LOCATION_MAX}
+                autoCapitalize="words"
+                returnKeyType="done"
+                style={styles.locationInput}
+                accessibilityLabel="City or area your store ships from"
+              />
+            </View>
+            <View style={styles.tip}>
+              <Ionicons name="shield-checkmark-outline" size={14} color={MUTED} style={{ marginTop: 2 }} />
+              <Text style={styles.tipText}>
+                City or area only, never your street address. Shoppers see &quot;Ships from{' '}
+                {location.trim() || 'your city'}&quot; on your products and store page.
+              </Text>
+            </View>
+          </Reveal>
+
           <Reveal delay={200} style={styles.card}>
             <Text style={[styles.cardTitle, { marginBottom: 12 }]}>Store details</Text>
             <View style={styles.readonly} accessible accessibilityLabel={`Store name, ${store?.name}, locked`}>
@@ -378,8 +425,8 @@ export default function AdminStoreProfileScreen({ navigation }) {
         }}
       >
         <Text style={styles.dialogText}>
-          Your {[logoChanged && 'new logo', aboutChanged && 'store description'].filter(Boolean).join(' and ')}{' '}
-          {logoChanged && aboutChanged ? "aren't" : "isn't"} saved. Shoppers will keep seeing the current profile.
+          Your {unsavedList(unsaved)} {unsaved.length > 1 ? "aren't" : "isn't"} saved. Shoppers will keep seeing the
+          current profile.
         </Text>
       </ConfirmDialog>
     </SafeAreaView>
@@ -500,6 +547,18 @@ const styles = StyleSheet.create({
   textareaFocused: { borderColor: CLAY, backgroundColor: '#fff' },
   counter: { position: 'absolute', right: 10, bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
   counterText: { fontSize: 11, color: MUTED },
+  locationField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: LINE,
+    backgroundColor: Colors.light.background,
+    paddingHorizontal: 14,
+  },
+  locationInput: { flex: 1, fontSize: 14, color: INK, paddingVertical: 0, outlineStyle: 'none' },
   tip: { flexDirection: 'row', gap: 8, marginTop: 10 },
   tipText: { flex: 1, fontSize: 11.5, lineHeight: 17, color: MUTED },
 

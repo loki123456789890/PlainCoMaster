@@ -691,10 +691,22 @@ service cloud.firestore {
         // short description — what shoppers see on the store page. Not
         // the name: renaming a store changes what every past order and
         // review says it was, so that stays with the Platform Admin.
-        // Either field may be removed (absent afterwards).
+        // Any of these may be removed (absent afterwards).
+        //
+        // location is where the store ships from, city or area only ("Cubao,
+        // Quezon City"), shown to shoppers as "Ships from …". The app asks
+        // for no more than that and says why: some sellers sell from home.
+        // Older builds never send it, which this allows: they change only
+        // logoUrl and description, a subset of the list below.
         (
           managesStore(storeId) &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['logoUrl', 'description']) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['logoUrl', 'description', 'location']) &&
+          (
+            !('location' in request.resource.data) ||
+            (request.resource.data.location is string &&
+             request.resource.data.location.matches('.*\\S.*') &&
+             request.resource.data.location.size() <= 60)
+          ) &&
           (
             !('logoUrl' in request.resource.data) ||
             (request.resource.data.logoUrl is string &&

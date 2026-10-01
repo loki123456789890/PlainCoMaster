@@ -653,7 +653,9 @@ export default function ProductScreen({ navigation, route }) {
                 onPress={() => navigation.push('Shop', { storeId: store.id })}
                 disabled={isStaff}
                 accessibilityRole={isStaff ? 'text' : 'button'}
-                accessibilityLabel={isStaff ? `Sold by ${store.name}` : `Sold by ${store.name}. View store`}
+                accessibilityLabel={`Sold by ${store.name}${store.location ? `, ships from ${store.location}` : ''}${
+                  isStaff ? '' : '. View store'
+                }`}
               >
                 <StoreLogo uri={store.logoUrl} size={42} radius={12} />
                 <View style={{ flex: 1 }}>
@@ -666,6 +668,14 @@ export default function ProductScreen({ navigation, route }) {
                       <Ionicons name="star" size={11} color={CLAY} />
                       <Text style={styles.storeSmall}>
                         {formatAverage(sellerRating.average)} ({storeReviewCountLabel(sellerRating)})
+                      </Text>
+                    </View>
+                  ) : null}
+                  {store.location ? (
+                    <View style={styles.storeRating}>
+                      <Ionicons name="location-outline" size={11} color={MUTED} />
+                      <Text style={styles.storeSmall} numberOfLines={1}>
+                        Ships from {store.location}
                       </Text>
                     </View>
                   ) : null}

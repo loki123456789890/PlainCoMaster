@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 22):
+- **New use case — Reset Password** (fills the gap listed in section 23):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -1950,7 +1950,80 @@ can still be edited and given one.
 
 ---
 
-## 22. Still outstanding — SRS-side only, no code changes needed
+## 22. Store location ("Ships from") — NEW
+
+Before this, a shopper could not tell where a store was, so could not
+judge how far an order would travel before buying.
+
+> **Status (1 Oct 2026):** built and tested against the emulator. The
+> security rules must be deployed (`npm run rules:deploy`) before a Store
+> Manager can save a location in production. The deploy does not affect
+> the APK used for the UAT survey: its Store Profile keeps saving the logo
+> and description as before.
+
+### What changed — suggested wording (extends the Store profile in section 12)
+
+> A Store Manager may record where their store ships from, as a city or
+> area of up to 60 characters (for example "Cubao, Quezon City"), from
+> the Store Profile screen. Shoppers see it on the store's page, on the
+> store's card in "Shop by store", and as "Ships from …" under "Sold by"
+> on each of the store's products. The location is optional; a store
+> without one shows none.
+
+**Deliberately city or area only.** Some sellers sell from home, so a
+street address would publish a private individual's address to every
+shopper. The screen says "City or area only, never your street address",
+and nothing more precise is asked for. This follows the Data Privacy Act
+proportionality principle already applied to customer data (section 12).
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-L1 | A Store Manager can set, change or remove their store's location (city or area, up to 60 characters) from Store Profile, with a live preview. |
+| FR-L2 | The store page and the store's card in "Shop by store" show the location, when set. |
+| FR-L3 | The product page shows "Ships from \<location\>" under "Sold by", when set. |
+| FR-L4 | A Store Manager cannot set another store's location; a Platform Admin cannot set any store's location. |
+
+### Business rules / security (enforced by security rules)
+
+- Only a store's own active manager can change `location`, in the same
+  rule branch as `logoUrl` and `description`.
+- `location` must be text containing at least one non-space character,
+  at most 60 characters, or absent.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `stores` | `location` (string ≤ 60, optional) | City or area; set only by the store's manager. |
+
+### Screens — module list (section 7)
+
+- **Store Profile** (Store Manager): new "Ships from" card; the live
+  preview shows the location.
+- **Store page**, **Shop** ("Shop by store") and **Product Details**
+  (Customer): show the location.
+
+### Limitations
+
+- The location is free text and is not checked against a list of real
+  places.
+- There is no "near me" filter and shipping fees do not depend on
+  distance; both would need precise addresses and map data, which this
+  deliberately does not collect.
+
+### Verification
+
+Rules test suite 143 → **145**: a manager can set, change and remove
+their own store's location, alone or with the rest of the profile, and
+an older build's logo-and-description save still succeeds; a blank,
+non-text or over-length location is refused, as is a change by another
+store's manager, a customer, a deactivated manager or a Platform Admin.
+
+---
+
+## 23. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
