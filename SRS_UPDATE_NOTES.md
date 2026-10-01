@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 30):
+- **New use case — Reset Password** (fills the gap listed in section 31):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2764,7 +2764,94 @@ without errors. Lint unchanged at 0 errors.
 
 ---
 
-## 30. Still outstanding — SRS-side only, no code changes needed
+## 30. Order status emails — NEW
+
+The app tracked an order's status (Placed → Processing → Shipped →
+Delivered), but the customer saw a change only by opening My Orders. The
+only email was the confirmation sent when the order was placed. The
+customer is now emailed when the order ships, is delivered, or is
+cancelled.
+
+> **Status (1 Oct 2026):** built and tested against the emulator, and the
+> function is deployed to production; not yet tried from a phone. It runs
+> entirely in Cloud Functions, so no rules change was needed. The APK
+> used for the UAT survey is unaffected, and its customers get the
+> emails too.
+
+### What changed — suggested wording
+
+> When the Store Manager changes an order's status to Shipped, Delivered
+> or Cancelled, the system emails the customer. Each email gives the
+> order number, the store, the items and the total, and what happens
+> next: delivery times and, for Cash on Delivery, a reminder to pay the
+> rider (Shipped); how to review the items and report damage (Delivered);
+> and, for an order already paid online, that refunds are arranged with
+> the store (Cancelled).
+>
+> Each update is sent at most once per order. Moving an order to
+> Processing sends no email. Status update emails appear in the Store
+> Manager's Email Delivery log as "Order update", and one that failed can
+> be sent again from there, unless the order has since moved to another
+> status.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-E1 | The system emails the customer when their order's status changes to Shipped, Delivered or Cancelled. |
+| FR-E2 | Each of those emails is sent at most once per order, including when the Store Manager undoes a status change and makes it again. |
+| FR-E3 | A cancellation email for an order paid online tells the customer that refunds are not automatic and are arranged with the store. |
+| FR-E4 | Status update emails are recorded in the Email Delivery log. The Store Manager may resend one that failed, only while the order is still at that status. |
+
+### Use case updates
+
+**Update Order Status** (Store Manager): add as a postcondition:
+
+> If the new status is Shipped, Delivered or Cancelled, the system
+> emails the customer. A failed email does not undo the status change.
+
+### Business rules / security
+
+- The email is sent by a Cloud Function, not the app, so a customer or a
+  Store Manager cannot choose who receives it or what it says.
+- A change to an order that does not touch its status (order chat, a
+  payment confirmation) sends nothing.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `mailLog` | `kind: 'orderStatus'` and `orderStatus` | Which order update an entry was for. Written by the server only. |
+
+### Screens — module list (section 7)
+
+- **Email Delivery** (Store Manager): status update emails listed as
+  "Order update".
+- **Help** (Customer): "How do I track my order?" mentions the emails.
+- **Privacy Policy**: "How we use your information" includes the status
+  emails.
+
+### Limitations
+
+- If the Store Manager marks an order Shipped and taps Undo, the email
+  has already gone. Marking it Shipped again does not send a second one.
+- There are no push notifications. Expo Go on Android does not support
+  them, and the demo runs on Expo Go.
+- There is no live delivery tracking (no courier link or rider map).
+
+### Verification
+
+Email test suite 20 → **28**: shipping sends one email and records it
+for the order's store; Processing sends nothing; a write that leaves the
+status alone (chat, payment) sends nothing; Undo and re-ship sends once;
+the wording changes for COD and paid-online orders; an order with no
+usable email sends nothing; a failed update can be resent; an update
+for an order that has since moved on is refused without using up an
+attempt. Lint unchanged at 0 errors.
+
+---
+
+## 31. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
