@@ -40,6 +40,8 @@ import { EASE_OUT_QUINT, EASE_OUT_QUART } from '../../constants/motion';
 import { Colors } from '../../constants/theme';
 
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Sign Up and Change Password hold new passwords to the same minimum.
+export const PASSWORD_MIN = 8;
 const TITLE_LINE_HEIGHT = 31;
 
 // Colors for cream (customer) and ink (Staff Portal) screens. The dark set

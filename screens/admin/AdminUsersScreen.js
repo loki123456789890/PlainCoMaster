@@ -35,6 +35,7 @@ import SkeletonBlock from '../../components/ui/Skeleton';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import DialogButtonRow from '../../components/ui/DialogButtonRow';
 import Sheet from '../../components/shop/Sheet';
+import ChangePasswordSheet from '../../components/auth/ChangePasswordSheet';
 import Reveal from '../../components/shop/Reveal';
 import ResultToast from '../../components/admin/ResultToast';
 import { OfflineNotice } from '../../components/shop/TabScreen';
@@ -241,6 +242,7 @@ export default function AdminUsersScreen({ navigation }) {
   // has to actually exit the admin portal instead, the same way
   // StoreManagerDashboardScreen's logout button does.
   const [logoutVisible, setLogoutVisible] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
   // Explains where staff accounts come from. There is deliberately no
@@ -1372,7 +1374,36 @@ export default function AdminUsersScreen({ navigation }) {
             </View>
           )}
         </View>
+
+        {/* Your own account, after everyone else's: the screen is for
+            managing users, and this is needed far less often. */}
+        <View style={styles.account}>
+          <Text style={styles.accountLabel}>Your account</Text>
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              setPasswordVisible(true);
+            }}
+            style={({ pressed }) => [styles.row, pressed && { backgroundColor: '#F7F2EC' }]}
+            accessibilityRole="button"
+            accessibilityLabel="Change password"
+            accessibilityHint="Opens a form to change your password"
+          >
+            <View style={styles.actionIcon}>
+              <Ionicons name="key-outline" size={18} color={INK} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.actionTitle}>Change password</Text>
+              <Text style={styles.actionDetail} numberOfLines={1}>
+                {me?.email || auth.currentUser?.email || ''}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={MUTED} />
+          </Pressable>
+        </View>
       </ScrollView>
+
+      <ChangePasswordSheet visible={passwordVisible} onClose={() => setPasswordVisible(false)} />
 
       {/* Change role: one card per role with what it can and can't reach,
           the store picker only for Store Manager, and a bar above the
@@ -1770,6 +1801,8 @@ const styles = StyleSheet.create({
   filterCount: { fontWeight: '500', color: MUTED },
 
   list: { paddingHorizontal: 16, paddingTop: 8, gap: 8 },
+  account: { paddingHorizontal: 16, paddingTop: 22, gap: 8 },
+  accountLabel: { fontSize: 15, fontWeight: '600', color: INK, marginLeft: 6 },
   emptyStateWrap: { paddingHorizontal: Spacing.md },
   emptyStateAction: { marginTop: -Spacing.sm, marginBottom: Spacing.md, paddingHorizontal: Spacing.xl },
   row: {

@@ -24,6 +24,7 @@ import {
   useShakes,
   authStyles,
   EMAIL_PATTERN,
+  PASSWORD_MIN,
 } from '../components/auth/AuthKit';
 import { EASE_OUT_QUINT } from '../constants/motion';
 
@@ -37,7 +38,6 @@ import Button from '../components/ui/Button';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
-const PASSWORD_MIN = 8;
 const FIELDS = ['name', 'email', 'password', 'confirmPassword'];
 
 // The approved sign-up preview's rules and wording. Each returns the

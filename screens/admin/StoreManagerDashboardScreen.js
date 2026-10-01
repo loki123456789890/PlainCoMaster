@@ -21,6 +21,7 @@ import { stockLevel, parseStockLimit } from '../../utils/stock';
 import SkeletonBlock from '../../components/ui/Skeleton';
 import Button from '../../components/ui/Button';
 import Sheet from '../../components/shop/Sheet';
+import ChangePasswordSheet from '../../components/auth/ChangePasswordSheet';
 import Reveal from '../../components/shop/Reveal';
 import StoreLogo from '../../components/shop/StoreLogo';
 import { OfflineNotice } from '../../components/shop/TabScreen';
@@ -186,6 +187,7 @@ export default function StoreManagerDashboardScreen({ navigation }) {
   const [mailError, setMailError] = useState(false);
 
   const [logoutVisible, setLogoutVisible] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
   // Bumped by handleRetry() to force the effect below to tear down and
@@ -490,6 +492,8 @@ export default function StoreManagerDashboardScreen({ navigation }) {
         </Pressable>
       </Sheet>
 
+      <ChangePasswordSheet visible={passwordVisible} onClose={() => setPasswordVisible(false)} />
+
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <Reveal delay={20} style={styles.head}>
           <StoreLogo uri={store?.logoUrl} size={46} radius={14} />
@@ -662,6 +666,35 @@ export default function StoreManagerDashboardScreen({ navigation }) {
             </Reveal>
           ))}
         </View>
+
+        {/* Below Manage rather than an extra tile, which would leave the
+            grid uneven. */}
+        <Reveal delay={440 + tiles.length * 30} style={styles.sectionHead}>
+          <Text style={styles.sectionTitle}>Account</Text>
+        </Reveal>
+        <Reveal delay={460 + tiles.length * 30} style={styles.todos}>
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              setPasswordVisible(true);
+            }}
+            style={({ pressed }) => [styles.todo, pressed && styles.pressedCard]}
+            accessibilityRole="button"
+            accessibilityLabel="Change password"
+            accessibilityHint="Opens a form to change your password"
+          >
+            <View style={styles.tileIcon}>
+              <Ionicons name="key-outline" size={19} color={INK} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.todoTitle}>Change password</Text>
+              <Text style={styles.todoDetail} numberOfLines={1}>
+                {auth.currentUser?.email}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#B3AAA0" />
+          </Pressable>
+        </Reveal>
       </ScrollView>
     </SafeAreaView>
   );

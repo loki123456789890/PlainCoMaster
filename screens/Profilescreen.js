@@ -54,6 +54,7 @@ import { useAdmin } from '../context/AdminContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { useCart } from '../context/CartContext';
 import LoggedOut from '../components/auth/LoggedOut';
+import ChangePasswordSheet from '../components/auth/ChangePasswordSheet';
 import { getPortalLabel } from '../constants/roles';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { Colors } from '../constants/theme';
@@ -288,6 +289,7 @@ export default function ProfileScreen({ navigation, route }) {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [privacyPolicyVisible, setPrivacyPolicyVisible] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [deactivateVisible, setDeactivateVisible] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
   // Deactivate stays disabled until the customer ticks that they understand
@@ -726,6 +728,8 @@ export default function ProfileScreen({ navigation, route }) {
 
       <PrivacyPolicyModal visible={privacyPolicyVisible} onClose={() => setPrivacyPolicyVisible(false)} />
 
+      <ChangePasswordSheet visible={passwordVisible} onClose={() => setPasswordVisible(false)} />
+
       <NameSheet
         visible={editingName}
         onClose={() => setEditingName(false)}
@@ -899,6 +903,12 @@ export default function ProfileScreen({ navigation, route }) {
             disabled={adminLoading}
             hint={`Opens the ${getPortalLabel(role)}`}
             trailing={adminLoading ? <ActivityIndicator size="small" color={Colors.light.tint} /> : null}
+          />
+          <Row
+            icon="key-outline"
+            label="Change Password"
+            onPress={() => setPasswordVisible(true)}
+            hint="Opens a form to change your password"
           />
           <Row icon="log-out-outline" label="Log Out" onPress={() => setLogoutVisible(true)} hint="Signs you out" />
           {/* Last, and red: irreversible from the user's side. */}
