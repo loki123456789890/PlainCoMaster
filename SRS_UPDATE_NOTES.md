@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 28):
+- **New use case — Reset Password** (fills the gap listed in section 29):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2507,10 +2507,9 @@ fields.
 ### Limitations
 
 - The seven-day window is fixed in the app; it is not set per store.
-- There are no garment tabs (Dresses, Tops, Bottoms) yet. Products do
-  not have a required garment type: the nearest field, the measurement
-  type, is saved only when a Store Manager enters measurements, so tabs
-  built on it would leave products out.
+- Garment tabs (Dresses, Tops, Bottoms) were not part of this change:
+  products had no required garment type to build them on. They were
+  added next, with a new Item category field (section 28).
 - There is no "Sale" section. Products have no original or sale price,
   and a sale section is the flash-sale pattern PRODUCT.md rules out;
   Favorites already notes a price drop on a saved item (section 25).
@@ -2530,7 +2529,150 @@ device.
 
 ---
 
-## 28. Still outstanding — SRS-side only, no code changes needed
+## 28. Item category and a store's category tabs — NEW
+
+A store's page listed everything it sells in one grid, so a shopper
+after a dress had to scroll past every shirt and pair of jeans. Products
+recorded who they were for (section 21) but not what kind of item they
+were. The nearest field, the measurement type, was optional and saved
+only with measurements, so most products had none.
+
+**A note on terms.** Elsewhere in these notes "category" means the
+product type, Ukay-Ukay or Ready-to-Wear (as in "category tabs"). This
+section adds a separate field, the **item category**: what kind of item
+it is. The app labels it "Category" because the type is labelled "Type"
+in Add and Edit Product.
+
+> **Status (1 Oct 2026):** built and tested against the emulator; the
+> security rules are deployed. The deploy does not affect the APK used
+> for the UAT survey: it can still add and edit products, without an
+> item category.
+
+### What changed — suggested wording
+
+> Every product records its item category, chosen by the Store Manager
+> from seven: *Tops*, *Outerwear*, *Bottoms*, *Dresses*, *Footwear*,
+> *Bags* or *Accessories*. A line under the choices says what each covers
+> (for example, Bottoms: "Pants, jeans, shorts, skirts"). It is required
+> when adding a product of either type. The product page shows it with
+> the Section, for example "Women's Tops".
+>
+> A store's page has a chip for each item category the store sells, under
+> its search: for example *All · Tops · Bottoms · Dresses*. A store
+> selling only one has none. The chips combine with the Ukay-Ukay /
+> Ready-to-Wear tabs and the search. Searching the Shop or a store for an
+> item category's name ("dress", "tops") finds the products in it.
+>
+> The item category also decides which measurements Add and Edit Product
+> ask for (Bottoms: waist, hip, inseam, rise, length), replacing the
+> separate "what kind of item is this?" choice in the Measurements
+> section, so the Store Manager answers the question once.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-K1 | The Store Manager must choose an item category when adding a product, and can change it when editing. |
+| FR-K2 | The product page shows the item category with the Section ("Women's Tops"). |
+| FR-K3 | A store's page offers a chip for each item category among its products, plus All, when there are at least two; they combine with the type tabs and the search. |
+| FR-K4 | The Shop's and a store's search match a product's item category by name. |
+| FR-K5 | The item category sets which measurements are asked for. Changing it to one measured differently, after measurements were entered, asks first, and says they will be cleared. |
+| FR-K6 | A product listed before the item category existed appears under All only, keeps its measurements, and must be given an item category the next time it is saved in Edit Product. |
+
+### Use case updates
+
+**Add Product** (Store Manager): add, after the Section:
+
+> The Store Manager selects the item category. The Measurements section
+> then shows the measurements for that kind of item.
+>
+> *Alternate flow — no item category selected:* the system highlights
+> the field with "Pick what kind of item it is." and does not save the
+> product.
+>
+> *Alternate flow — item category changed after measurements were
+> entered:* if the new one is measured differently, the system asks
+> "Change category?" and clears the measurements only if the Store
+> Manager confirms.
+
+**Edit Product** (Store Manager): add:
+
+> *Alternate flow — product created before the item category existed:*
+> the product opens with none selected and the note "Needed to save"; the
+> Store Manager must select one before any change can be saved. Undoing
+> the item category also restores any measurements the change cleared.
+
+**View Store Page** (Customer, use case 2.5): add:
+
+> The customer may select an item category chip to narrow the store's
+> items. The selection combines with the type tab and the search text.
+
+### Business rules / security (enforced by security rules)
+
+- `category` must be one of `tops`, `outerwear`, `bottoms`, `dresses`,
+  `footwear`, `bags` or `accessories`, on create and on edit.
+- Requiring it on every new product is enforced by the app, not yet by
+  the security rules, for the same reason as Section (section 21): the
+  UAT survey APK predates the field. The rule is tightened once every
+  installed build sends it.
+- Outerwear is measured like Tops, and Dresses like the existing
+  "Dresses & One-Piece" measurements; the other item categories match
+  the measurement type of the same name. Moving between two measured the
+  same way keeps what was entered.
+
+### Data model changes
+
+| Where | New field | Notes |
+|---|---|---|
+| `products` | `category` (string, one of the seven above) | Required by the app on new products. |
+
+`measurementType` is unchanged and still saved with the measurements; it
+now follows the item category instead of being chosen separately.
+
+### Screens — module list (section 7)
+
+- **Add Product / Edit Product** (Store Manager): new Category field;
+  the Measurements section no longer has its own type choice.
+- **Store page** (Customer): item category chips under the search.
+- **Product Details** (Customer): item category shown with the Section.
+
+### Limitations
+
+- The item category chips are on a store's page only, not on the Shop,
+  which already has the type tabs and the Section filter.
+- Products listed before this change, including any added from the
+  survey APK, show only under All until a Store Manager edits them and
+  picks an item category. (`scripts/seed-catalog.mjs` fills it in for
+  the products it seeded.)
+- Search matches the item category's name, not synonyms: "jeans" finds
+  products named jeans, not every product filed under Bottoms.
+
+### Verification
+
+Rules test suite 148 → **150**: each of the seven values is accepted,
+and so is a product from a build with neither Section nor item category
+(the survey APK's shape); an unknown value is refused on create and on
+edit; a product without one can still be edited and given one. Against
+the emulator, as a Store Manager: the survey APK's shape was accepted,
+"Dresses" (capitalised) refused and "dresses" accepted. Lint unchanged at
+0 errors.
+
+Checked in the web build against the local emulators. A store with tops,
+outerwear, bottoms and dresses showed *All · Tops · Outerwear · Bottoms ·
+Dresses*; Bottoms showed its two products; a product without an item
+category appeared under All only; "jeans" found only the product named
+jeans; the product page read "Women's Bottoms". Add Product refused to
+save without an item category, and picking Bottoms showed the Bottoms
+measurements. Edit Product, on a product with Tops measurements and no
+item category: Outerwear kept the measurements without asking; Bottoms
+asked first and then showed the Bottoms measurements; Undo restored the
+Tops measurements; saving with Bottoms stored `category` and
+`measurementType` as `bottoms`. A full Add Product save was not driven,
+since it needs photo uploads.
+
+---
+
+## 29. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
