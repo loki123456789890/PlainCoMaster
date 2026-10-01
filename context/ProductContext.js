@@ -170,8 +170,9 @@ export const ProductProvider = ({ children }) => {
         imageUrl: productData.imageUrl,
         colors: productData.colors || [],
         sizes: productData.sizes || [],
-        // Always set: Add Product will not save without one.
+        // Always set: Add Product will not save without either.
         section: productData.section,
+        category: productData.category,
         createdAt: serverTimestamp(),
         storeId,
       };

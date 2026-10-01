@@ -547,7 +547,10 @@ service cloud.firestore {
         data.get('photos', []) is list &&
         data.get('photos', []).size() <= 8 &&
         // Who it's for, from constants/productOptions.js SECTION_OPTIONS.
-        data.get('section', 'unisex') in ['women', 'men', 'unisex', 'kids'];
+        data.get('section', 'unisex') in ['women', 'men', 'unisex', 'kids'] &&
+        // What kind of item it is, from constants/productOptions.js
+        // CATEGORY_OPTIONS: a store's page has a tab for each one it sells.
+        data.get('category', 'tops') in ['tops', 'outerwear', 'bottoms', 'dresses', 'footwear', 'bags', 'accessories'];
     }
     // Create-only: the exact key set AdminAddProductScreen writes, with a
     // non-empty name and a server-set createdAt. measurements and
@@ -563,17 +566,19 @@ service cloud.firestore {
     // an APK built before they existed is still installed for the UAT
     // survey, and it sends neither. Requiring them here would make Add
     // Product fail on that build mid-survey. Their values are still checked
-    // whenever they are sent (productFieldsAreWellTyped).
+    // whenever they are sent (productFieldsAreWellTyped). category is the
+    // same: required by the app, allowed but not required here.
     //
-    // TO TIGHTEN once every installed build sends them: add 'section' to
-    // the hasAll() list below, and require 'condition' when type is
-    // 'ukay-ukay'. scripts/test-rules.mjs SECT-1 and COND-2 say what to flip.
+    // TO TIGHTEN once every installed build sends them: add 'section' and
+    // 'category' to the hasAll() list below, and require 'condition' when
+    // type is 'ukay-ukay'. scripts/test-rules.mjs SECT-1, CAT-1 and COND-2
+    // say what to flip.
     function isNewProductShape() {
       return request.resource.data.keys().hasOnly(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',
            'colors', 'sizes', 'createdAt', 'measurements', 'measurementType',
            'storeId', 'brand', 'condition', 'flaws', 'section',
-           'flawCheck', 'flawTags', 'photos']
+           'flawCheck', 'flawTags', 'photos', 'category']
         ) &&
         request.resource.data.keys().hasAll(
           ['name', 'price', 'type', 'stock', 'description', 'imageUrl',

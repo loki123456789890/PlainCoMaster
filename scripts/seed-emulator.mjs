@@ -136,8 +136,8 @@ await writeDoc(`users/${uid}`, {
 });
 
 const PRODUCTS = [
-  { id: 'sandbox-jacket', name: 'Denim Jacket', price: 850, stock: 10, type: 'ukay-ukay', section: 'unisex', condition: 'gently-used' },
-  { id: 'sandbox-coat', name: 'Wool Overcoat', price: 1200, stock: 4, type: 'ready-to-wear', section: 'men', storeId: OTHER_STORE_ID },
+  { id: 'sandbox-jacket', name: 'Denim Jacket', price: 850, stock: 10, type: 'ukay-ukay', section: 'unisex', category: 'outerwear', condition: 'gently-used' },
+  { id: 'sandbox-coat', name: 'Wool Overcoat', price: 1200, stock: 4, type: 'ready-to-wear', section: 'men', category: 'outerwear', storeId: OTHER_STORE_ID },
 ];
 
 for (const p of PRODUCTS) {
@@ -152,6 +152,7 @@ for (const p of PRODUCTS) {
     sizes: ['M'],
     // The fields the app requires on a new listing, so these match one.
     section: p.section,
+    category: p.category,
     ...(p.condition ? { condition: p.condition } : {}),
     // REQUIRED, not decorative. ProductContext queries the catalogue with
     // orderBy('createdAt', 'desc'), and Firestore silently omits any

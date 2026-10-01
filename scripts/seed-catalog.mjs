@@ -91,9 +91,10 @@ const RTW = 'ready-to-wear';
 // is a photograph of the garment it is named after. Colours are drawn
 // from COLOR_PALETTE in constants/productOptions.js, and sizes from
 // SIZE_OPTIONS, so the filters have real values to work with. Every piece
-// says who it's for (section), and every ukay piece its condition, as Add
-// Product requires of a new listing; each condition is the grade its own
-// description already describes.
+// says who it's for (section) and what kind of item it is (category), and
+// every ukay piece its condition, as Add Product requires of a new
+// listing; each condition is the grade its own description already
+// describes.
 const CATALOG = [
   {
     name: 'Essential White Tee',
@@ -104,6 +105,7 @@ const CATALOG = [
     colors: ['White'],
     sizes: ['S', 'M', 'L', 'XL'],
     section: 'unisex',
+    category: 'tops',
   },
   {
     name: 'Plain Cotton Tee',
@@ -114,6 +116,7 @@ const CATALOG = [
     colors: ['Red', 'Black', 'White', 'Navy', 'Yellow'],
     sizes: ['S', 'M', 'L', 'XL', 'XXL'],
     section: 'unisex',
+    category: 'tops',
   },
   {
     name: 'Satin Jogger Pants',
@@ -124,6 +127,7 @@ const CATALOG = [
     colors: ['Pink', 'Beige'],
     sizes: ['S', 'M', 'L'],
     section: 'women',
+    category: 'bottoms',
   },
   {
     name: 'Rust Bomber Jacket',
@@ -134,6 +138,7 @@ const CATALOG = [
     colors: ['Brown'],
     sizes: ['M', 'L', 'XL'],
     section: 'men',
+    category: 'outerwear',
   },
   {
     name: 'Graphic Print Tee',
@@ -145,6 +150,7 @@ const CATALOG = [
     sizes: ['M', 'L'],
     condition: 'gently-used',
     section: 'unisex',
+    category: 'tops',
   },
   {
     name: 'Knit Fringe Poncho',
@@ -157,6 +163,7 @@ const CATALOG = [
     condition: 'well-loved',
     flaws: 'One small pull on the back hem, not visible when worn.',
     section: 'women',
+    category: 'outerwear',
   },
   {
     name: 'Leather Biker Jacket',
@@ -168,6 +175,7 @@ const CATALOG = [
     sizes: ['S', 'M', 'L'],
     condition: 'gently-used',
     section: 'men',
+    category: 'outerwear',
   },
   {
     name: 'Straight-Cut Jeans',
@@ -179,13 +187,14 @@ const CATALOG = [
     sizes: ['S', 'M', 'L', 'XL'],
     condition: 'gently-used',
     section: 'unisex',
+    category: 'bottoms',
   },
 ];
 
 // Fields added to the catalogue after it was first seeded. An existing
 // product missing one of these gets the catalogue's value; one that has
 // it keeps its own.
-const FILLABLE = ['section', 'condition', 'flaws'];
+const FILLABLE = ['section', 'category', 'condition', 'flaws'];
 
 console.log(`\n${APPLY ? 'APPLYING' : 'DRY RUN — nothing will be written'}\n`);
 

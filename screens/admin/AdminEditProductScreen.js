@@ -33,11 +33,11 @@ import {
   COLOR_PALETTE,
   SIZE_OPTIONS,
   MEASUREMENT_TYPES,
-  MEASUREMENT_TYPE_OPTIONS,
   emptyMeasurementEntry,
   buildMeasurementsPayload,
   conditionOption,
   sectionOption,
+  categoryOption,
   CONDITION_NEEDS_FLAWS,
   BRAND_MAX,
   FLAWS_MAX,
@@ -58,6 +58,7 @@ import ConditionPicker from '../../components/admin/ConditionPicker';
 import FlawDisclosure from '../../components/admin/FlawDisclosure';
 import PhotoSlots from '../../components/admin/PhotoSlots';
 import SectionPicker from '../../components/admin/SectionPicker';
+import CategoryPicker from '../../components/admin/CategoryPicker';
 import { TopBar, OfflineNotice, UndoToast, useAutoClear } from '../../components/shop/TabScreen';
 
 const INK = Colors.light.text;
@@ -81,11 +82,13 @@ const TYPE_OPTIONS = [
 const typeLabel = (type) => (type === 'ukay-ukay' ? 'Ukay-Ukay' : 'Ready-to-Wear');
 const conditionLabel = (key) => conditionOption(key)?.label || 'Not set';
 const sectionLabel = (key) => sectionOption(key)?.label || '—';
+const categoryLabel = (key) => categoryOption(key)?.label || '—';
 
 const NO_ERRORS = {
   photos: '',
   name: '',
   section: '',
+  category: '',
   condition: '',
   flawCheck: '',
   flawTags: '',
@@ -161,6 +164,8 @@ const formFromProduct = (product) => ({
   // Like condition, products listed before Section existed load with none,
   // and validate() asks for one before they can be saved again.
   section: product.section || null,
+  // Same for Category.
+  category: product.category || null,
   price: product.price != null ? String(product.price) : '',
   type: product.type || 'ready-to-wear',
   // Ukay products listed before condition existed load with none, and
@@ -196,6 +201,8 @@ function diffForm(form, original) {
     changes.push({ key: 'brand', label: 'Brand', from: original.brand || '—', to: form.brand.trim() || '—' });
   if (form.section !== original.section)
     changes.push({ key: 'section', label: 'Section', from: sectionLabel(original.section), to: sectionLabel(form.section) });
+  if (form.category !== original.category)
+    changes.push({ key: 'category', label: 'Category', from: categoryLabel(original.category), to: categoryLabel(form.category) });
   if (form.type !== original.type)
     changes.push({ key: 'type', label: 'Type', from: typeLabel(original.type), to: typeLabel(form.type) });
   if (savedCondition(form) !== savedCondition(original))
@@ -327,7 +334,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
   const original = useRef(formFromProduct(product)).current;
 
   const [measurementsExpanded, setMeasurementsExpanded] = useState(false);
-  const [pendingMeasurementType, setPendingMeasurementType] = useState(null);
+  const [pendingCategory, setPendingCategory] = useState(null);
   const [errors, setErrors] = useState(NO_ERRORS);
   // Separate from `deleting` — sharing one flag meant deleting flipped the
   // Save button to "Saving..." mid-delete.
@@ -355,25 +362,42 @@ export default function AdminEditProductScreen({ navigation, route }) {
     clearFieldError(field);
   };
 
+  // The measurements to go back to for a given category: the saved ones
+  // while the category still measures that way, otherwise a blank set in
+  // the category's shape, since the saved ones no longer fit it. A product
+  // with no category keeps its saved shape.
+  const savedMeasurementsFor = (sizes, category) => {
+    const type = categoryOption(category)?.measurementType || original.measurementType;
+    if (type === original.measurementType) {
+      return { measurements: original.measurements, measurementType: original.measurementType };
+    }
+    const measurements = {};
+    sizes.forEach((size) => {
+      measurements[size] = emptyMeasurementEntry(type);
+    });
+    return { measurements, measurementType: type };
+  };
+
   // Puts one field back to what's saved.
   const revert = (key) => {
     Haptics.selectionAsync();
     if (key === 'measurements') {
-      setFormData((prev) => ({
-        ...prev,
-        measurements: original.measurements,
-        measurementType: original.measurementType,
-      }));
+      setFormData((prev) => ({ ...prev, ...savedMeasurementsFor(prev.sizes, prev.category) }));
       return;
     }
     if (key === 'sizes') {
       // Sizes carry their measurement rows with them.
-      setFormData((prev) => ({
-        ...prev,
-        sizes: original.sizes,
-        measurements: original.measurements,
-        measurementType: original.measurementType,
-      }));
+      setFormData((prev) => ({ ...prev, sizes: original.sizes, ...savedMeasurementsFor(original.sizes, prev.category) }));
+      return;
+    }
+    if (key === 'category') {
+      // The category sets how it's measured, so undoing it puts the saved
+      // measurements back when the shape changes with it.
+      setFormData((prev) => {
+        const saved = savedMeasurementsFor(prev.sizes, original.category);
+        return { ...prev, category: original.category, ...(saved.measurementType !== prev.measurementType ? saved : {}) };
+      });
+      clearFieldError('category');
       return;
     }
     setFormData((prev) => ({ ...prev, [key]: original[key] }));
@@ -503,14 +527,23 @@ export default function AdminEditProductScreen({ navigation, route }) {
     });
   };
 
-  const handleMeasurementTypeChange = (type) => {
-    if (formData.measurementType === type) return;
-    Haptics.selectionAsync();
-    if (hasMeasurementValues(formData.measurements)) {
-      setPendingMeasurementType(type);
+  // The category sets which measurements are asked for (there is no
+  // separate picker). Moving between categories measured the same way
+  // (Tops and Outerwear) keeps what's entered; moving to another shape
+  // asks first if anything would be cleared.
+  const applyCategory = (key) => {
+    setField('category')(key);
+    const type = categoryOption(key)?.measurementType;
+    if (type && type !== formData.measurementType) applyMeasurementType(type);
+  };
+
+  const handleCategoryChange = (key) => {
+    const type = categoryOption(key)?.measurementType;
+    if (type && type !== formData.measurementType && hasMeasurementValues(formData.measurements)) {
+      setPendingCategory(key);
       return;
     }
-    applyMeasurementType(type);
+    applyCategory(key);
   };
 
   // Numeric-only, but decimals like 17.5" are valid, so one "." gets through.
@@ -584,6 +617,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
     else if (brokenSlot) nextErrors.photos = "A photo couldn't load. Replace it or remove it.";
     if (!formData.name.trim()) nextErrors.name = 'Give the product a name.';
     if (!formData.section) nextErrors.section = "Pick who it's for.";
+    if (!formData.category) nextErrors.category = 'Pick what kind of item it is.';
     if (ukayForm) {
       if (!formData.condition) nextErrors.condition = "Pick the condition it's in.";
       if (!formData.flawCheck) nextErrors.flawCheck = 'Say whether you found any flaws.';
@@ -648,6 +682,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
       // are removed rather than saved empty — same as Add leaving them off.
       brand: formData.brand.trim() || deleteField(),
       section: formData.section,
+      category: formData.category,
       condition: savedCondition(formData) || deleteField(),
       flawCheck: savedFlawCheck(formData) || deleteField(),
       flawTags: savedFlawTags(formData).length ? savedFlawTags(formData) : deleteField(),
@@ -816,6 +851,7 @@ export default function AdminEditProductScreen({ navigation, route }) {
               changed('name') ||
               changed('brand') ||
               changed('section') ||
+              changed('category') ||
               changed('type') ||
               changed('condition') ||
               changed('flawCheck') ||
@@ -867,6 +903,19 @@ export default function AdminEditProductScreen({ navigation, route }) {
               </FieldLabel>
               <SectionPicker value={formData.section} onChange={setField('section')} error={errors.section} />
               <FieldError>{errors.section}</FieldError>
+            </View>
+
+            <View style={{ marginBottom: 12 }}>
+              <FieldLabel
+                changed={changed('category')}
+                was={original.category ? `was ${categoryLabel(original.category)}` : 'was not set'}
+                onUndo={() => revert('category')}
+                note={changed('category') ? null : formData.category ? "Each one is a tab on your store's page" : 'Needed to save'}
+              >
+                Category
+              </FieldLabel>
+              <CategoryPicker value={formData.category} onChange={handleCategoryChange} error={errors.category} />
+              <FieldError>{errors.category}</FieldError>
             </View>
 
             <FieldLabel>Type</FieldLabel>
@@ -1198,26 +1247,10 @@ export default function AdminEditProductScreen({ navigation, route }) {
             </Pressable>
             {measurementsExpanded ? (
               <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220).easing(EASE_OUT_QUART)}>
-                <View style={[styles.wrap, { marginTop: 12, marginBottom: 10 }]}>
-                  {MEASUREMENT_TYPE_OPTIONS.map((option) => {
-                    const on = formData.measurementType === option.key;
-                    return (
-                      <Pressable
-                        key={option.key}
-                        onPress={() => handleMeasurementTypeChange(option.key)}
-                        style={[styles.mType, on && styles.mTypeOn]}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected: on }}
-                      >
-                        <Text style={[styles.mTypeText, on && { color: '#fff' }]}>{option.label}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <Text style={styles.mNote}>
+                <Text style={[styles.mNote, { marginTop: 12 }]}>
                   {measurementType
                     ? `${measurementType.helper} Blank sizes aren't saved.`
-                    : 'Pick what kind of item this is to see the right measurements.'}
+                    : 'Pick a category in Details to see the right measurements.'}
                 </Text>
                 {measurementType ? (
                   selectedSizes.length === 0 ? (
@@ -1404,16 +1437,19 @@ export default function AdminEditProductScreen({ navigation, route }) {
       </Sheet>
 
       <ConfirmDialog
-        visible={Boolean(pendingMeasurementType)}
-        onClose={() => setPendingMeasurementType(null)}
-        title="Change item type?"
-        confirmLabel="Change type"
+        visible={Boolean(pendingCategory)}
+        onClose={() => setPendingCategory(null)}
+        title="Change category?"
+        confirmLabel="Change category"
         onConfirm={() => {
-          if (pendingMeasurementType) applyMeasurementType(pendingMeasurementType);
-          setPendingMeasurementType(null);
+          if (pendingCategory) applyCategory(pendingCategory);
+          setPendingCategory(null);
         }}
       >
-        <Text style={styles.dialogText}>The measurements you&apos;ve entered will be cleared.</Text>
+        <Text style={styles.dialogText}>
+          {categoryOption(pendingCategory)?.label} are measured differently, so the measurements you&apos;ve entered will be
+          cleared.
+        </Text>
       </ConfirmDialog>
     </SafeAreaView>
   );
@@ -1630,17 +1666,6 @@ const styles = StyleSheet.create({
   sizeOn: { backgroundColor: INK, borderColor: INK },
   sizeText: { fontSize: 14, fontWeight: '600', color: INK },
 
-  mType: {
-    height: 34,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1.5,
-    borderColor: LINE,
-    backgroundColor: CREAM,
-    justifyContent: 'center',
-  },
-  mTypeOn: { backgroundColor: CLAY, borderColor: CLAY },
-  mTypeText: { fontSize: 12, fontWeight: '500', color: INK },
   mNote: { fontSize: 11.5, lineHeight: 17, color: MUTED, marginBottom: 10 },
   mEmpty: { fontSize: 12, color: MUTED, padding: 12, borderRadius: 12, backgroundColor: CREAM, textAlign: 'center' },
   mRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 },

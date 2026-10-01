@@ -47,6 +47,35 @@ export const matchesSection = (product, filterKey) => {
   return product.section === 'unisex' && (filterKey === 'women' || filterKey === 'men');
 };
 
+// What kind of item it is. Required on every new product, like Section, so
+// a store's page can have a tab for each kind it sells; products listed
+// before it existed have none and appear under "All" only. The keys are
+// also listed in firestore.rules (productFieldsAreWellTyped); keep the two
+// in step.
+//
+// `label` is the picker, tab and product page wording; `hint` says what
+// goes where, for the manager picking one. `measurementType` is how it's
+// measured (MEASUREMENT_TYPES below): the category decides which
+// measurements Add and Edit Product ask for, and that type is saved with
+// them, as before, for the size guide and older builds to read.
+export const CATEGORY_OPTIONS = [
+  { key: 'tops', label: 'Tops', hint: 'Shirts, blouses, polos, sweaters', measurementType: 'tops' },
+  { key: 'outerwear', label: 'Outerwear', hint: 'Jackets, coats, hoodies, blazers', measurementType: 'tops' },
+  { key: 'bottoms', label: 'Bottoms', hint: 'Pants, jeans, shorts, skirts', measurementType: 'bottoms' },
+  { key: 'dresses', label: 'Dresses', hint: 'Dresses, jumpsuits, rompers', measurementType: 'onepiece' },
+  { key: 'footwear', label: 'Footwear', hint: 'Shoes, sandals, boots', measurementType: 'footwear' },
+  { key: 'bags', label: 'Bags', hint: 'Bags, backpacks, wallets', measurementType: 'bags' },
+  { key: 'accessories', label: 'Accessories', hint: 'Hats, belts, scarves, jewelry', measurementType: 'accessories' },
+];
+
+export const categoryOption = (key) => CATEGORY_OPTIONS.find((option) => option.key === key) || null;
+
+// What the Shop's and a store's search match a category on: its name, so
+// "dress" or "tops" finds the pieces filed under it. Not synonyms: a
+// search for "jeans" should find jeans, not every skirt filed as Bottoms.
+// Empty for a product with none.
+export const categorySearchText = (key) => categoryOption(key)?.label.toLowerCase() || '';
+
 // How worn an ukay-ukay piece is. Ready-to-wear has no condition: the type
 // already says it's brand-new. One fixed scale rather than free text, so
 // "Gently used" means the same thing from every store, and a shopper can
@@ -239,13 +268,6 @@ export const MEASUREMENT_TYPES = {
     ],
   },
 };
-
-// Chip/pill options for the "What kind of item is this?" selector — same
-// { key, label } shape AdminAddProductScreen's TYPE_OPTIONS already uses.
-export const MEASUREMENT_TYPE_OPTIONS = Object.keys(MEASUREMENT_TYPES).map((key) => ({
-  key,
-  label: MEASUREMENT_TYPES[key].label,
-}));
 
 // Flat key -> label map covering every field key across every type, for
 // SizeGuideSheet, which renders whatever keys are actually present on a

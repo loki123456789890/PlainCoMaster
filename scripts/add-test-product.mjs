@@ -87,6 +87,7 @@ const ref = await addDoc(collection(db, 'products'), {
   name: NAME,
   brand: 'Hanes',
   section: 'unisex',
+  category: 'tops',
   condition: 'gently-used',
   flawCheck: 'found',
   flawTags: ['stain'],

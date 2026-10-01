@@ -37,7 +37,7 @@ import {
   COLOR_PALETTE,
   SIZE_OPTIONS,
   MEASUREMENT_TYPES,
-  MEASUREMENT_TYPE_OPTIONS,
+  categoryOption,
   emptyMeasurementEntry,
   buildMeasurementsPayload,
   CONDITION_NEEDS_FLAWS,
@@ -58,6 +58,7 @@ import ConditionPicker from '../../components/admin/ConditionPicker';
 import FlawDisclosure from '../../components/admin/FlawDisclosure';
 import PhotoSlots from '../../components/admin/PhotoSlots';
 import SectionPicker from '../../components/admin/SectionPicker';
+import CategoryPicker from '../../components/admin/CategoryPicker';
 import { TopBar, OfflineNotice } from '../../components/shop/TabScreen';
 
 const INK = Colors.light.text;
@@ -106,6 +107,8 @@ const EMPTY_FORM = {
   // Who it's for. No default: guessing would file pieces under the wrong
   // Section filter without the manager ever having chosen.
   section: null,
+  // What kind of item, for a store's tabs. No default, for the same reason.
+  category: null,
   price: '',
   type: 'ready-to-wear',
   // Ukay-ukay only. Kept while the type is switched back and forth so a
@@ -144,6 +147,7 @@ function buildInitialForm(source) {
     name: source.name ? `${source.name} (Copy)` : '',
     brand: source.brand || '',
     section: source.section || null,
+    category: source.category || null,
     price: source.price != null ? String(source.price) : '',
     type: source.type || 'ready-to-wear',
     condition: source.condition || null,
@@ -167,6 +171,7 @@ const NO_ERRORS = {
   photos: '',
   name: '',
   section: '',
+  category: '',
   condition: '',
   flawCheck: '',
   flawTags: '',
@@ -263,7 +268,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
   // Opened by default when duplicating a product that has a size guide,
   // so the copied measurements are visible rather than hidden.
   const [measurementsExpanded, setMeasurementsExpanded] = useState(Boolean(duplicateFrom?.measurements));
-  const [pendingMeasurementType, setPendingMeasurementType] = useState(null);
+  const [pendingCategory, setPendingCategory] = useState(null);
   const [errors, setErrors] = useState(NO_ERRORS);
   // Set by the first save attempt; from then on the step chips show which
   // sections still need something, in red.
@@ -414,14 +419,23 @@ export default function AdminAddProductScreen({ navigation, route }) {
     });
   };
 
-  const handleMeasurementTypeChange = (type) => {
-    if (formData.measurementType === type) return;
-    Haptics.selectionAsync();
-    if (hasMeasurementValues(formData.measurements)) {
-      setPendingMeasurementType(type);
+  // The category sets which measurements are asked for (Bottoms → waist,
+  // hip, inseam...); there is no separate picker. Moving between categories
+  // measured the same way (Tops and Outerwear) keeps what's entered; moving
+  // to another shape asks first if anything would be cleared.
+  const applyCategory = (key) => {
+    setField('category')(key);
+    const type = categoryOption(key)?.measurementType;
+    if (type && type !== formData.measurementType) applyMeasurementType(type);
+  };
+
+  const handleCategoryChange = (key) => {
+    const type = categoryOption(key)?.measurementType;
+    if (type && type !== formData.measurementType && hasMeasurementValues(formData.measurements)) {
+      setPendingCategory(key);
       return;
     }
-    applyMeasurementType(type);
+    applyCategory(key);
   };
 
   // Numeric-only, but decimals like 17.5" are valid garment measurements,
@@ -454,6 +468,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
   if (formData.name.trim()) lostList.push('Name');
   if (formData.brand.trim()) lostList.push('Brand');
   if (formData.section) lostList.push('Section');
+  if (formData.category) lostList.push('Category');
   if (formData.type === 'ukay-ukay' && formData.condition) lostList.push('Condition');
   if (formData.type === 'ukay-ukay' && (formData.flawCheck || formData.flaws.trim())) lostList.push('Flaws');
   if (formData.price.trim()) lostList.push('Price');
@@ -499,7 +514,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
   const conditionDone = !ukayForm || (Boolean(formData.condition) && flawsDone);
   const checks = {
     photo: missingSlots.length === 0 && !brokenSlot,
-    details: Boolean(formData.name.trim()) && Boolean(formData.section) && conditionDone,
+    details: Boolean(formData.name.trim()) && Boolean(formData.section) && Boolean(formData.category) && conditionDone,
     price: parseFloat(formData.price) > 0 && formData.stock.trim() !== '' && Number(formData.stock) >= 0,
     variants: formData.colors.length > 0 && formData.sizes.length > 0,
   };
@@ -534,6 +549,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
     else if (brokenSlot) nextErrors.photos = "A photo couldn't load. Replace it or remove it.";
     if (!formData.name.trim()) nextErrors.name = 'Give the product a name.';
     if (!formData.section) nextErrors.section = "Pick who it's for.";
+    if (!formData.category) nextErrors.category = 'Pick what kind of item it is.';
     if (ukayForm) {
       if (!formData.condition) nextErrors.condition = "Pick the condition it's in.";
       if (!formData.flawCheck) nextErrors.flawCheck = 'Say whether you found any flaws.';
@@ -570,6 +586,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
       ? 'photo'
       : nextErrors.name ||
           nextErrors.section ||
+          nextErrors.category ||
           nextErrors.condition ||
           nextErrors.flawCheck ||
           nextErrors.flawTags ||
@@ -602,6 +619,7 @@ export default function AdminAddProductScreen({ navigation, route }) {
       // Optional; ProductContext leaves a blank one off the product.
       brand: formData.brand.trim(),
       section: formData.section,
+      category: formData.category,
       // Ukay-ukay only: ready-to-wear is new by definition, so a condition
       // picked before switching type is dropped here.
       condition: isUkay ? formData.condition : null,
@@ -830,6 +848,12 @@ export default function AdminAddProductScreen({ navigation, route }) {
                 error={errors.section}
               />
               <FieldError>{errors.section}</FieldError>
+            </View>
+
+            <View style={{ marginTop: 14 }}>
+              <FieldLabel note="Each one is a tab on your store's page">Category</FieldLabel>
+              <CategoryPicker value={formData.category} onChange={handleCategoryChange} error={errors.category} />
+              <FieldError>{errors.category}</FieldError>
             </View>
 
             <View style={{ marginTop: 14 }}>
@@ -1113,26 +1137,10 @@ export default function AdminAddProductScreen({ navigation, route }) {
 
             {measurementsExpanded ? (
               <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(220).easing(EASE_OUT_QUART)}>
-                <View style={[styles.wrap, { marginTop: 12, marginBottom: 10 }]}>
-                  {MEASUREMENT_TYPE_OPTIONS.map((option) => {
-                    const on = formData.measurementType === option.key;
-                    return (
-                      <Pressable
-                        key={option.key}
-                        onPress={() => handleMeasurementTypeChange(option.key)}
-                        style={[styles.mType, on && styles.mTypeOn]}
-                        accessibilityRole="radio"
-                        accessibilityState={{ selected: on }}
-                      >
-                        <Text style={[styles.mTypeText, on && { color: '#fff' }]}>{option.label}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <Text style={styles.mNote}>
+                <Text style={[styles.mNote, { marginTop: 12 }]}>
                   {measurementType
                     ? `${measurementType.helper} Blank sizes aren't saved.`
-                    : 'Pick what kind of item this is to see the right measurements.'}
+                    : 'Pick a category in Details to see the right measurements.'}
                 </Text>
                 {measurementType ? (
                   selectedSizes.length === 0 ? (
@@ -1196,16 +1204,19 @@ export default function AdminAddProductScreen({ navigation, route }) {
       </KeyboardAvoidingView>
 
       <ConfirmDialog
-        visible={Boolean(pendingMeasurementType)}
-        onClose={() => setPendingMeasurementType(null)}
-        title="Change item type?"
-        confirmLabel="Change type"
+        visible={Boolean(pendingCategory)}
+        onClose={() => setPendingCategory(null)}
+        title="Change category?"
+        confirmLabel="Change category"
         onConfirm={() => {
-          if (pendingMeasurementType) applyMeasurementType(pendingMeasurementType);
-          setPendingMeasurementType(null);
+          if (pendingCategory) applyCategory(pendingCategory);
+          setPendingCategory(null);
         }}
       >
-        <Text style={styles.dialogText}>The measurements you&apos;ve entered will be cleared.</Text>
+        <Text style={styles.dialogText}>
+          {categoryOption(pendingCategory)?.label} are measured differently, so the measurements you&apos;ve entered will be
+          cleared.
+        </Text>
       </ConfirmDialog>
 
       <ConfirmDialog
@@ -1498,17 +1509,7 @@ const styles = StyleSheet.create({
   sizeOn: { backgroundColor: INK, borderColor: INK },
   sizeText: { fontSize: 14, fontWeight: '600', color: INK },
 
-  mType: {
-    height: 34,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1.5,
-    borderColor: LINE,
-    backgroundColor: CREAM,
-    justifyContent: 'center',
-  },
-  mTypeOn: { backgroundColor: CLAY, borderColor: CLAY },
-  mTypeText: { fontSize: 12, fontWeight: '500', color: INK },
+
   mNote: { fontSize: 11.5, lineHeight: 17, color: MUTED, marginBottom: 10 },
   mEmpty: {
     fontSize: 12,

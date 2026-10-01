@@ -262,6 +262,7 @@ const productDoc = (overrides = {}) => ({
   colors: ['brown'],
   sizes: ['M'],
   section: 'women',
+  category: 'tops',
   createdAt: serverTimestamp(),
   // seller1's store. Tests acting as another seller override it.
   storeId: 'store1',
@@ -979,6 +980,30 @@ await test('SECT-2  section is the fixed list, on create and on edit', async () 
   // and can be given one.
   await assertSucceeds(updateDoc(doc(db, 'products/p1'), { stock: 4 }));
   await assertSucceeds(updateDoc(doc(db, 'products/p1'), { section: 'unisex' }));
+});
+
+await test('CAT-1  every category is accepted, and so is a build without one', async () => {
+  // The survey APK predates both Section and Category and sends neither.
+  // Required by the app, not yet by the rules; becomes assertFails on
+  // tightening (see isNewProductShape in firestore.rules).
+  const oldBuild = productDoc();
+  delete oldBuild.section;
+  delete oldBuild.category;
+  await assertSucceeds(setDoc(doc(asSeller(), 'products/cat1'), oldBuild));
+  for (const value of ['tops', 'outerwear', 'bottoms', 'dresses', 'footwear', 'bags', 'accessories']) {
+    await assertSucceeds(setDoc(doc(asSeller(), `products/cat-${value}`), productDoc({ category: value })));
+  }
+});
+
+await test('CAT-2  category is the fixed list, on create and on edit', async () => {
+  const db = asSeller();
+  await assertFails(setDoc(doc(db, 'products/cat2'), productDoc({ category: 'Dresses' })));
+  await assertFails(setDoc(doc(db, 'products/cat3'), productDoc({ category: 2 })));
+  await assertFails(updateDoc(doc(db, 'products/p1'), { category: 'shirts' }));
+  // p1 has no category: it stays editable (as the survey APK's Edit
+  // Product does it, sending none), and can be given one.
+  await assertSucceeds(updateDoc(doc(db, 'products/p1'), { stock: 3 }));
+  await assertSucceeds(updateDoc(doc(db, 'products/p1'), { category: 'bottoms' }));
 });
 
 await test('PHOTO-1  photos, the flaw answer and flaw kinds are accepted on a product', async () => {

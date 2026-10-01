@@ -47,7 +47,7 @@ import TabBar from '../components/shop/TabBar';
 import StorePage from './StorePage';
 import Reveal from '../components/shop/Reveal';
 import { EASE_OUT_QUINT } from '../constants/motion';
-import { SECTION_FILTERS, matchesSection } from '../constants/productOptions';
+import { SECTION_FILTERS, matchesSection, categorySearchText } from '../constants/productOptions';
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -276,7 +276,8 @@ function Catalogue({ navigation, route }) {
         !query ||
         p.name?.toLowerCase().includes(query) ||
         p.brand?.toLowerCase().includes(query) ||
-        (TYPE_WORDS[p.type] || '').includes(query)
+        (TYPE_WORDS[p.type] || '').includes(query) ||
+        categorySearchText(p.category).includes(query)
     );
 
   const count = filteredProducts.length;

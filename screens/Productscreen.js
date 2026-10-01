@@ -62,6 +62,7 @@ import {
   DEFAULT_SIZES,
   conditionOption,
   sectionOption,
+  categoryOption,
   productGallery,
   flawTypeLabel,
 } from '../constants/productOptions';
@@ -290,6 +291,9 @@ export default function ProductScreen({ navigation, route }) {
   const brand = product?.brand?.trim() || '';
   // Products listed before Section existed have none and show none.
   const section = sectionOption(product?.section);
+  // Category likewise, and shown in the same chip: "Women's Tops".
+  const category = categoryOption(product?.category);
+  const sectionTag = [section?.tag, category?.label].filter(Boolean).join(' ');
   // Ukay-ukay only; older ukay listings have none and simply show none.
   const condition = isUkay ? conditionOption(product?.condition) : null;
   // What the seller found when they checked it for flaws. Listings from
@@ -691,9 +695,9 @@ export default function ProductScreen({ navigation, route }) {
               <TypeIcon ukay={isUkay} color={isUkay ? MOSS : CLAY} />
               <Text style={[styles.chipText, isUkay && { color: MOSS }]}>{isUkay ? 'Ukay-Ukay' : 'Ready-to-Wear'}</Text>
             </View>
-            {section ? (
+            {sectionTag ? (
               <View style={styles.sectionChip}>
-                <Text style={styles.sectionChipText}>{section.tag}</Text>
+                <Text style={styles.sectionChipText}>{sectionTag}</Text>
               </View>
             ) : null}
             {condition ? (

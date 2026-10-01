@@ -4,9 +4,10 @@
 // storeId (from "Shop by store" or a product's "Sold by"). In the approved
 // address/help/stores preview's design: a banner in the store's category
 // color, an ID card with its logo, category, date joined and three
-// figures, the store's description, its seller rating, a search (and the
-// category tabs, when it sells both kinds) that stays under the header,
-// what it has listed this week, and its items. Scrolling past the banner brings in a compact bar with
+// figures, the store's description, its seller rating, what it has listed
+// this week, a search (with the Ukay-Ukay / Ready-to-Wear tabs when it
+// sells both, and a chip for each kind of item it sells) that stays under
+// the header, and its items. Scrolling past the banner brings in a compact bar with
 // the logo and name. Everything shown is the store's live data.
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, TextInput, RefreshControl, Platform, ScrollView, useWindowDimensions } from 'react-native';
@@ -39,6 +40,7 @@ import ProductCard, { isSoldOut } from '../components/shop/ProductCard';
 import Reveal from '../components/shop/Reveal';
 import StoreLogo from '../components/shop/StoreLogo';
 import { EASE_OUT_QUINT } from '../constants/motion';
+import { CATEGORY_OPTIONS, categoryOption, categorySearchText } from '../constants/productOptions';
 
 const TYPE_WORDS = {
   'ukay-ukay': 'ukay-ukay ukay secondhand second-hand pre-loved preloved thrift',
@@ -106,6 +108,7 @@ export default function StorePage({ navigation, route }) {
   const [search, setSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [filter, setFilter] = useState('all');
+  const [category, setCategory] = useState('all');
   const [aboutOpen, setAboutOpen] = useState(false);
   const [aboutClamped, setAboutClamped] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -130,16 +133,31 @@ export default function StorePage({ navigation, route }) {
   });
   const showNew = !loading && !error && newItems.length > 0 && newItems.length < items.length;
 
+  // A chip for each kind of item the store sells, in the fixed order, and
+  // none when it sells only one kind (nothing to switch between). Products
+  // listed before Category existed are under "All" only. A chosen chip
+  // whose last item is gone falls back to "All", rather than leaving an
+  // empty grid with no chip to tap off.
+  const categories = CATEGORY_OPTIONS.filter((option) => items.some((p) => p.category === option.key));
+  const showCategories = categories.length > 1;
+  const activeCategory = showCategories && categories.some((c) => c.key === category) ? category : 'all';
+
   const q = search.trim().toLowerCase();
   const shown = items
     .filter((p) => filter === 'all' || p.type === filter)
+    .filter((p) => activeCategory === 'all' || p.category === activeCategory)
     .filter(
       (p) =>
         !q ||
         p.name?.toLowerCase().includes(q) ||
         p.brand?.toLowerCase().includes(q) ||
-        (TYPE_WORDS[p.type] || '').includes(q)
+        (TYPE_WORDS[p.type] || '').includes(q) ||
+        categorySearchText(p.category).includes(q)
     );
+  const gridTitle =
+    [activeCategory !== 'all' && categoryOption(activeCategory).label, filter !== 'all' && FILTERS.find((f) => f.key === filter).label]
+      .filter(Boolean)
+      .join(' · ') || 'All items';
 
   const handleToggleFavorite = (product) => {
     if (!auth.currentUser) {
@@ -384,12 +402,44 @@ export default function StorePage({ navigation, route }) {
               })}
             </View>
           ) : null}
+          {/* Kinds of item, quieter than the tabs and combined with them
+              and with search. Scrolls sideways when a store sells many. */}
+          {showCategories ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.chipsBleed}
+              contentContainerStyle={styles.chips}
+              accessibilityRole="radiogroup"
+              accessibilityLabel="Kind of item"
+            >
+              {[{ key: 'all', label: 'All' }, ...categories].map((c) => {
+                const on = activeCategory === c.key;
+                return (
+                  <Pressable
+                    key={c.key}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setCategory(c.key);
+                    }}
+                    style={({ pressed }) => [styles.chip, on && styles.chipOn, pressed && { transform: [{ scale: 0.95 }] }]}
+                    hitSlop={{ top: 6, bottom: 6 }}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: on }}
+                    accessibilityLabel={c.key === 'all' ? 'All kinds' : c.label}
+                  >
+                    <Text style={[styles.chipText, on && styles.chipTextOn]}>{c.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          ) : null}
         </Animated.View>
 
         {/* The items */}
         <View style={styles.itemsWrap}>
           <View style={styles.gridHead}>
-            <Text style={styles.gridTitle}>{filter === 'all' ? 'All items' : FILTERS.find((f) => f.key === filter).label}</Text>
+            <Text style={styles.gridTitle}>{gridTitle}</Text>
             {!loading && !error ? (
               <Text style={styles.gridCount}>
                 {shown.length} {shown.length === 1 ? 'item' : 'items'}
@@ -585,6 +635,22 @@ const styles = StyleSheet.create({
   },
   tabText: { fontSize: 13, fontWeight: '500', color: Colors.light.icon },
   tabTextOn: { fontWeight: '600', color: Colors.light.text },
+  // Drawn like the Shop's Women / Men / Kids chips. The row runs to the
+  // screen edges; its padding lines the first chip up with the search.
+  chipsBleed: { marginHorizontal: -20, marginTop: 10 },
+  chips: { gap: 6, paddingHorizontal: 20 },
+  chip: {
+    height: 30,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipOn: { backgroundColor: Colors.light.text, borderColor: Colors.light.text },
+  chipText: { fontSize: 12.5, fontWeight: '500', color: Colors.light.icon },
+  chipTextOn: { fontWeight: '600', color: Colors.light.background },
 
   itemsWrap: { paddingBottom: 40 },
   gridHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingHorizontal: 20, paddingBottom: 10 },
