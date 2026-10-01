@@ -111,6 +111,7 @@ const MAX_RETRY_ATTEMPTS = MAIL_MAX_RETRY_ATTEMPTS;
 
 const KIND_LABELS = {
   orderConfirmation: 'Order receipt',
+  orderStatus: 'Order update',
   supportRequest: 'Support alert',
 };
 

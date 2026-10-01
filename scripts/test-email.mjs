@@ -198,6 +198,80 @@ await test('ORDER-MAIL-4  a refused send is recorded, not thrown', async (transp
   assert(logged.recordedAt, 'recordedAt must be written on the failure path too');
 });
 
+console.log('\nOrder status updates');
+
+// What the trigger sees: the order before and after one write.
+const moved = (from, to, overrides = {}) => [order({ status: from, ...overrides }), order({ status: to, ...overrides })];
+
+await test('STATUS-MAIL-1  shipping an order emails the customer', async (transport) => {
+  await emails._handleOrderUpdated(...moved('processing', 'shipped'), 'ship1');
+
+  assertEqual(transport.sent.length, 1, 'messages sent');
+  assertEqual(transport.sent[0].to, 'cathy@example.com', 'recipient');
+  assert(transport.sent[0].subject.includes('on its way'), 'subject says it shipped');
+  assert(transport.sent[0].subject.includes('#SHIP1'), 'subject carries the order number');
+
+  const logged = await entry('status-ship1-shipped');
+  assertEqual(logged.status, 'sent', 'logged status');
+  assertEqual(logged.kind, 'orderStatus', 'logged kind');
+  assertEqual(logged.orderStatus, 'shipped', 'which update it was, kept apart from the email\'s own status');
+  assertEqual(logged.storeId, 'store1', 'routed to the order\'s store, so its manager can resend');
+});
+
+await test('STATUS-MAIL-2  only shipped, delivered and cancelled send', async (transport) => {
+  await emails._handleOrderUpdated(...moved('pending', 'processing'), 'quiet1');
+  assertEqual(transport.sent.length, 0, 'processing is not emailed');
+
+  await emails._handleOrderUpdated(...moved('shipped', 'delivered'), 'quiet1');
+  await emails._handleOrderUpdated(...moved('pending', 'cancelled'), 'quiet2');
+  assertEqual(transport.sent.length, 2, 'delivered and cancelled are');
+});
+
+await test('STATUS-MAIL-3  a write that leaves status alone sends nothing', async (transport) => {
+  // Order chat stamps read markers on the order and the PayMongo webhook
+  // writes paymentStatus. Neither is news to the customer.
+  const [before] = moved('shipped', 'shipped');
+  await emails._handleOrderUpdated(before, { ...before, customerReadAt: new Date() }, 'chat1');
+  await emails._handleOrderUpdated(before, { ...before, paymentStatus: 'paid' }, 'chat1');
+
+  assertEqual(transport.sent.length, 0, 'messages sent');
+});
+
+await test('STATUS-MAIL-4  Undo and re-ship sends one email, not two', async (transport) => {
+  // Shipped, undone back to processing, shipped again. Each status has one
+  // key per order, so the second "shipped" is a duplicate and is dropped.
+  await emails._handleOrderUpdated(...moved('processing', 'shipped'), 'undo1');
+  await emails._handleOrderUpdated(...moved('shipped', 'processing'), 'undo1');
+  await emails._handleOrderUpdated(...moved('processing', 'shipped'), 'undo1');
+
+  assertEqual(transport.sent.length, 1, 'messages sent');
+});
+
+await test('STATUS-MAIL-5  the wording follows the payment', async (transport) => {
+  await emails._handleOrderUpdated(...moved('processing', 'shipped'), 'cod1');
+  assert(transport.sent[0].text.includes('pay the rider'), 'COD shipped: have the cash ready');
+  assert(transport.sent[0].text.includes('To pay on delivery'), 'COD shipped: amount still owed');
+
+  await emails._handleOrderUpdated(...moved('shipped', 'delivered'), 'cod1');
+  assert(!transport.sent[1].text.includes('To pay on delivery'), 'COD delivered: the rider has been paid');
+
+  await emails._handleOrderUpdated(
+    ...moved('pending', 'cancelled', { paymentMethod: 'gcash', paymentStatus: 'paid' }),
+    'paid1'
+  );
+  assert(transport.sent[2].text.includes('refunds are not sent automatically'), 'paid cancel: refund line');
+
+  await emails._handleOrderUpdated(...moved('pending', 'cancelled'), 'cod2');
+  assert(transport.sent[3].text.includes('Nothing was charged'), 'COD cancel: nothing to refund');
+});
+
+await test('STATUS-MAIL-6  an order with no usable address sends nothing', async (transport) => {
+  await emails._handleOrderUpdated(...moved('processing', 'shipped', { customerEmail: 'unknown' }), 'noaddr3');
+
+  assertEqual(transport.sent.length, 0, 'messages sent');
+  assertEqual(await entry('status-noaddr3-shipped'), null, 'nothing claimed');
+});
+
 console.log('\nSupport notification');
 
 await test('SUPPORT-MAIL-1  the store is emailed, with Reply-To set to the customer', async (transport) => {
@@ -481,6 +555,39 @@ await test('RETRY-12  only whoever handles the entry may resend it', async (tran
   );
   const result = await emails._handleRetryMail({ auth: { uid: 'admin1' }, data: { key: 'support-r12' } });
   assertEqual(result.status, 'sent', 'the Platform Admin can resend it');
+});
+
+await test('RETRY-13  a failed status update sends on a second attempt', async (transport) => {
+  const after = order({ status: 'shipped' });
+  await db.doc('users/customer1/orders/r13').set(after);
+  transport.failNext('550 mailbox unavailable');
+  await emails._handleOrderUpdated(order({ status: 'processing' }), after, 'r13');
+  assertEqual((await entry('status-r13-shipped')).status, 'failed', 'setup: it failed');
+
+  const result = await emails._handleRetryMail(asSeller('status-r13-shipped'));
+
+  assertEqual(result.status, 'sent', 'the retry sent it');
+  assertEqual(transport.sent.length, 1, 'once');
+  assert(transport.sent[0].subject.includes('on its way'), 'the shipped email, rebuilt from the order');
+});
+
+await test('RETRY-14  an out-of-date status update is not resent', async (transport) => {
+  // "On its way" for an order that has since been delivered would tell the
+  // customer something no longer true. Refused without burning an attempt.
+  const after = order({ status: 'shipped' });
+  await db.doc('users/customer1/orders/r14').set(after);
+  transport.failNext('550 mailbox unavailable');
+  await emails._handleOrderUpdated(order({ status: 'processing' }), after, 'r14');
+  await db.doc('users/customer1/orders/r14').update({ status: 'delivered' });
+
+  const error = await expectReject(
+    () => emails._handleRetryMail(asSeller('status-r14-shipped')),
+    'failed-precondition',
+    'the stale update is refused'
+  );
+  assert(error.message.includes('out of date'), `refused for being stale, not for: ${error.message}`);
+  assertEqual(transport.sent.length, 0, 'nothing sent');
+  assertEqual((await entry('status-r14-shipped')).retryCount ?? 0, 0, 'no attempt counted');
 });
 
 await test('RETRY-9  a key cannot escape mailLog', async () => {

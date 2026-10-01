@@ -1239,11 +1239,12 @@ exports._setGatewayForTests = (client) => {
 // Re-exported here because the Firebase CLI discovers functions by loading
 // this entry point and walking its exports; a trigger defined in a file
 // nothing requires is a file that never deploys.
-const { sendOrderConfirmation, notifySupportRequest, retryMail } = require('./emails');
+const { sendOrderConfirmation, sendOrderStatusUpdate, notifySupportRequest, retryMail } = require('./emails');
 
 exports.sendOrderConfirmation = sendOrderConfirmation;
+exports.sendOrderStatusUpdate = sendOrderStatusUpdate;
 exports.notifySupportRequest = notifySupportRequest;
-// A callable rather than a trigger, and the only one of the three a person
+// A callable rather than a trigger, and the only one of these a person
 // invokes directly — AdminMailLogScreen's "Send again" button. It takes a
 // mailLog entry id and re-derives the recipient from the source document,
 // so it cannot be aimed at an address; see the note above it in emails.js.

@@ -76,6 +76,10 @@ const codOrder = {
 // change wording, which is the only difference worth eyeballing.
 const paidOrder = { ...codOrder, paymentMethod: 'gcash' };
 
+// Prepaid and actually charged, which is what a cancellation email checks
+// before telling the customer a refund has to be arranged.
+const paidAndCharged = { ...paidOrder, paymentStatus: 'paid', storeName: 'Tindahan ni Sam' };
+
 const supportRequest = {
   userId: 'customer1',
   userEmail: 'cathy@example.com',
@@ -93,6 +97,17 @@ const files = [
   ['order-cod.txt', emails._renderOrderText(codOrder, 'aBcDeF1234567890')],
   ['order-prepaid.html', emails._renderOrderHtml(paidOrder, 'zZyYxX9876543210')],
   ['order-prepaid.txt', emails._renderOrderText(paidOrder, 'zZyYxX9876543210')],
+  // Status updates. Shipped is shown both ways because COD adds the
+  // "have the cash ready" line; cancelled both ways because a paid online
+  // order gets the refund line instead of "nothing was charged".
+  ['status-shipped-cod.html', emails._renderStatusHtml(codOrder, 'aBcDeF1234567890', 'shipped')],
+  ['status-shipped-cod.txt', emails._renderStatusText(codOrder, 'aBcDeF1234567890', 'shipped')],
+  ['status-shipped-prepaid.html', emails._renderStatusHtml(paidOrder, 'zZyYxX9876543210', 'shipped')],
+  ['status-delivered.html', emails._renderStatusHtml(codOrder, 'aBcDeF1234567890', 'delivered')],
+  ['status-delivered.txt', emails._renderStatusText(codOrder, 'aBcDeF1234567890', 'delivered')],
+  ['status-cancelled-cod.html', emails._renderStatusHtml(codOrder, 'aBcDeF1234567890', 'cancelled')],
+  ['status-cancelled-paid.html', emails._renderStatusHtml(paidAndCharged, 'zZyYxX9876543210', 'cancelled')],
+  ['status-cancelled-paid.txt', emails._renderStatusText(paidAndCharged, 'zZyYxX9876543210', 'cancelled')],
   ['support.html', emails._renderSupportHtml(supportRequest, 'req0001abcdef')],
   ['support.txt', emails._renderSupportText(supportRequest, 'req0001abcdef')],
   ['support-no-email.html', emails._renderSupportHtml(supportNoEmail, 'req0002abcdef')],

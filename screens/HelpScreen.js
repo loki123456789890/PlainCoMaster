@@ -41,7 +41,7 @@ const FAQ_CATEGORIES = [
       {
         id: 'o1',
         question: 'How do I track my order?',
-        answer: 'You can track your order by going to "My Orders" in your profile. Tap the order to see where it is: Placed, Processing, Shipped, or Delivered.',
+        answer: 'You can track your order by going to "My Orders" in your profile. Tap the order to see where it is: Placed, Processing, Shipped, or Delivered. We also email you when it ships, arrives, or is cancelled.',
       },
       {
         id: 'o2',

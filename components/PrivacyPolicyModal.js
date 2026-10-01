@@ -43,7 +43,7 @@ const SECTIONS = [
     items: [
       ['To create and secure your account.'],
       ['To process your orders and deliver them to you.'],
-      ['To email you a confirmation when you place an order.'],
+      ['To email you a confirmation when you place an order, and an update when it ships, arrives, or is cancelled.'],
       ['To show your order status and let you message the store about an order.'],
       ['To display your reviews on products you have purchased.'],
     ],

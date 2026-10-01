@@ -1,9 +1,10 @@
 // functions/emails.js
 //
-// The two messages PlainCo sends, and the Firestore triggers that decide
-// when. Everything about HOW they are sent lives in mailer.js.
+// The messages PlainCo sends — the order receipt, order status updates,
+// and the support alert — and the Firestore triggers that decide when.
+// Everything about HOW they are sent lives in mailer.js.
 //
-// BOTH ARE TRIGGERS, NOT INLINE SENDS, and that is the important choice
+// ALL ARE TRIGGERS, NOT INLINE SENDS, and that is the important choice
 // here. placeOrder could have sent the receipt itself, at the end of its
 // transaction. It must not: an SMTP timeout would then surface to the
 // customer as a failed checkout for an order that was, in fact, placed —
@@ -11,12 +12,12 @@
 // trigger means the worst case is a missing email attached to a perfectly
 // good order, which is the failure you want when you have to pick one.
 //
-// retry is left OFF on both. A retried trigger re-runs the whole handler,
+// retry is left OFF on all of them. A retried trigger re-runs the whole handler,
 // and while claimOnce() in mailer.js would stop a duplicate send, a
 // message that failed once because Gmail rejected the recipient will fail
 // identically every time. Retries would buy nothing but log noise.
 
-const { onDocumentCreated } = require('firebase-functions/v2/firestore');
+const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const { getFirestore } = require('firebase-admin/firestore');
 const logger = require('firebase-functions/logger');
@@ -244,14 +245,138 @@ function supportText(request, requestId) {
   ].join('\n');
 }
 
-// Exported for scripts/preview-email.mjs, which renders both templates to
+// ---------------------------------------------------------------------
+// Order status updates
+// ---------------------------------------------------------------------
+//
+// Without these, a customer learns their order shipped only by opening
+// My Orders. Three statuses earn an email and two do not: 'pending' is
+// the receipt above, and 'processing' is the store packing — real, but
+// not news worth an inbox, and a fourth email per order starts to read
+// as noise.
+//
+// Copy is per status; the order card and item list are shared. Every
+// claim below is one the app already makes somewhere: delivery times
+// and the 24-hour damage window come from HelpScreen, and "refunds are
+// not sent automatically" is what AdminOrdersScreen tells the manager
+// when they cancel a paid order.
+
+// The same test AdminOrdersScreen uses before warning about a refund. An
+// order with no paymentStatus predates the sandbox and was never charged.
+const paidOnline = (order) => order.paymentStatus === 'paid' && !isPayOnDelivery(order.paymentMethod);
+
+const STATUS_EMAILS = {
+  shipped: {
+    subject: (number) => `Your PlainCo order ${number} is on its way`,
+    heading: 'On its way',
+    intro: (store) => `${store} has handed your order to the courier.`,
+    closing: (order) => [
+      'Metro Manila deliveries take 1–3 business days, provincial ones 3–7.',
+      isPayOnDelivery(order.paymentMethod)
+        ? 'You pay the rider when it arrives, so have the amount above ready.'
+        : 'You can follow it under My Orders.',
+    ],
+  },
+  delivered: {
+    subject: (number) => `Your PlainCo order ${number} was delivered`,
+    heading: 'Delivered',
+    intro: () => 'It has arrived. We hope you love it.',
+    closing: () => [
+      'You can review each item from the order in My Orders.',
+      'If something arrived damaged, tell us within 24 hours with photos and we will sort it out.',
+    ],
+  },
+  cancelled: {
+    subject: (number) => `Your PlainCo order ${number} was cancelled`,
+    heading: 'Order cancelled',
+    intro: (store) => `${store} cancelled this order.`,
+    closing: (order) => [
+      paidOnline(order)
+        ? 'You paid online, and refunds are not sent automatically. Message the store from this order in My Orders to arrange yours.'
+        : 'Nothing was charged, so there is nothing more you need to do.',
+    ],
+  },
+};
+
+// "To pay on delivery" only while there is still a payment coming. Once a
+// COD order is delivered the rider has the money, and once it is cancelled
+// nobody is owed anything.
+const totalLabel = (order, status) =>
+  status === 'shipped' && isPayOnDelivery(order.paymentMethod) ? 'To pay on delivery' : 'Total';
+
+const sendsStatusEmail = (status) => Object.prototype.hasOwnProperty.call(STATUS_EMAILS, status);
+
+function statusHtml(order, orderId, status) {
+  const copy = STATUS_EMAILS[status];
+  const items = Array.isArray(order.items) ? order.items : [];
+  const number = formatOrderNumber(orderId);
+
+  const body = `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${LINE};border-radius:12px;padding:16px;margin-bottom:20px;">
+  <tr><td style="font:600 11px/1.4 ${SANS};letter-spacing:0.08em;text-transform:uppercase;color:${ASH};padding-bottom:4px;">Order number</td></tr>
+  <tr><td style="font:700 22px/1.2 ${SANS};color:${CLAY};">${escapeHtml(number)}</td></tr>
+  ${order.storeName
+    ? `<tr><td style="font:400 13px/1.5 ${SANS};color:${INK};padding-top:2px;">from ${escapeHtml(order.storeName)}</td></tr>`
+    : ''}
+</table>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${itemRows(items)}</table>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding-top:12px;">
+  ${summaryRow(totalLabel(order, status), peso(order.total), true)}
+</table>
+
+${copy.closing(order)
+    .map((line) => `<p style="margin:16px 0 0 0;font:400 13px/1.6 ${SANS};color:${ASH};">${escapeHtml(line)}</p>`)
+    .join('\n')}`;
+
+  return shell({
+    preheader: `Order ${number} — ${copy.heading.toLowerCase()}.`,
+    heading: copy.heading,
+    intro: copy.intro(order.storeName || 'The store'),
+    body,
+  });
+}
+
+function statusText(order, orderId, status) {
+  const copy = STATUS_EMAILS[status];
+  const items = Array.isArray(order.items) ? order.items : [];
+
+  const lines = [
+    `PlainCo — ${copy.heading.toLowerCase()}`,
+    '',
+    copy.intro(order.storeName || 'The store'),
+    '',
+    `Order number: ${formatOrderNumber(orderId)}`,
+    ...(order.storeName ? [`Sold by: ${order.storeName}`] : []),
+    '',
+  ];
+
+  for (const item of items) {
+    const variant = [item.size, item.color].filter(Boolean).join(' / ');
+    lines.push(`  ${item.name}${variant ? ` (${variant})` : ''} x${item.quantity}`);
+  }
+
+  lines.push(
+    '',
+    `${totalLabel(order, status)}: ${peso(order.total)}`,
+    '',
+    ...copy.closing(order)
+  );
+
+  return lines.join('\n');
+}
+
+// Exported for scripts/preview-email.mjs, which renders every template to
 // disk so they can be opened in a browser and eyeballed without deploying
-// or sending anything. index.js re-exports only the two triggers, so these
+// or sending anything. index.js re-exports only the triggers, so these
 // stay invisible to the Firebase CLI's function discovery.
 exports._renderOrderHtml = orderHtml;
 exports._renderOrderText = orderText;
 exports._renderSupportHtml = supportHtml;
 exports._renderSupportText = supportText;
+exports._renderStatusHtml = statusHtml;
+exports._renderStatusText = statusText;
 
 // The handlers are named functions rather than inline closures so
 // scripts/test-email.mjs can call them with a plain object instead of
@@ -315,8 +440,58 @@ async function handleSupportCreated(request, requestId) {
   });
 }
 
+// Sends the email for one status. Split from the trigger handler below so
+// retryMail can rebuild a failed update from the order alone.
+//
+// ONE KEY PER ORDER AND STATUS, so each update goes out at most once.
+// That is what keeps Undo quiet: a manager who marks an order shipped,
+// undoes it and marks it shipped again produces one email, not two. The
+// cost is the other half of the same fact — the first email has already
+// gone by the time Undo is tapped, and nothing calls it back.
+async function sendStatusUpdate(order, orderId, status) {
+  if (!order || !sendsStatusEmail(status)) return;
+
+  // Same filter as the receipt: 'unknown' is placeOrder's marker for "no
+  // address found", not an address.
+  const to = order.customerEmail && order.customerEmail !== 'unknown'
+    ? order.customerEmail
+    : null;
+  if (!to) {
+    logger.warn(`order ${orderId} has no usable customerEmail, no ${status} update sent`);
+    return;
+  }
+
+  await sendMail({
+    key: `status-${orderId}-${status}`,
+    to,
+    subject: STATUS_EMAILS[status].subject(formatOrderNumber(orderId)),
+    html: statusHtml(order, orderId, status),
+    text: statusText(order, orderId, status),
+    // orderStatus, never `status`: that field on a mailLog entry is the
+    // email's own state (sending, sent, failed), and a meta field of the
+    // same name would be overwritten by it.
+    meta: {
+      kind: 'orderStatus', orderId, orderStatus: status, customerId: order.customerId || null,
+      storeId: order.storeId || null,
+    },
+  });
+}
+
+// The order document changes for more than its status — order chat
+// stamps read markers and the last message on it, and the PayMongo
+// webhook writes paymentStatus. Only a change to status itself is an
+// update the customer is told about.
+async function handleOrderUpdated(before, after, orderId) {
+  if (!before || !after) return;
+  const previous = before.status || 'pending';
+  const current = after.status || 'pending';
+  if (previous === current) return;
+  await sendStatusUpdate(after, orderId, current);
+}
+
 exports._handleOrderCreated = handleOrderCreated;
 exports._handleSupportCreated = handleSupportCreated;
+exports._handleOrderUpdated = handleOrderUpdated;
 
 exports.sendOrderConfirmation = onDocumentCreated(
   {
@@ -327,6 +502,22 @@ exports.sendOrderConfirmation = onDocumentCreated(
   },
   async (event) => {
     await handleOrderCreated(event.data?.data(), event.params.orderId);
+  }
+);
+
+exports.sendOrderStatusUpdate = onDocumentUpdated(
+  {
+    document: 'users/{userId}/orders/{orderId}',
+    region: REGION,
+    secrets: MAIL_SECRETS,
+    retry: false,
+  },
+  async (event) => {
+    await handleOrderUpdated(
+      event.data?.before?.data(),
+      event.data?.after?.data(),
+      event.params.orderId
+    );
   }
 );
 
@@ -429,6 +620,40 @@ async function resendAction(db, key, entry) {
     }
 
     return () => handleOrderCreated(order, orderId);
+  }
+
+  if (kind === 'orderStatus') {
+    const { orderId, customerId, orderStatus: status } = entry;
+    if (!orderId || !customerId || !sendsStatusEmail(status)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This entry does not record which order update it was, so it cannot be rebuilt.'
+      );
+    }
+
+    const snapshot = await db.doc(`users/${customerId}/orders/${orderId}`).get();
+    if (!snapshot.exists) {
+      throw new HttpsError('failed-precondition', 'That order no longer exists.');
+    }
+
+    const order = snapshot.data();
+    if (!order.customerEmail || order.customerEmail === 'unknown') {
+      throw new HttpsError(
+        'failed-precondition',
+        'That order has no email address on it, so there is nowhere to send the update.'
+      );
+    }
+    // A "shipped" email for an order that has since been delivered would
+    // tell the customer something that is no longer true. The newer
+    // status sent its own email; this one is simply out of date.
+    if ((order.status || 'pending') !== status) {
+      throw new HttpsError(
+        'failed-precondition',
+        'That order has changed status since, so this update is out of date and will not be sent.'
+      );
+    }
+
+    return () => sendStatusUpdate(order, orderId, status);
   }
 
   if (kind === 'supportRequest') {
