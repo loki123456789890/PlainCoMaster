@@ -2270,9 +2270,12 @@ None. Both notes are worked out from the existing `createdAt` and
 ### Verification
 
 Lint unchanged at 0 errors. No rules change, so the rules test suite is
-unaffected. Still to check on a device: a newly listed product appears
-with "Just in" on Home and Shop, and a product with a stock of 1 shows
-the last-piece note.
+unaffected. Checked on a device against production (1 Oct 2026): an ukay
+test listing with a stock of 1, added through the rules as a Store
+Manager (`scripts/add-test-product.mjs`), appeared first in Home's "Just
+in" rail with the "Just in" note and "One of a kind" beside its price,
+and its product page showed all five photos (section 23) with zoom and
+the flaw disclosure. The listing was removed afterwards.
 
 ---
 
