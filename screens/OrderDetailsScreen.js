@@ -1,10 +1,10 @@
 // screens/OrderDetailsScreen.js
 //
-// Order details, from the approved orders-and-chat preview: the order as a
-// clothing tag (status, a four-step tracker, the order number with a copy
-// button and the date placed), then the seller with a Message button, the
-// items, where it's going, how it was paid, the receipt and a way to
-// support.
+// Order details, from the approved order-details preview: a status card
+// whose colour, icon and tracker follow the order, then the order itself as
+// one receipt (the seller with a message bubble, the items with their
+// review strip, the totals and how it was paid), where it's going, and a
+// "Need help?" card whose first row changes with the status.
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
@@ -24,9 +24,12 @@ import Animated, {
   useReducedMotion,
   FadeIn,
   FadeInDown,
+  ZoomIn,
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Path } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { collection, query, where, getDocs, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -72,33 +75,38 @@ const STEPS = [
 
 const stepIndex = (status) => Math.max(0, STEPS.findIndex((s) => s.key === status));
 
-// The tag's colour: Clay while the order is moving, Moss (success) once
-// it arrives, Rust if it was cancelled.
-const tagColor = (status) => {
-  if (status === 'delivered') return Colors.light.success;
-  if (status === 'cancelled') return Colors.light.danger;
-  return Colors.light.tint;
+const CREAM = Colors.light.background;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The status card, per status: two stops of a gradient, the icon, the
+// headline. Ink while the store has it, Clay once it's moving, Moss
+// (success) when it arrives, and a muted ash for a cancelled order —
+// cancelled is an outcome, not an error, so it doesn't get Rust.
+const HERO = {
+  pending: { colors: ['#3A332E', '#26211D'], icon: 'receipt-text-outline', title: 'Order placed' },
+  processing: { colors: ['#3A332E', '#26211D'], icon: 'package-variant', title: 'Getting it ready' },
+  shipped: { colors: [Colors.light.tint, '#A14A2B'], icon: 'truck-delivery-outline', title: 'On its way' },
+  delivered: { colors: [Colors.light.success, '#46543C'], icon: 'package-variant-closed-check', title: 'Delivered' },
+  cancelled: { colors: ['#6F6760', '#544D47'], icon: 'close-circle-outline', title: 'Order cancelled' },
 };
 
-const headline = (status) => {
-  switch (status) {
-    case 'pending': return 'Order placed';
-    case 'processing': return 'Being prepared';
-    case 'shipped': return 'On its way';
-    case 'delivered': return 'Delivered';
-    case 'cancelled': return 'Cancelled';
-    default: return 'Order placed';
-  }
-};
+const shortDay = (date) =>
+  date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
 
-const reassurance = (status, storeName) => {
+const formatDay = (date) =>
+  date ? date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+
+const subline = (status, storeName, deliveredDate) => {
   const store = storeName || 'The store';
   switch (status) {
     case 'pending': return `${store} has your order.`;
-    case 'processing': return `${store} is getting your order ready.`;
-    case 'shipped': return "It's on its way to you.";
-    case 'delivered': return 'Delivered. We hope you love it.';
-    case 'cancelled': return 'This order was cancelled.';
+    case 'processing': return `${store} is packing your order.`;
+    case 'shipped': return 'Your order has left the store.';
+    case 'delivered':
+      return deliveredDate
+        ? `It arrived on ${shortDay(deliveredDate)}. We hope you love it.`
+        : 'Delivered. We hope you love it.';
+    case 'cancelled': return 'This order will not be delivered.';
     default: return 'Tracking this order for you.';
   }
 };
@@ -106,7 +114,7 @@ const reassurance = (status, storeName) => {
 // "Sep 22, 2026" -> "Sep 22", for the tracker's small date line.
 const shortDate = (date) => (date ? String(date).split(',')[0] : '');
 
-const peso = (n) => `₱${Number(n || 0).toFixed(2)}`;
+const peso = (n) => `₱${Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // A dashed rule. RN draws a dashed border on one side only on iOS; a
 // fully bordered box clipped to its top edge dashes on both platforms.
@@ -114,6 +122,55 @@ function DashedRule({ color, style }) {
   return (
     <View style={[styles.dashClip, style]}>
       <View style={[styles.dashBox, { borderColor: color }]} />
+    </View>
+  );
+}
+
+// The tear line across the receipt: a dashed rule with a half-circle bite
+// out of each edge, in the page colour.
+function ReceiptCut() {
+  return (
+    <View style={styles.cut}>
+      <DashedRule color="#D9CFC2" />
+      <View style={[styles.cutBite, styles.cutBiteLeft]} />
+      <View style={[styles.cutBite, styles.cutBiteRight]} />
+    </View>
+  );
+}
+
+// The receipt's paper: rounded at the top, scalloped along the bottom.
+// Drawn as one SVG path behind the content so the border follows the
+// scallops on both platforms (a View can't be cut like that).
+const SCALLOP_R = 6;
+const SCALLOP_STEP = 20;
+function receiptPath(w, h) {
+  const r = 22;
+  const n = Math.max(1, Math.floor(w / SCALLOP_STEP));
+  const step = w / n;
+  let d = `M0.5,${r} A${r - 0.5},${r - 0.5} 0 0 1 ${r},0.5 L${w - r},0.5 A${r - 0.5},${r - 0.5} 0 0 1 ${w - 0.5},${r} L${w - 0.5},${h}`;
+  for (let k = n - 1; k >= 0; k -= 1) {
+    const cx = step / 2 + k * step;
+    d += ` L${cx + SCALLOP_R},${h} A${SCALLOP_R},${SCALLOP_R} 0 0 0 ${cx - SCALLOP_R},${h}`;
+  }
+  return `${d} L0.5,${h} Z`;
+}
+
+function Receipt({ children }) {
+  const [size, setSize] = useState(null);
+  return (
+    <View
+      style={styles.receipt}
+      onLayout={(e) => {
+        const { width, height } = e.nativeEvent.layout;
+        if (!size || size.w !== width || size.h !== height) setSize({ w: width, h: height });
+      }}
+    >
+      {size ? (
+        <Svg width={size.w} height={size.h} style={StyleSheet.absoluteFill} pointerEvents="none">
+          <Path d={receiptPath(size.w, size.h)} fill="#fff" stroke="#ECE4D9" strokeWidth={1} />
+        </Svg>
+      ) : null}
+      {children}
     </View>
   );
 }
@@ -130,24 +187,53 @@ function NowDot({ color, reduceMotion }) {
   return <Animated.View style={[styles.nowInner, { backgroundColor: color }, style]} />;
 }
 
-// Four white dots joined by a line, on the tag: ticked when done, a ring
-// and a breathing dot for the current step, faint for what's to come.
-function Tracker({ index, color, placedDate, reduceMotion }) {
+// The status icon in its tile. A delivery truck drifts and a parcel being
+// packed bobs, so a moving order looks like one; still under Reduce Motion.
+function HeroIcon({ status, reduceMotion }) {
+  const move = useSharedValue(0);
+  const moving = status === 'shipped' || status === 'processing' || status === 'pending';
+  useEffect(() => {
+    if (reduceMotion || !moving) return undefined;
+    move.value = withRepeat(withTiming(1, { duration: status === 'shipped' ? 800 : 1000 }), -1, true);
+    return () => cancelAnimation(move);
+  }, [reduceMotion, moving, status, move]);
+  const style = useAnimatedStyle(() =>
+    status === 'shipped'
+      ? { transform: [{ translateX: -2 + move.value * 5 }, { translateY: -move.value }] }
+      : { transform: [{ translateY: -move.value * 3 }] }
+  );
+  return (
+    <Animated.View
+      key={status}
+      entering={reduceMotion ? undefined : ZoomIn.duration(420).easing(EASE_OUT_QUINT).delay(120)}
+      style={styles.heroIcon}
+    >
+      <Animated.View style={style}>
+        <MaterialCommunityIcons name={HERO[status]?.icon || HERO.pending.icon} size={28} color={CREAM} />
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+// Four dots joined by a rail, in a darker inset on the status card: ticked
+// when done, a ring and a breathing dot for the current step, faint for
+// what's to come. A delivered order ticks all four.
+function Tracker({ index, delivered, color, dates, reduceMotion }) {
   return (
     <View style={styles.track}>
       {STEPS.map((step, i) => {
-        const done = i < index;
-        const now = i === index;
-        const sub = i === 0 ? shortDate(placedDate) : now ? 'Now' : '';
+        const done = i < index || delivered;
+        const now = i === index && !delivered;
+        const sub = dates[i] || (now ? 'Now' : '');
         return (
           <View key={step.key} style={[styles.trackStep, !done && !now && styles.trackTodo]}>
             {i > 0 && <View style={[styles.trackLine, i <= index && styles.trackLineOn]} />}
-            <View style={[styles.trackDot, (done || now) && styles.trackDotOn, now && styles.trackDotNow]}>
-              {done ? <Ionicons name="checkmark" size={13} color={color} /> : null}
+            <View style={[styles.trackDot, { backgroundColor: color }, (done || now) && styles.trackDotOn, now && styles.trackDotNow]}>
+              {done ? <Ionicons name="checkmark" size={12} color={color} /> : null}
               {now ? <NowDot color={color} reduceMotion={reduceMotion} /> : null}
             </View>
             <Text style={styles.trackLabel}>{step.label}</Text>
-            {sub ? <Text style={styles.trackSub}>{sub}</Text> : null}
+            <Text style={styles.trackSub}>{sub || ' '}</Text>
           </View>
         );
       })}
@@ -159,6 +245,29 @@ function SectionTitle({ children }) {
   return <Text style={styles.sectionTitle}>{children}</Text>;
 }
 
+// One row of the "Need help?" card.
+function HelpRow({ icon, tone = 'clay', title, body, chip, onPress, label, first }) {
+  const moss = tone === 'moss';
+  return (
+    <AnimatedPressable
+      onPress={onPress}
+      style={[styles.helpRow, !first && styles.helpRowRule]}
+      accessibilityRole="button"
+      accessibilityLabel={label || `${title} ${body || ''}`}
+    >
+      <View style={[styles.ico, moss ? styles.icoMoss : styles.icoClay]}>
+        <Ionicons name={icon} size={18} color={moss ? Colors.light.secondary : Colors.light.tint} />
+      </View>
+      <View style={styles.rowText}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        {body ? <Text style={styles.rowBody}>{body}</Text> : null}
+        {chip ? <Text style={styles.daysChip}>{chip}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={Colors.light.icon} />
+    </AnimatedPressable>
+  );
+}
+
 export default function OrderDetailsScreen({ navigation, route }) {
   const { order } = route.params || {};
   const items = order?.items || [];
@@ -167,8 +276,8 @@ export default function OrderDetailsScreen({ navigation, route }) {
   const store = order?.storeId ? getStore(order.storeId) : null;
 
   // Reviews this customer has already written against this order, keyed by
-  // product id, so each line can offer "Write a review" or "Edit your
-  // review" rather than a single guess for the whole order.
+  // product id, so each line can offer "How was it?" or "Your review"
+  // rather than a single guess for the whole order.
   //
   // A one-shot read rather than a live listener, re-run on focus: the only
   // thing that changes this map is the customer coming back from
@@ -195,10 +304,10 @@ export default function OrderDetailsScreen({ navigation, route }) {
         });
         setReviewsByProductId(byProduct);
       } catch (error) {
-        // Non-fatal by design: losing this read only means the row reads
-        // "Write a review" when it could have said "Edit your review".
-        // WriteReviewScreen loads the authoritative answer on open and
-        // switches itself into edit mode, so nothing is lost or duplicated.
+        // Non-fatal by design: losing this read only means the strip reads
+        // "How was it?" when it could have shown the review. WriteReviewScreen
+        // loads the authoritative answer on open and switches itself into
+        // edit mode, so nothing is lost or duplicated.
         console.error('Could not load reviews for this order:', error);
       }
     };
@@ -213,7 +322,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
 
   // The order passed in is a snapshot from the list. The order document is
   // watched live, so the unread badge appears while this screen is open
-  // (and clears on the way back from the chat), and the tag moves on when
+  // (and clears on the way back from the chat), and the card moves on when
   // the store marks the order shipped.
   const [chat, setChat] = useState(() => (order ? chatFields(order) : null));
   const [liveStatus, setLiveStatus] = useState(null);
@@ -243,8 +352,8 @@ export default function OrderDetailsScreen({ navigation, route }) {
   // A reported problem about this order, watched live so the store's
   // decision shows up while the screen is open. Only a delivered order can
   // have one, so nothing is opened for the rest. `undefined` until the
-  // first answer, so the "Report a problem" row doesn't flash in and then
-  // turn into a status card.
+  // first answer, so the "Something wrong with it?" row doesn't flash in
+  // and then turn into a status card.
   const [problem, setProblem] = useState(undefined);
   useEffect(() => {
     const uid = auth.currentUser?.uid;
@@ -286,8 +395,8 @@ export default function OrderDetailsScreen({ navigation, route }) {
     }
   };
 
-  // A quiet "arrived" pulse on the tag's headline when the order is
-  // delivered. Skipped under Reduce Motion.
+  // A quiet "arrived" pulse on the headline when the order is delivered.
+  // Skipped under Reduce Motion.
   const headScale = useSharedValue(1);
   const headStyle = useAnimatedStyle(() => ({ transform: [{ scale: headScale.value }] }));
   useEffect(() => {
@@ -297,6 +406,9 @@ export default function OrderDetailsScreen({ navigation, route }) {
       withTiming(1, { duration: 220, easing: EASE_OUT_QUART })
     );
   }, [status, reduceMotion, headScale]);
+
+  // The top bar picks up a hairline once the page scrolls under it.
+  const [scrolled, setScrolled] = useState(false);
 
   const [copied, setCopied] = useState(false);
   const copiedTimer = useRef(null);
@@ -335,7 +447,6 @@ export default function OrderDetailsScreen({ navigation, route }) {
 
   const deadline = reportDeadline(deliveredAt);
   const canReport = problem === null && canReportProblem({ status }, deliveredAt);
-  const showsProblemBlock = Boolean(problem) || canReport;
   const handleReportProblem = () => {
     Haptics.selectionAsync();
     navigation.navigate('ReportProblem', {
@@ -351,18 +462,20 @@ export default function OrderDetailsScreen({ navigation, route }) {
     });
   };
 
-  const handleWriteReview = (item) => {
+  // A star tapped on the strip opens the review with that rating chosen.
+  const handleWriteReview = (item, initialRating) => {
     Haptics.selectionAsync();
     navigation.navigate('WriteReview', {
       orderId: order.id,
       item,
       storeId: order.storeId,
       storeName: order.storeName || '',
+      ...(initialRating ? { initialRating } : null),
     });
   };
 
   const header = (
-    <View style={styles.header}>
+    <View style={[styles.header, scrolled && styles.headerScrolled]}>
       <TouchableOpacity
         onPress={() => navigation.goBack()}
         style={styles.headerBtn}
@@ -370,11 +483,11 @@ export default function OrderDetailsScreen({ navigation, route }) {
         accessibilityRole="button"
         accessibilityLabel="Go back"
       >
-        <Ionicons name="arrow-back" size={24} color={Colors.light.text} />
+        <Ionicons name="chevron-back" size={24} color={Colors.light.text} />
       </TouchableOpacity>
       <Text style={styles.headerTitle}>Order details</Text>
       {/* Balances Back so the title stays centered. Help lives in the
-          "Problem with this order?" row at the end of the order, not here. */}
+          "Need help?" card at the end of the order, not here. */}
       <View style={styles.headerBtn} />
     </View>
   );
@@ -401,12 +514,15 @@ export default function OrderDetailsScreen({ navigation, route }) {
   }
 
   const isCancelled = status === 'cancelled';
-  const color = tagColor(status);
-  const beforeShipping = status === 'pending' || status === 'processing';
-  // Exactly the lines firestore.rules will accept a review for: a delivered
+  const isDelivered = status === 'delivered';
+  const hero = HERO[status] || HERO.pending;
+  const heroDark = hero.colors[1];
+  const deliveredDate = deliveredAt?.toDate?.() || null;
+  const trackerDates = [shortDate(order.date), '', '', isDelivered ? shortDay(deliveredDate) : ''];
+    // Exactly the lines firestore.rules will accept a review for: a delivered
   // order, and a product listed in that order's own productIds. Orders
   // placed before productIds existed yield an empty set and show no review
-  // row at all — an absent button beats one that fails on submit.
+  // strip at all — an absent button beats one that fails on submit.
   const canReviewThisOrder = isOrderReviewable(order);
   const reviewableProductIds = new Set(order.productIds || []);
   const shippingAddress = order.shippingAddress;
@@ -415,201 +531,263 @@ export default function OrderDetailsScreen({ navigation, route }) {
   // Read from the order's own paymentStatus rather than assumed from the
   // method, so an order that was never charged cannot claim it was.
   const isPaid = paymentMethod && paymentMethod !== 'cod' && getPaymentStatus(order) === 'paid';
-  const paymentTrustText = !paymentMethod
-    ? ''
-    : paymentMethod === 'cod'
-      ? 'Pay the rider when it arrives'
-      : isPaid
-        ? paymentMethod === 'card' ? 'Credit / debit card' : 'E-wallet'
-        : `Not charged. The ${paymentLabel} payment was not completed.`;
 
   // Which PayMongo payment took the money, so a customer has a reference
   // to quote. A test-mode payment says so: it's the proof of payment a
   // customer or Store Manager would point at.
   const receipt = getPaymongoReceipt(order);
-  const itemCount = items.reduce((n, item) => n + (item.quantity || 1), 0);
-  const fade = (delay) => (reduceMotion ? undefined : FadeIn.duration(220).delay(delay).easing(EASE_OUT_QUART));
+  const paymentLine = !paymentMethod
+    ? ''
+    : paymentMethod === 'cod'
+      ? 'Pay the rider when it arrives'
+      : !isPaid
+        ? `Not charged. The ${paymentLabel} payment was not completed.`
+        : receipt
+          ? `via PayMongo${receipt.test ? ' · Test mode' : ''}`
+          : paymentMethod === 'card' ? 'Credit / debit card' : 'E-wallet';
+
+  const daysLeft = deadline ? Math.max(0, Math.ceil((deadline.getTime() - Date.now()) / DAY_MS)) : 0;
+  const reportChip = deadline
+    ? `Report by ${formatDay(deadline)} · ${daysLeft <= 1 ? 'last day' : `${daysLeft} days left`}`
+    : '';
+
+  const hasSeller = Boolean(order.storeId);
+  const beforeShipping = status === 'pending' || status === 'processing';
+  const hasFirstHelpRow = canReport || (hasSeller && !isDelivered);
+  const enter = (delay) =>
+    reduceMotion ? undefined : FadeInDown.duration(420).delay(delay).easing(EASE_OUT_QUINT);
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom', 'left', 'right']}>
       {header}
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        {/* The tag */}
-        <Animated.View
-          entering={fade(0)}
-          style={[styles.tag, { backgroundColor: color }]}
-        >
-          <View style={styles.tagGlow} />
-          <View style={styles.tagString} />
-          <View style={styles.tagHole} />
-
-          <View style={styles.tagOrdRow}>
-            <Text style={styles.tagOrdLabel}>ORDER</Text>
-            <Text style={styles.tagOrdNumber}>{formatOrderNumber(order.id)}</Text>
-            <TouchableOpacity
-              onPress={handleCopy}
-              style={styles.tagCopy}
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-              accessibilityRole="button"
-              accessibilityLabel={copied ? 'Order number copied' : 'Copy order number'}
-            >
-              <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={13} color="#fff" />
-            </TouchableOpacity>
-            {copied ? <Text style={styles.tagCopied}>Copied</Text> : null}
-          </View>
-
-          <View
-            accessible
-            accessibilityRole="header"
-            accessibilityLabel={`${headline(status)}. ${reassurance(status, order.storeName)}`}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.content}
+        scrollEventThrottle={32}
+        onScroll={(e) => {
+          const past = e.nativeEvent.contentOffset.y > 6;
+          if (past !== scrolled) setScrolled(past);
+        }}
+      >
+        {/* Status card */}
+        <Animated.View entering={enter(40)} style={[styles.heroShadow, { shadowColor: heroDark, backgroundColor: heroDark }]}>
+          <LinearGradient
+            colors={hero.colors}
+            start={{ x: 0.1, y: 0 }}
+            end={{ x: 0.9, y: 1 }}
+            style={styles.hero}
           >
-            <Animated.Text style={[styles.tagHead, headStyle]}>{headline(status)}</Animated.Text>
-            <Text style={styles.tagSub}>{reassurance(status, order.storeName)}</Text>
-          </View>
+            <View style={styles.heroRingBig} />
+            <View style={styles.heroRing} />
 
-          {isCancelled ? (
-            <Text style={styles.tagCancelNote}>
-              If you have questions about this order, our support team can help.
-            </Text>
-          ) : (
-            <View
-              accessible
-              accessibilityLabel={`Step ${stepIndex(status) + 1} of 4: ${STEPS[stepIndex(status)].label}`}
-            >
-              <Tracker
-                index={stepIndex(status)}
-                color={color}
-                placedDate={order.date}
-                reduceMotion={reduceMotion}
-              />
+            <View style={styles.heroTop}>
+              <TouchableOpacity
+                onPress={handleCopy}
+                style={styles.orderPill}
+                hitSlop={{ top: 8, bottom: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={copied ? 'Order number copied' : `Order ${formatOrderNumber(order.id)}. Copy order number`}
+              >
+                <Text style={styles.orderPillLabel}>ORDER</Text>
+                <Text style={styles.orderPillNumber}>{formatOrderNumber(order.id)}</Text>
+                <View style={styles.orderPillIcon}>
+                  <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={11} color={CREAM} />
+                </View>
+              </TouchableOpacity>
+              {order.date ? <Text style={styles.heroDate} numberOfLines={1}>{`Placed ${order.date}`}</Text> : null}
             </View>
-          )}
 
-          <DashedRule color="rgba(255,255,255,0.4)" style={styles.tagRule} />
-          <View style={styles.tagMeta}>
-            <Text style={styles.tagMetaLabel}>Placed</Text>
-            <Text style={styles.tagMetaValue}>{order.date || '—'}</Text>
-          </View>
+            <View
+              style={styles.heroMain}
+              accessible
+              accessibilityRole="header"
+              accessibilityLabel={`${hero.title}. ${subline(status, order.storeName, deliveredDate)}`}
+            >
+              <HeroIcon status={status} reduceMotion={reduceMotion} />
+              <View style={styles.heroWords}>
+                <Animated.Text style={[styles.heroTitle, headStyle]}>{hero.title}</Animated.Text>
+                <Text style={styles.heroSub}>{subline(status, order.storeName, deliveredDate)}</Text>
+              </View>
+            </View>
+
+            {isCancelled ? (
+              <Text style={styles.cancelNote}>
+                {isPaid
+                  ? 'If you already paid, message the seller about your refund.'
+                  : 'If you have questions about this order, the seller or our support team can help.'}
+              </Text>
+            ) : (
+              <View
+                style={styles.trackWrap}
+                accessible
+                accessibilityLabel={isDelivered ? 'All 4 steps done: Delivered' : `Step ${stepIndex(status) + 1} of 4: ${STEPS[stepIndex(status)].label}`}
+              >
+                <Tracker
+                  index={stepIndex(status)}
+                  delivered={isDelivered}
+                  color={heroDark}
+                  dates={trackerDates}
+                  reduceMotion={reduceMotion}
+                />
+              </View>
+            )}
+          </LinearGradient>
         </Animated.View>
 
-        {/* The seller, and the way into the order's chat. Only orders that
-            belong to a store have someone to talk to. */}
-        {order.storeId ? (
-          <Animated.View entering={fade(40)}>
-            <Card variant="flat" style={styles.sellerCard}>
-              <View style={styles.sellerRow}>
-                <StoreLogo uri={store?.logoUrl} size={44} radius={14} />
-                <View style={styles.sellerWho}>
-                  <Text style={styles.sellerName} numberOfLines={2}>{order.storeName || 'The store'}</Text>
-                  <Text style={styles.sellerRole}>Seller</Text>
-                </View>
-                <AnimatedPressable
-                  onPress={handleOpenChat}
-                  style={styles.msgBtn}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Message ${order.storeName || 'the store'}${unreadFromStore ? ', new message' : ''}`}
-                >
-                  <Ionicons name="chatbubble-outline" size={16} color="#fff" />
-                  <Text style={styles.msgBtnText}>Message</Text>
-                  {unreadFromStore ? <View style={styles.msgBadge} /> : null}
-                </AnimatedPressable>
-              </View>
-              {beforeShipping ? (
-                <View style={styles.sellerHint}>
-                  <Ionicons name="camera-outline" size={15} color={Colors.light.secondary} />
-                  <Text style={styles.sellerHintText}>
-                    Ask for a photo of the exact piece before it ships.
-                  </Text>
-                </View>
-              ) : null}
-            </Card>
-          </Animated.View>
-        ) : null}
-
-        {/* Items */}
-        <SectionTitle>{itemCount === 1 ? 'Item · 1' : `Items · ${itemCount}`}</SectionTitle>
-        {items.length === 0 ? (
-          <Text style={styles.emptyItemsText}>No item details available for this order.</Text>
-        ) : (
-          items.map((item, index) => {
-            const existingReview = reviewsByProductId[item.productId];
-            const showReviewRow =
-              canReviewThisOrder && item.productId && reviewableProductIds.has(item.productId);
-            const qty = item.quantity || 1;
-            const chips = [item.size, item.color, `×${qty}`].filter(Boolean);
-
-            return (
-              <Animated.View
-                key={index}
-                entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index, 8) * 40).duration(220).easing(EASE_OUT_QUART)}
-              >
-                <Card variant="flat" style={styles.itemCard}>
-                  {/* The line itself stays one accessible unit; the review
-                      row below is a separate control, so it must not be
-                      swallowed into the same accessible container. */}
-                  <View
-                    style={styles.itemRow}
-                    accessible
-                    accessibilityLabel={`${item.name}${item.size ? `, size ${item.size}` : ''}${item.color ? `, color ${item.color}` : ''}, quantity ${qty}, ${peso(Number(item.price) * qty)}`}
-                  >
-                    {item.image ? (
-                      <ProductImage uri={item.image} style={styles.itemImage} />
-                    ) : (
-                      <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
-                        <Ionicons name="shirt-outline" size={24} color={Colors.light.icon} />
-                      </View>
-                    )}
-                    <View style={styles.itemDetails}>
-                      <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
-                      <View style={styles.chips}>
-                        {chips.map((c) => (
-                          <Text key={c} style={styles.chip}>{c}</Text>
-                        ))}
-                      </View>
-                    </View>
-                    <Text style={styles.itemPrice}>{peso(Number(item.price) * qty)}</Text>
+        {/* The order, as one receipt */}
+        <Animated.View entering={enter(160)}>
+          <SectionTitle>Your order</SectionTitle>
+        </Animated.View>
+        <Animated.View entering={enter(200)}>
+          <Receipt>
+            {hasSeller ? (
+              <>
+                <View style={styles.sellerRow}>
+                  <StoreLogo uri={store?.logoUrl} size={42} radius={13} />
+                  <View style={styles.sellerWho}>
+                    <Text style={styles.sellerName} numberOfLines={2}>{order.storeName || 'The store'}</Text>
+                    <Text style={styles.sellerRole} numberOfLines={1}>
+                      {unreadFromStore ? 'Seller · sent you a message' : 'Seller · tap the bubble to message'}
+                    </Text>
                   </View>
+                  <AnimatedPressable
+                    onPress={handleOpenChat}
+                    style={styles.msgBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Message ${order.storeName || 'the store'}${unreadFromStore ? ', new message' : ''}`}
+                  >
+                    <Ionicons name="chatbubble-outline" size={18} color="#fff" />
+                    {unreadFromStore ? <View style={styles.msgBadge} /> : null}
+                  </AnimatedPressable>
+                </View>
+                <ReceiptCut />
+              </>
+            ) : null}
 
-                  {/* Asking for the review here, on the delivered order,
-                      rather than in a push or an email: this is the one
-                      screen a customer opens already holding the item. */}
-                  {showReviewRow && (
-                    <AnimatedPressable
-                      style={styles.reviewRow}
-                      onPress={() => handleWriteReview(item)}
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        existingReview
-                          ? `Edit your ${existingReview.rating}-star review of ${item.name}`
-                          : `Write a review of ${item.name}`
-                      }
+            {items.length === 0 ? (
+              <Text style={styles.emptyItemsText}>No item details available for this order.</Text>
+            ) : (
+              items.map((item, index) => {
+                const existingReview = reviewsByProductId[item.productId];
+                const showReview =
+                  canReviewThisOrder && item.productId && reviewableProductIds.has(item.productId);
+                const qty = item.quantity || 1;
+                const meta = [item.size ? `Size ${item.size}` : '', item.color, `Qty ${qty}`].filter(Boolean).join(' · ');
+
+                return (
+                  <View key={index} style={index > 0 && styles.itemGap}>
+                    <View
+                      style={styles.itemRow}
+                      accessible
+                      accessibilityLabel={`${item.name}${item.size ? `, size ${item.size}` : ''}${item.color ? `, color ${item.color}` : ''}, quantity ${qty}, ${peso(Number(item.price) * qty)}`}
                     >
-                      <Ionicons
-                        name={existingReview ? 'create-outline' : 'star-outline'}
-                        size={16}
-                        color={Colors.light.tint}
-                      />
-                      <Text style={styles.reviewRowText}>
-                        {existingReview ? 'Edit your review' : 'Write a review'}
-                      </Text>
-                      {existingReview ? (
-                        <StarRating rating={existingReview.rating} size={13} />
+                      {item.image ? (
+                        <ProductImage uri={item.image} style={styles.itemImage} />
                       ) : (
-                        <Ionicons name="chevron-forward" size={16} color={Colors.light.icon} />
+                        <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
+                          <Ionicons name="shirt-outline" size={26} color="#B9AFA3" />
+                        </View>
                       )}
-                    </AnimatedPressable>
-                  )}
-                </Card>
-              </Animated.View>
-            );
-          })
-        )}
+                      <View style={styles.itemDetails}>
+                        <Text style={styles.itemName} numberOfLines={2}>{item.name}</Text>
+                        <Text style={styles.itemMeta} numberOfLines={1}>{meta}</Text>
+                      </View>
+                      <Text style={styles.itemPrice}>{peso(Number(item.price) * qty)}</Text>
+                    </View>
 
-        {/* Deliver to */}
-        <SectionTitle>Deliver to</SectionTitle>
-        <Animated.View entering={fade(60)}>
-          <Card variant="flat" style={styles.row}>
+                    {/* Asking for the review here, on the delivered order,
+                        rather than in a push or an email: this is the one
+                        screen a customer opens already holding the item. */}
+                    {showReview ? (
+                      existingReview ? (
+                        <AnimatedPressable
+                          style={styles.reviewStrip}
+                          onPress={() => handleWriteReview(item)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Your ${existingReview.rating}-star review of ${item.name}. Edit`}
+                        >
+                          <View style={styles.reviewWords}>
+                            <Text style={styles.reviewTitle}>Your review</Text>
+                            <Text style={styles.reviewHint}>Thanks for rating this item</Text>
+                          </View>
+                          <StarRating rating={existingReview.rating} size={14} />
+                          <Text style={styles.reviewEdit}>Edit</Text>
+                        </AnimatedPressable>
+                      ) : (
+                        <View style={[styles.reviewStrip, styles.reviewStripAsk]}>
+                          <View style={styles.reviewWords}>
+                            <Text style={styles.reviewTitle}>How was it?</Text>
+                            <Text style={styles.reviewHint}>Tap a star to rate</Text>
+                          </View>
+                          <StarRating
+                            rating={0}
+                            size={19}
+                            editable
+                            color={Colors.light.tint}
+                            label={item.name}
+                            onChange={(value) => handleWriteReview(item, value)}
+                          />
+                        </View>
+                      )
+                    ) : null}
+                  </View>
+                );
+              })
+            )}
+
+            <ReceiptCut />
+
+            <View style={styles.totLine}>
+              <Text style={styles.totLabel}>Subtotal</Text>
+              <Text style={styles.totValue}>{peso(order.subtotal || order.total)}</Text>
+            </View>
+            <View style={styles.totLine}>
+              <Text style={styles.totLabel}>Shipping</Text>
+              {order.shipping ? (
+                <Text style={styles.totValue}>{peso(order.shipping)}</Text>
+              ) : (
+                <Text style={styles.totFree}>Free</Text>
+              )}
+            </View>
+            <View style={styles.totBig}>
+              <Text style={styles.totBigLabel}>Total</Text>
+              <Text style={styles.totBigValue}>{peso(order.total)}</Text>
+            </View>
+
+            {paymentMethod ? (
+              <View
+                style={styles.pay}
+                accessible
+                accessibilityLabel={`${paymentLabel}. ${paymentLine}${receipt?.ref ? `, reference ${receipt.ref}` : ''}${isPaid ? '. Paid' : ''}`}
+              >
+                <View style={styles.payIcon}>
+                  <Ionicons name={getPaymentIcon(paymentMethod)} size={18} color="#5F564E" />
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={styles.payTitle}>{paymentLabel}</Text>
+                  <Text style={styles.payBody}>{paymentLine}</Text>
+                  {receipt?.ref ? (
+                    <Text style={styles.payRef} numberOfLines={1} selectable>{receipt.ref}</Text>
+                  ) : null}
+                </View>
+                {isPaid ? (
+                  <View style={[styles.paidPill, isCancelled && styles.paidPillWarm]}>
+                    {isCancelled ? null : <Ionicons name="checkmark" size={12} color="#3F4B36" />}
+                    <Text style={[styles.paidPillText, isCancelled && styles.paidPillTextWarm]}>Paid</Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </Receipt>
+        </Animated.View>
+
+        {/* Where it's going */}
+        <Animated.View entering={enter(300)}>
+          <SectionTitle>{isDelivered ? 'Delivered to' : isCancelled ? 'Was going to' : 'Deliver to'}</SectionTitle>
+        </Animated.View>
+        <Animated.View entering={enter(340)}>
+          <Card variant="flat" style={styles.addressCard}>
             <View style={[styles.ico, styles.icoClay]}>
               <Ionicons name="location-outline" size={18} color={Colors.light.tint} />
             </View>
@@ -618,7 +796,9 @@ export default function OrderDetailsScreen({ navigation, route }) {
                 <Text style={styles.rowTitle}>{shippingAddress.fullName}</Text>
                 <Text style={styles.rowBody}>{shippingAddress.phone}</Text>
                 <Text style={styles.rowBody}>
-                  {shippingAddress.address}, {shippingAddress.city}, {shippingAddress.province} {shippingAddress.zipCode}
+                  {[shippingAddress.address, shippingAddress.city, `${shippingAddress.province || ''} ${shippingAddress.zipCode || ''}`.trim()]
+                    .filter(Boolean)
+                    .join(', ')}
                 </Text>
               </View>
             ) : (
@@ -627,65 +807,11 @@ export default function OrderDetailsScreen({ navigation, route }) {
           </Card>
         </Animated.View>
 
-        {/* Payment */}
-        <SectionTitle>Payment</SectionTitle>
-        <Animated.View entering={fade(80)}>
-          <Card variant="flat" style={styles.payCard}>
-            <View style={styles.payRow}>
-              <View style={[styles.ico, styles.icoMoss]}>
-                <Ionicons name={getPaymentIcon(paymentMethod)} size={18} color={Colors.light.secondary} />
-              </View>
-              <View style={styles.rowText}>
-                <Text style={styles.rowTitle}>{paymentLabel}</Text>
-                {paymentTrustText ? <Text style={styles.rowBody}>{paymentTrustText}</Text> : null}
-              </View>
-              {isPaid ? <Text style={styles.paidPill}>Paid</Text> : null}
-            </View>
-            {receipt ? (
-              <View
-                style={styles.gateway}
-                accessible
-                accessibilityLabel={`Paid through PayMongo${receipt.ref ? `, reference ${receipt.ref}` : ''}${receipt.test ? ', test mode' : ''}`}
-              >
-                <Ionicons name="shield-checkmark-outline" size={15} color={Colors.light.secondary} />
-                <Text style={styles.gatewayText} numberOfLines={1}>
-                  Paid through <Text style={styles.gatewayName}>PayMongo</Text>
-                  {receipt.ref ? <Text style={styles.gatewayRef}>{`  ${receipt.ref}`}</Text> : null}
-                </Text>
-                {receipt.test ? <Text style={styles.testTag}>Test mode</Text> : null}
-              </View>
-            ) : null}
-          </Card>
-        </Animated.View>
-
-        {/* Receipt */}
-        <Animated.View entering={fade(100)}>
-          <Card variant="flat" style={styles.receipt}>
-            <View style={styles.receiptLine}>
-              <Text style={styles.receiptLabel}>Subtotal</Text>
-              <Text style={styles.receiptValue}>{peso(order.subtotal || order.total)}</Text>
-            </View>
-            <View style={styles.receiptLine}>
-              <Text style={styles.receiptLabel}>Shipping</Text>
-              {order.shipping ? (
-                <Text style={styles.receiptValue}>{peso(order.shipping)}</Text>
-              ) : (
-                <Text style={styles.receiptFree}>Free</Text>
-              )}
-            </View>
-            <DashedRule color={Colors.light.border} style={styles.receiptRule} />
-            <View style={styles.receiptTotal}>
-              <Text style={styles.receiptTotalLabel}>Total</Text>
-              <Text style={styles.receiptTotalValue}>{peso(order.total)}</Text>
-            </View>
-          </Card>
-        </Animated.View>
-
         {/* A reported problem, once there is one: where it stands, live. */}
         {problem ? (
           <>
             <SectionTitle>Problem report</SectionTitle>
-            <Animated.View entering={fade(110)}>
+            <Animated.View entering={enter(380)}>
               <ProblemCard
                 problem={problem}
                 order={order}
@@ -697,53 +823,59 @@ export default function OrderDetailsScreen({ navigation, route }) {
               />
             </Animated.View>
           </>
-        ) : canReport ? (
-          // Inside the 7 days and nothing reported yet. A row, not a
-          // Button: most deliveries are fine, and this should be easy to
-          // find without competing with the order itself.
-          <Animated.View entering={fade(110)}>
-            <AnimatedPressable
-              onPress={handleReportProblem}
-              accessibilityRole="button"
-              accessibilityLabel={`Something wrong with it? Report a problem until ${formatDay(deadline)}`}
-            >
-              <Card variant="flat" style={styles.help}>
-                <View style={[styles.ico, styles.icoClay]}>
-                  <Ionicons name="alert-circle-outline" size={18} color={Colors.light.tint} />
-                </View>
-                <View style={styles.rowText}>
-                  <Text style={styles.rowTitle}>Something wrong with it?</Text>
-                  <Text style={styles.rowBody}>
-                    {`Wrong item or size, damage, or not as described. Report it by ${formatDay(deadline)}.`}
-                  </Text>
-                </View>
-                <Text style={styles.helpGo}>Report</Text>
-                <Ionicons name="chevron-forward" size={16} color={Colors.light.tint} />
-              </Card>
-            </AnimatedPressable>
-          </Animated.View>
         ) : null}
 
-        {/* Support */}
-        <Animated.View entering={fade(120)}>
-          <AnimatedPressable
-            onPress={handleContactSupport}
-            accessibilityRole="button"
-            accessibilityLabel={`${status === 'delivered' ? 'Something else?' : 'Problem with this order?'} Contact PlainCo support`}
-          >
-            <Card variant="flat" style={[styles.help, showsProblemBlock && styles.helpTight]}>
-              <View style={[styles.ico, styles.icoClay]}>
-                <Ionicons name="help-circle-outline" size={18} color={Colors.light.tint} />
-              </View>
-              <View style={styles.rowText}>
-                <Text style={styles.rowTitle}>{status === 'delivered' ? 'Something else?' : 'Problem with this order?'}</Text>
-                <Text style={styles.rowBody}>Contact PlainCo support</Text>
-              </View>
-              <Text style={styles.helpGo}>Help</Text>
-              <Ionicons name="chevron-forward" size={16} color={Colors.light.tint} />
-            </Card>
-          </AnimatedPressable>
+        {/* Need help? The first row follows the status; support is always last. */}
+        <Animated.View entering={enter(400)}>
+          <SectionTitle>Need help?</SectionTitle>
         </Animated.View>
+        <Animated.View entering={enter(440)}>
+          <Card variant="flat" style={styles.helpCard}>
+            {canReport ? (
+              <HelpRow
+                first
+                icon="warning-outline"
+                title="Something wrong with it?"
+                body="Wrong item or size, damage, or not as described."
+                chip={reportChip}
+                onPress={handleReportProblem}
+                label={`Something wrong with it? Report a problem until ${formatDay(deadline)}`}
+              />
+            ) : hasSeller && isCancelled ? (
+              <HelpRow
+                first
+                icon="chatbubble-outline"
+                title="Ask the seller"
+                body="Find out why it was cancelled, or ask about a refund."
+                onPress={handleOpenChat}
+              />
+            ) : hasSeller && !isDelivered ? (
+              <HelpRow
+                first
+                icon="chatbubble-outline"
+                title="Need to change something?"
+                body={
+                  beforeShipping
+                    ? 'Message the seller before it ships. You can ask for a photo of the exact piece, too.'
+                    : 'Message the seller before it arrives.'
+                }
+                onPress={handleOpenChat}
+              />
+            ) : null}
+            <HelpRow
+              first={!hasFirstHelpRow}
+              icon="help-circle-outline"
+              tone="moss"
+              title={hasFirstHelpRow ? 'Something else?' : 'Problem with this order?'}
+              body="Contact PlainCo support"
+              onPress={handleContactSupport}
+            />
+          </Card>
+        </Animated.View>
+
+        <Animated.Text entering={enter(500)} style={styles.foot}>
+          {`Order ${formatOrderNumber(order.id)} · PlainCo`}
+        </Animated.Text>
       </ScrollView>
 
       <ConfirmDialog
@@ -769,9 +901,6 @@ const PROBLEM_TONES = {
   moss: Colors.light.secondary,
   ash: Colors.light.icon,
 };
-
-const formatDay = (date) =>
-  date ? date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
 
 // Where a reported problem stands: the step as a badge, one sentence on
 // what happens next, and the money — what is owed, where it goes, and the
@@ -811,20 +940,20 @@ function ProblemCard({ problem, order, onMessage, onWithdraw }) {
 
       {owesNothing ? null : (
         <View style={styles.problemMoney}>
-          <View style={styles.receiptLine}>
-            <Text style={styles.receiptLabel}>{problem.status === 'refunded' ? 'Refunded' : 'Refund'}</Text>
+          <View style={styles.totLine}>
+            <Text style={styles.totLabel}>{problem.status === 'refunded' ? 'Refunded' : 'Refund'}</Text>
             <Text style={styles.problemAmount}>{peso(problem.refundAmount)}</Text>
           </View>
           {refundTo ? (
-            <View style={styles.receiptLine}>
-              <Text style={styles.receiptLabel}>To</Text>
-              <Text style={styles.receiptValue}>{refundTo}</Text>
+            <View style={styles.totLine}>
+              <Text style={styles.totLabel}>To</Text>
+              <Text style={styles.totValue}>{refundTo}</Text>
             </View>
           ) : null}
           {problem.status === 'refunded' && problem.refundReference ? (
-            <View style={styles.receiptLine}>
-              <Text style={styles.receiptLabel}>Reference</Text>
-              <Text style={[styles.receiptValue, styles.problemRef]} selectable>{problem.refundReference}</Text>
+            <View style={styles.totLine}>
+              <Text style={styles.totLabel}>Reference</Text>
+              <Text style={[styles.totValue, styles.problemRef]} selectable>{problem.refundReference}</Text>
             </View>
           ) : null}
         </View>
@@ -849,7 +978,9 @@ function ProblemCard({ problem, order, onMessage, onWithdraw }) {
   );
 }
 
-const WHITE_SOFT = 'rgba(255,255,255,0.28)';
+const CREAM_SOFT = 'rgba(250,247,242,0.22)';
+const PAPER_TINT = '#F8F3EB';
+const MONO = Platform.select({ ios: 'Menlo', default: 'monospace' });
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.light.background },
@@ -857,129 +988,171 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 6,
+    backgroundColor: Colors.light.background,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'transparent',
+    zIndex: 2,
   },
+  headerScrolled: { borderBottomColor: Colors.light.border },
   headerBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 17, fontWeight: '600', color: Colors.light.text },
-  content: { paddingHorizontal: 18, paddingTop: 6, paddingBottom: 40 },
+  headerTitle: { fontSize: 16.5, fontWeight: '600', color: Colors.light.text },
+  content: { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 40 },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
-    letterSpacing: 0.8,
+    letterSpacing: 1.6,
     textTransform: 'uppercase',
     color: Colors.light.icon,
-    marginTop: 22,
+    marginTop: 24,
     marginBottom: 10,
+    marginHorizontal: 4,
   },
 
-  // The tag
-  tag: { borderRadius: Radius.xl, padding: 20, paddingBottom: 18, overflow: 'hidden' },
-  tagGlow: {
-    position: 'absolute',
-    right: -40,
-    top: -60,
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'rgba(255,255,255,0.07)',
+  // Status card
+  heroShadow: {
+    borderRadius: 28,
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 6,
   },
-  tagString: {
+  hero: { borderRadius: 28, padding: 18, paddingBottom: 20, overflow: 'hidden' },
+  heroRing: {
     position: 'absolute',
-    top: -6,
-    right: 26,
-    width: 2,
-    height: 28,
-    borderRadius: 1,
-    backgroundColor: 'rgba(255,255,255,0.55)',
+    width: 210,
+    height: 210,
+    borderRadius: 105,
+    right: -70,
+    top: -90,
+    borderWidth: 1.5,
+    borderColor: 'rgba(250,247,242,0.12)',
   },
-  tagHole: {
+  heroRingBig: {
     position: 'absolute',
-    top: 18,
-    right: 20,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: Colors.light.background,
+    width: 320,
+    height: 320,
+    borderRadius: 160,
+    right: -125,
+    top: -145,
+    borderWidth: 1.5,
+    borderColor: 'rgba(250,247,242,0.07)',
   },
-  tagOrdRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 30 },
-  tagOrdLabel: { fontSize: 11.5, color: 'rgba(255,255,255,0.85)', letterSpacing: 0.4 },
-  tagOrdNumber: { fontSize: 12.5, fontWeight: '600', color: '#fff', fontVariant: ['tabular-nums'], letterSpacing: 0.6 },
-  tagCopy: {
-    width: 24,
-    height: 24,
-    borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.16)',
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  orderPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    height: 30,
+    paddingLeft: 11,
+    paddingRight: 5,
+    borderRadius: Radius.pill,
+    backgroundColor: 'rgba(250,247,242,0.14)',
+  },
+  orderPillLabel: { fontSize: 11, fontWeight: '500', letterSpacing: 0.9, color: 'rgba(250,247,242,0.75)' },
+  orderPillNumber: { fontSize: 11.5, fontWeight: '600', letterSpacing: 0.9, color: CREAM, fontVariant: ['tabular-nums'] },
+  orderPillIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(250,247,242,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  tagCopied: { fontSize: 11, color: '#fff', fontWeight: '600' },
-  tagHead: { fontSize: 24, fontWeight: '600', color: '#fff', marginTop: 12, alignSelf: 'flex-start' },
-  tagSub: { fontSize: 13, color: 'rgba(255,255,255,0.92)', marginTop: 2 },
-  tagCancelNote: { fontSize: 12.5, color: '#fff', lineHeight: 18, marginTop: 14 },
-  tagRule: { marginTop: 16 },
-  tagMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
-  tagMetaLabel: { fontSize: 12, color: 'rgba(255,255,255,0.82)' },
-  tagMetaValue: { fontSize: 12, fontWeight: '600', color: '#fff' },
+  heroDate: { flexShrink: 1, fontSize: 11.5, color: 'rgba(250,247,242,0.8)' },
+  heroMain: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 18, marginBottom: 20 },
+  heroIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 20,
+    backgroundColor: 'rgba(250,247,242,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroWords: { flex: 1 },
+  heroTitle: { fontSize: 25, fontWeight: '600', letterSpacing: -0.4, color: CREAM, alignSelf: 'flex-start' },
+  heroSub: { fontSize: 12.5, lineHeight: 18, color: 'rgba(250,247,242,0.86)', marginTop: 3 },
+  cancelNote: {
+    fontSize: 12.5,
+    lineHeight: 19,
+    color: CREAM,
+    backgroundColor: 'rgba(0,0,0,0.16)',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    overflow: 'hidden',
+  },
 
   // Tracker
-  track: { flexDirection: 'row', marginTop: 20 },
+  trackWrap: { backgroundColor: 'rgba(0,0,0,0.14)', borderRadius: 18, paddingTop: 14, paddingBottom: 10, paddingHorizontal: 4 },
+  track: { flexDirection: 'row' },
   trackStep: { flex: 1, alignItems: 'center' },
-  trackTodo: { opacity: 0.72 },
+  trackTodo: { opacity: 0.6 },
   trackLine: {
     position: 'absolute',
-    top: 11,
+    top: 10,
     right: '50%',
     width: '100%',
-    height: 2,
-    backgroundColor: WHITE_SOFT,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: CREAM_SOFT,
   },
-  trackLineOn: { backgroundColor: '#fff' },
+  trackLineOn: { backgroundColor: CREAM },
   trackDot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.4)',
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(250,247,242,0.4)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  trackDotOn: { backgroundColor: '#fff', borderColor: '#fff' },
+  trackDotOn: { backgroundColor: CREAM, borderColor: CREAM },
   trackDotNow: {
-    shadowColor: '#fff',
-    shadowOpacity: 0.5,
+    shadowColor: CREAM,
+    shadowOpacity: 0.6,
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 0 },
   },
-  nowInner: { width: 9, height: 9, borderRadius: 4.5 },
-  trackLabel: { fontSize: 11, fontWeight: '600', color: '#fff', marginTop: 6 },
-  trackSub: { fontSize: 10, color: 'rgba(255,255,255,0.78)', marginTop: 1 },
+  nowInner: { width: 8, height: 8, borderRadius: 4 },
+  trackLabel: { fontSize: 11, fontWeight: '600', color: CREAM, marginTop: 7 },
+  trackSub: { fontSize: 10, color: 'rgba(250,247,242,0.8)', marginTop: 1 },
 
   // Dashed rule
   dashClip: { height: 1, overflow: 'hidden' },
   dashBox: { height: 2, borderWidth: 1, borderStyle: 'dashed', borderRadius: 1 },
 
-  // Seller
-  sellerCard: { padding: 0, marginTop: 22, overflow: 'hidden' },
-  sellerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
-  sellerWho: { flex: 1, minWidth: 0 },
-  sellerName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, lineHeight: 19 },
-  sellerRole: { fontSize: 12, color: Colors.light.icon },
-  msgBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: Colors.light.tint,
-    paddingHorizontal: 14,
-    minHeight: 40,
-    borderRadius: Radius.md,
+  // Receipt
+  receipt: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 26 },
+  cut: { marginVertical: 16, marginHorizontal: -16, justifyContent: 'center' },
+  cutBite: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: Colors.light.background,
   },
-  msgBtnText: { fontSize: 13, fontWeight: '600', color: '#fff' },
+  cutBiteLeft: { left: -9 },
+  cutBiteRight: { right: -9 },
+
+  // Seller
+  sellerRow: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  sellerWho: { flex: 1, minWidth: 0 },
+  sellerName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, lineHeight: 18 },
+  sellerRole: { fontSize: 11.5, color: Colors.light.icon, marginTop: 1 },
+  msgBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.light.tint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   msgBadge: {
     position: 'absolute',
-    top: -4,
-    right: -4,
+    top: -2,
+    right: -2,
     width: 14,
     height: 14,
     borderRadius: 7,
@@ -987,116 +1160,107 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#fff',
   },
-  sellerHint: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
-  },
-  sellerHintText: { flex: 1, fontSize: 12, color: Colors.light.icon },
 
   // Items
   emptyItemsText: { fontSize: 13, color: Colors.light.icon },
-  // The card is a column (line, then optional review row).
-  itemCard: { padding: 12, marginBottom: 10 },
-  itemRow: { flexDirection: 'row', alignItems: 'center' },
-  itemImage: { width: 64, height: 64, borderRadius: Radius.md, backgroundColor: Colors.light.border },
+  itemGap: { marginTop: 14 },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  itemImage: { width: 64, height: 64, borderRadius: 16, backgroundColor: '#ECE7DF' },
   itemImagePlaceholder: { justifyContent: 'center', alignItems: 'center' },
-  itemDetails: { flex: 1, marginLeft: 12, marginRight: 8 },
-  itemName: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  chip: {
-    fontSize: 11,
-    color: Colors.light.icon,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 7,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    backgroundColor: Colors.light.background,
-    overflow: 'hidden',
-  },
-  itemPrice: { fontSize: 14, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
-  // A quiet in-card row, not a Button: asking for a review should not
-  // compete with the Message button, and Clay is spent here on the text
-  // rather than on a filled block.
-  reviewRow: {
+  itemDetails: { flex: 1, minWidth: 0 },
+  itemName: { fontSize: 14, fontWeight: '600', color: Colors.light.text, lineHeight: 18 },
+  itemMeta: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
+  itemPrice: { fontSize: 14.5, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
+  reviewStrip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    minHeight: 44,
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
+    gap: 10,
+    marginTop: 12,
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    backgroundColor: PAPER_TINT,
   },
-  reviewRowText: { flex: 1, fontSize: 13, fontWeight: '600', color: Colors.light.tint },
+  // The editable stars bring their own 44pt targets, so less padding.
+  reviewStripAsk: { paddingVertical: 0, paddingRight: 4 },
+  reviewWords: { flex: 1 },
+  reviewTitle: { fontSize: 12.5, fontWeight: '500', color: Colors.light.text },
+  reviewHint: { fontSize: 11, color: Colors.light.icon },
+  reviewEdit: { fontSize: 12.5, fontWeight: '600', color: Colors.light.tint, marginLeft: 4 },
 
-  // Icon rows (address, payment, help)
-  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 14 },
-  ico: { width: 36, height: 36, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  icoClay: { backgroundColor: Colors.light.tint + '15' },
-  icoMoss: { backgroundColor: Colors.light.secondary + '20' },
-  rowText: { flex: 1 },
-  rowTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 2 },
-  rowBody: { fontSize: 13, color: Colors.light.icon, lineHeight: 19 },
+  // Totals
+  totLine: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 },
+  totLabel: { fontSize: 13, color: Colors.light.icon },
+  totValue: { fontSize: 13, fontWeight: '500', color: Colors.light.text, fontVariant: ['tabular-nums'] },
+  totFree: { fontSize: 13, fontWeight: '600', color: Colors.light.success },
+  totBig: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginTop: 8,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F0E9DF',
+  },
+  totBigLabel: { fontSize: 14.5, fontWeight: '600', color: Colors.light.text },
+  totBigValue: { fontSize: 24, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'], letterSpacing: -0.2 },
 
   // Payment
-  payCard: { padding: 0 },
-  payRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
-  paidPill: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.light.secondary,
-    backgroundColor: Colors.light.secondary + '20',
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: Radius.pill,
-    overflow: 'hidden',
-  },
-  gateway: {
+  pay: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: Colors.light.border,
+    gap: 11,
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: 16,
+    backgroundColor: PAPER_TINT,
   },
-  gatewayText: { flex: 1, fontSize: 12, color: Colors.light.icon },
-  gatewayName: { fontWeight: '600', color: Colors.light.text },
-  gatewayRef: { fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 11 },
-  testTag: {
+  payIcon: { width: 36, height: 36, borderRadius: 12, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  payTitle: { fontSize: 13.5, fontWeight: '600', color: Colors.light.text },
+  payBody: { fontSize: 11, color: Colors.light.icon, lineHeight: 15 },
+  payRef: { fontSize: 10.5, color: Colors.light.icon, fontFamily: MONO, marginTop: 1 },
+  paidPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    height: 26,
+    paddingLeft: 8,
+    paddingRight: 10,
+    borderRadius: Radius.pill,
+    backgroundColor: '#E9EDE4',
+  },
+  paidPillWarm: { backgroundColor: '#F3E9D2', paddingLeft: 10 },
+  paidPillText: { fontSize: 11.5, fontWeight: '600', color: '#3F4B36' },
+  paidPillTextWarm: { color: '#6B5A2E' },
+
+  // Icon rows (address, help)
+  addressCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, padding: 14, paddingHorizontal: 16, borderRadius: 22 },
+  ico: { width: 38, height: 38, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  icoClay: { backgroundColor: '#F6E6DE' },
+  icoMoss: { backgroundColor: '#EEF0EA' },
+  rowText: { flex: 1, minWidth: 0 },
+  rowTitle: { fontSize: 14, fontWeight: '600', color: Colors.light.text, marginBottom: 1 },
+  rowBody: { fontSize: 12.5, color: Colors.light.icon, lineHeight: 19 },
+
+  // Need help?
+  helpCard: { padding: 0, borderRadius: 22, overflow: 'hidden' },
+  helpRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 16 },
+  helpRowRule: { borderTopWidth: 1, borderTopColor: '#F1EBE2' },
+  daysChip: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: Radius.pill,
+    backgroundColor: '#F3E9D2',
+    color: '#6B5A2E',
     fontSize: 10.5,
     fontWeight: '600',
-    color: Colors.light.icon,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
     overflow: 'hidden',
   },
-
-  // Receipt
-  receipt: { marginTop: 22 },
-  receiptLine: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
-  receiptLabel: { fontSize: 13.5, color: Colors.light.icon },
-  receiptValue: { fontSize: 13.5, color: Colors.light.text, fontVariant: ['tabular-nums'] },
-  receiptFree: { fontSize: 13.5, fontWeight: '600', color: Colors.light.success },
-  receiptRule: { marginTop: 10 },
-  receiptTotal: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', paddingTop: 14 },
-  receiptTotalLabel: { fontSize: 15, fontWeight: '600', color: Colors.light.text },
-  receiptTotalValue: { fontSize: 24, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
-
-  // Support
-  help: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, marginTop: 22 },
-  // Directly under the report row or card, which already has the gap.
-  helpTight: { marginTop: 10 },
-  helpGo: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
+  foot: { textAlign: 'center', fontSize: 11, color: '#A0968C', marginTop: 20 },
 
   // Problem report
   problemCard: { padding: 14 },
@@ -1112,7 +1276,7 @@ const styles = StyleSheet.create({
   problemQuoteText: { fontSize: 13, color: Colors.light.text, lineHeight: 19 },
   problemMoney: { marginTop: 10, paddingTop: 6, borderTopWidth: 1, borderTopColor: Colors.light.border },
   problemAmount: { fontSize: 14, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
-  problemRef: { fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 12.5 },
+  problemRef: { fontFamily: MONO, fontSize: 12.5 },
   problemActions: {
     flexDirection: 'row',
     alignItems: 'center',

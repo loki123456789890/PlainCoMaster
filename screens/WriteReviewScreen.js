@@ -130,7 +130,7 @@ function listChanges(current, from, isEditing) {
  * write. That is deliberate duplication: the screens keep the button honest,
  * and the rule keeps the data honest.
  *
- * Route params: { orderId, item, storeId, storeName? } where `storeId` is
+ * Route params: { orderId, item, storeId, storeName?, initialRating? } where `storeId` is
  * the order's store (the review is filed with it), and `item` is the order
  * line itself (productId, name, image, size, color), not the product
  * document. The line is what was actually bought — a product's photo and
@@ -138,10 +138,15 @@ function listChanges(current, from, isEditing) {
  * thing that arrived.
  */
 export default function WriteReviewScreen({ navigation, route }) {
-  const { orderId, item, storeId, storeName } = route.params || {};
+  const { orderId, item, storeId, storeName, initialRating } = route.params || {};
   const productId = item?.productId;
 
-  const [rating, setRating] = useState(0);
+  // Order details lets a customer tap a star before opening this screen;
+  // that tap arrives as initialRating so it isn't asked for twice.
+  const [rating, setRating] = useState(() => {
+    const r = Math.round(Number(initialRating) || 0);
+    return r >= 1 && r <= 5 ? r : 0;
+  });
   // Tri-state on purpose: null means "not answered yet", which is different
   // from false ("it did not match"). Posting is blocked until it is a real
   // boolean, so an untouched question can never be recorded as a complaint
