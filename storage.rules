@@ -155,6 +155,27 @@ service firebase.storage {
         isValidImage();
     }
 
+    // Photos of a reported problem: what arrived, attached to a return or
+    // refund request. Uploaded by the customer while the order is
+    // delivered, like review photos — but PRIVATE like chat photos,
+    // readable only by that customer and the manager of the store that
+    // sold the order, because they can show a customer's home or parcel
+    // label and are evidence in a disagreement, not marketing.
+    //
+    // The download-URL caveat on /chat applies: the URLs live only in the
+    // request document, which the same two parties alone can read.
+    //
+    // No update or delete. A photo a customer removes before sending is
+    // left behind, as with reviews.
+    match /returns/{uid}/{orderId}/{imageId} {
+      allow read: if request.auth != null &&
+        (request.auth.uid == uid || managesChatStore(uid, orderId));
+      allow create: if request.auth != null &&
+        request.auth.uid == uid &&
+        deliveredOrder(uid, orderId) &&
+        isValidImage();
+    }
+
     // Store logos: public like product photos, uploaded only by that
     // store's own manager — the same test firestore.rules' managesStore()
     // applies to the store document the URL goes into.

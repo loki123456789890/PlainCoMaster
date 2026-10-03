@@ -478,11 +478,100 @@ service cloud.firestore {
         allow read, delete: if isActiveOwner(userId);
         allow create, update: if isActiveOwner(userId) && isCustomerAccount(userId);
       }
+      // REPORTED PROBLEMS — a return or refund request about one delivered
+      // order, keyed by that order's id so there can only be one.
+      //
+      // NO CREATE RULE, for anyone. requestReturn (functions/returns.js)
+      // writes them, because the refund amount has to be computed from the
+      // order and the 7-day window checked against deliveredAt — the same
+      // reason orders have no create rule.
+      //
+      // Readable by the customer it belongs to and the manager of the store
+      // that sold the order: the two parties to the order, as with order
+      // chat. Under the customer's uid so the app can ask "is there a
+      // request for this order?" with a plain get, which a rule keyed on
+      // the document's own fields could not answer for one that does not
+      // exist yet.
+      //
+      // Working a request moves it ONE step at a time, and each step may
+      // touch only its own fields, all timestamped by the server:
+      //
+      //   requested ─┬─> approved (refund_only) ──────────────> refunded
+      //              ├─> approved (return_first) ─> received ─> refunded
+      //              ├─> declined     (with a reason the customer is shown)
+      //              └─> withdrawn    (the customer, before a decision)
+      //
+      // What nobody can change after creation: the items, the amount, the
+      // photos, the reason, or where the refund goes. A manager cannot
+      // lower what is owed, and a customer cannot raise it.
+      //
+      // "received" can happen once, which matters because the app restores
+      // stock in the same transaction when the manager says to — the same
+      // single-transition guarantee that stops a cancelled order's stock
+      // being restored twice.
+      //
+      // No delete: like orders, these are the record of what was agreed.
+      match /returnRequests/{orderId} {
+        function changed() {
+          return request.resource.data.diff(resource.data).affectedKeys();
+        }
+        function wasStatus(status) {
+          return resource.data.get('status', '') == status;
+        }
+        function becomes(status) {
+          return request.resource.data.status == status;
+        }
+        function resolvedBy(resolution) {
+          return resource.data.get('resolution', '') == resolution;
+        }
+        function isNote(value, max) {
+          return value is string && value.matches('(?s).*\\S.*') && value.size() <= max;
+        }
+
+        allow read: if isOwner(userId) || managesStore(resource.data.get('storeId', null));
+
+        allow update: if (
+            managesStore(resource.data.get('storeId', null)) && (
+              (
+                wasStatus('requested') && becomes('approved') &&
+                changed().hasOnly(['status', 'resolution', 'decidedAt']) &&
+                request.resource.data.resolution in ['refund_only', 'return_first'] &&
+                request.resource.data.decidedAt == request.time
+              ) || (
+                wasStatus('requested') && becomes('declined') &&
+                changed().hasOnly(['status', 'declineReason', 'decidedAt']) &&
+                isNote(request.resource.data.declineReason, 500) &&
+                request.resource.data.decidedAt == request.time
+              ) || (
+                wasStatus('approved') && resolvedBy('return_first') && becomes('received') &&
+                changed().hasOnly(['status', 'receivedAt', 'restocked']) &&
+                request.resource.data.restocked is bool &&
+                request.resource.data.receivedAt == request.time
+              ) || (
+                ((wasStatus('approved') && resolvedBy('refund_only')) || wasStatus('received')) &&
+                becomes('refunded') &&
+                changed().hasOnly(['status', 'refundReference', 'refundedAt']) &&
+                isNote(request.resource.data.refundReference, 100) &&
+                request.resource.data.refundedAt == request.time
+              )
+            )
+          ) || (
+            isActiveOwner(userId) &&
+            wasStatus('requested') && becomes('withdrawn') &&
+            changed().hasOnly(['status', 'withdrawnAt']) &&
+            request.resource.data.withdrawnAt == request.time
+          );
+      }
     }
     // Same store-only read as above, for AdminOrdersScreen and the
     // dashboard, which read every customer's orders as one collection
     // group — filtered to where('storeId', '==', their store).
     match /{path=**}/orders/{orderId} {
+      allow read: if managesStore(resource.data.get('storeId', null));
+    }
+    // And the same again for reported problems, which the Store Manager's
+    // queue reads across every customer, filtered to their own store.
+    match /{path=**}/returnRequests/{orderId} {
       allow read: if managesStore(resource.data.get('storeId', null));
     }
     // Field validation for products, delivering the "strict data type

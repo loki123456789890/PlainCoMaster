@@ -1250,6 +1250,13 @@ exports.notifySupportRequest = notifySupportRequest;
 // so it cannot be aimed at an address; see the note above it in emails.js.
 exports.retryMail = retryMail;
 
+// Reporting a problem with a delivered order, and the delivery date the
+// 7-day window counts from. Its own module for the same reason emails are.
+const { requestReturn, recordDeliveryDate } = require('./returns');
+
+exports.requestReturn = requestReturn;
+exports.recordDeliveryDate = recordDeliveryDate;
+
 // Exported for scripts/test-rate-limit.mjs. The Firebase CLI discovers
 // functions by walking this module's exports and ignores a plain function,
 // so this deploys nothing.

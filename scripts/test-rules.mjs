@@ -2046,6 +2046,149 @@ await test('PAY-3  anyone signed in reads the gateway setting; nobody writes it'
 });
 
 // ---------------------------------------------------------------------------
+// Reported problems (return / refund requests). Created only by
+// requestReturn in functions/returns.js — scripts/test-returns.mjs covers
+// that. These pin who may read one and how it may move afterwards.
+
+const returnPath = (uid = 'customer1', orderId = 'delivered1') => `users/${uid}/returnRequests/${orderId}`;
+
+async function seedReturn(fields = {}, uid = 'customer1', orderId = 'delivered1') {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), returnPath(uid, orderId)), {
+      orderId, customerId: uid, customerEmail: `${uid}@example.com`,
+      storeId: 'store1', storeName: 'Tindahan ni Sam',
+      reason: 'wrong_size', note: 'Tag says L.', photoUrls: ['https://example.test/r.jpg'],
+      items: [{ index: 0, productId: 'p1', name: 'Denim Jacket', price: 850, quantity: 1 }],
+      refundAmount: 850, refundMethod: 'gcash', paymentMethod: 'cod',
+      payout: { method: 'gcash', accountName: 'Cathy', accountNumber: '0917', bankName: null },
+      status: 'requested', createdAt: new Date(), ...fields,
+    });
+  });
+}
+
+const returnDoc = (db, uid, orderId) => doc(db, returnPath(uid, orderId));
+const approve = (db, resolution = 'refund_only') =>
+  updateDoc(returnDoc(db), { status: 'approved', resolution, decidedAt: serverTimestamp() });
+
+await test('RETURN-1  no client creates a request — only requestReturn does', async () => {
+  const request = {
+    orderId: 'delivered1', customerId: 'customer1', storeId: 'store1',
+    reason: 'wrong_size', refundAmount: 1, status: 'requested', createdAt: serverTimestamp(),
+  };
+  await assertFails(setDoc(returnDoc(asCustomer()), request));
+  await assertFails(setDoc(returnDoc(asSeller()), request));
+  await assertFails(setDoc(returnDoc(asAdmin()), request));
+});
+
+await test('RETURN-2  read by the customer and their order\'s store, nobody else', async () => {
+  // Before any request exists: the customer's "is there one?" is a plain
+  // get that must succeed rather than read as a permission error.
+  await assertSucceeds(getDoc(returnDoc(asCustomer())));
+  await seedReturn();
+  await assertSucceeds(getDoc(returnDoc(asCustomer())));
+  await assertSucceeds(getDoc(returnDoc(asSeller())));
+  await assertFails(getDoc(returnDoc(asOtherCustomer())));
+  await assertFails(getDoc(returnDoc(asOtherSeller())));
+  await assertFails(getDoc(returnDoc(asUnassignedSeller())));
+  await assertFails(getDoc(returnDoc(asAdmin())));
+  await assertFails(getDoc(returnDoc(asGuest())));
+  // The manager's queue: every customer's, filtered to their own store.
+  const queue = (db, storeId) =>
+    getDocs(query(collectionGroup(db, 'returnRequests'), where('storeId', '==', storeId)));
+  await assertSucceeds(queue(asSeller(), 'store1'));
+  await assertFails(queue(asOtherSeller(), 'store1'));
+  await assertFails(getDocs(collectionGroup(asSeller(), 'returnRequests')));
+});
+
+await test('RETURN-3  the store approves, choosing how — and only that', async () => {
+  await seedReturn();
+  await assertFails(approve(asOtherSeller()));
+  await assertFails(approve(asDeactivatedSeller()));
+  await assertFails(approve(asSeller(), 'store_credit'));
+  await assertFails(updateDoc(returnDoc(asSeller()), {
+    status: 'approved', resolution: 'refund_only', decidedAt: new Date(Date.now() - 60000),
+  }));
+  // Approving is not a chance to lower what is owed.
+  await assertFails(updateDoc(returnDoc(asSeller()), {
+    status: 'approved', resolution: 'refund_only', decidedAt: serverTimestamp(), refundAmount: 1,
+  }));
+  await assertSucceeds(approve(asSeller()));
+});
+
+await test('RETURN-4  declining needs a reason the customer will read', async () => {
+  await seedReturn();
+  const decline = (declineReason) => updateDoc(returnDoc(asSeller()), {
+    status: 'declined', declineReason, decidedAt: serverTimestamp(),
+  });
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'declined', decidedAt: serverTimestamp() }));
+  await assertFails(decline('   '));
+  await assertFails(decline('x'.repeat(501)));
+  await assertSucceeds(decline('The photos show the size you ordered.'));
+});
+
+await test('RETURN-5  return first: approved, then received, then refunded — no skipping', async () => {
+  await seedReturn({ status: 'approved', resolution: 'return_first', decidedAt: new Date() });
+  const refund = (db) => updateDoc(returnDoc(db), {
+    status: 'refunded', refundReference: 'GC-123', refundedAt: serverTimestamp(),
+  });
+  await assertFails(refund(asSeller()));
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'received', receivedAt: serverTimestamp() }));
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'received', receivedAt: serverTimestamp(), restocked: 'yes' }));
+  await assertSucceeds(updateDoc(returnDoc(asSeller()), { status: 'received', receivedAt: serverTimestamp(), restocked: true }));
+  // Once received, it cannot be received again — which is what stops the
+  // paired stock restore happening twice.
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'received', receivedAt: serverTimestamp(), restocked: true }));
+  await assertSucceeds(refund(asSeller()));
+});
+
+await test('RETURN-6  refund only: straight to refunded, with a reference', async () => {
+  await seedReturn({ status: 'approved', resolution: 'refund_only', decidedAt: new Date() });
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'received', receivedAt: serverTimestamp(), restocked: false }));
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'refunded', refundedAt: serverTimestamp() }));
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'refunded', refundReference: ' ', refundedAt: serverTimestamp() }));
+  await assertFails(updateDoc(returnDoc(asOtherSeller()), { status: 'refunded', refundReference: 'GC-1', refundedAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(returnDoc(asSeller()), { status: 'refunded', refundReference: 'GC-1', refundedAt: serverTimestamp() }));
+});
+
+await test('RETURN-7  finished requests stay finished, and steps cannot be skipped', async () => {
+  await seedReturn();
+  await assertFails(updateDoc(returnDoc(asSeller()), { status: 'refunded', refundReference: 'GC-1', refundedAt: serverTimestamp() }));
+  for (const status of ['declined', 'refunded', 'withdrawn']) {
+    await seedReturn({ status, resolution: 'refund_only' });
+    await assertFails(approve(asSeller()));
+    await assertFails(updateDoc(returnDoc(asSeller()), { status: 'requested' }));
+  }
+});
+
+await test('RETURN-8  the customer may withdraw before a decision, and do nothing else', async () => {
+  await seedReturn();
+  const withdraw = (db) => updateDoc(returnDoc(db), { status: 'withdrawn', withdrawnAt: serverTimestamp() });
+  await assertFails(approve(asCustomer()));
+  await assertFails(updateDoc(returnDoc(asCustomer()), { refundAmount: 5000 }));
+  await assertFails(updateDoc(returnDoc(asCustomer()), { payout: { method: 'gcash', accountName: 'X', accountNumber: '1' } }));
+  await assertFails(withdraw(asOtherCustomer()));
+  await assertFails(withdraw(asSeller()));
+  await assertSucceeds(withdraw(asCustomer()));
+
+  await seedReturn({ status: 'approved', resolution: 'refund_only' });
+  await assertFails(withdraw(asCustomer()));
+
+  // A deactivated account keeps read access to its history, like orders,
+  // but cannot act.
+  await seedReturn({}, 'deactivatedCustomer', 'delivered2');
+  await assertFails(updateDoc(returnDoc(asDeactivatedCustomer(), 'deactivatedCustomer', 'delivered2'), {
+    status: 'withdrawn', withdrawnAt: serverTimestamp(),
+  }));
+});
+
+await test('RETURN-9  nobody deletes a request', async () => {
+  await seedReturn();
+  await assertFails(deleteDoc(returnDoc(asCustomer())));
+  await assertFails(deleteDoc(returnDoc(asSeller())));
+  await assertFails(deleteDoc(returnDoc(asAdmin())));
+});
+
+// ---------------------------------------------------------------------------
 await testEnv.cleanup();
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);
