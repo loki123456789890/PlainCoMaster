@@ -2381,8 +2381,8 @@ password to leave the app to change it.
 | # | Requirement |
 |---|---|
 | FR-A1 | The system lets a signed-in customer, Store Manager or Platform Admin change their password. |
-| FR-A2 | The system requires the current password before changing it, and states "That isn't your current password." when it is wrong. |
-| FR-A3 | The new password must be at least 8 characters (the same minimum as Sign Up), must differ from the current one, and must be entered twice identically; each problem is named under its field. |
+| FR-A2 | The system requires the current password before changing it, and states "That's not your current password." when it is wrong. |
+| FR-A3 | The new password must be at least 8 characters (the same minimum as Sign Up), must differ from the current one, and must be entered twice identically. Three checks under the fields show which of these are met, and Change password stays disabled until all three are. |
 | FR-A4 | The change cannot be submitted while offline, and too many failed attempts are refused with a message to wait and try again. |
 
 ### Use case updates
@@ -2399,8 +2399,49 @@ Admin):
 > password unchanged. *Postcondition:* the new password is required at
 > the next log in; the old one no longer works.
 
-A user who has forgotten their current password is directed to Reset
-Password, which stays as it is.
+A user who has forgotten their current password taps "Forgot it?" in the
+sheet, which emails a reset link to the account's address without
+logging out (redesign of 3 Oct 2026). Reset Password on the login screen
+stays as it is.
+
+### SRS text to paste — new transaction 1.4
+
+SRS 1.3 only covers reset from the login screen, and no change-password
+transaction was found in the SRS or this update package. Confirm on your
+side; if it is missing, paste this as new transaction 1.4, directly after
+1.3 Password Reset and Figure 7, before Module 2:
+
+> **1.4 Transaction Name: Change Password**
+>
+> • **Use Case Description**
+> A signed-in user changes their password from the Profile screen. The
+> system re-authenticates the user with their current password before
+> applying the new one through Firebase Authentication.
+>
+> o **Preconditions:** The user is signed in and knows their current
+> password.
+> o **Postconditions:** The password is updated. The user remains signed
+> in on the current device and uses the new password at the next login.
+>
+> **Main Success Scenario:**
+>
+> 1. The user selects "Change password" from the Profile screen.
+> 2. The user enters their current password, a new password, and the new
+>    password again.
+> 3. The system validates that the new password has at least 8
+>    characters, differs from the current password, and matches its
+>    confirmation.
+> 4. The system re-authenticates the user with the current password.
+> 5. The system updates the password and displays a confirmation.
+>
+> **Extensions:**
+> 4a. Incorrect Current Password: The system displays an error and does
+> not change the password.
+> 4b. Too Many Attempts: Firebase Authentication temporarily blocks
+> further attempts; the system displays a message directing the user to
+> wait or reset by email.
+> 2a. Forgotten Current Password: The user requests a password reset
+> email to their registered address, as in 1.3.
 
 ### Business rules
 
