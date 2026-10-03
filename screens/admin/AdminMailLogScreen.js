@@ -113,6 +113,8 @@ const KIND_LABELS = {
   orderConfirmation: 'Order receipt',
   orderStatus: 'Order update',
   supportRequest: 'Support alert',
+  returnAlert: 'Problem report',
+  returnUpdate: 'Problem update',
 };
 
 function toneColor(tone) {

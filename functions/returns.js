@@ -43,7 +43,15 @@ const REGION = 'asia-southeast1';
 const RETURN_WINDOW_DAYS = 7;
 const RETURN_WINDOW_MS = RETURN_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
-const RETURN_REASONS = ['wrong_item', 'not_as_described', 'undisclosed_damage', 'wrong_size'];
+// What each reason reads as, in the emails (emails.js) — and in the app,
+// whose constants/returns.js keeps the same four in step by hand.
+const RETURN_REASON_LABELS = {
+  wrong_item: 'Wrong item sent',
+  not_as_described: 'Not as described',
+  undisclosed_damage: 'Damage that was not mentioned',
+  wrong_size: 'Wrong size sent',
+};
+const RETURN_REASONS = Object.keys(RETURN_REASON_LABELS);
 
 const MAX_PHOTOS = 3;
 const MAX_NOTE_LENGTH = 1000;
@@ -295,3 +303,4 @@ exports._handleOrderDelivered = handleOrderDelivered;
 exports._isReturnPhotoUrl = isReturnPhotoUrl;
 exports.RETURN_WINDOW_DAYS = RETURN_WINDOW_DAYS;
 exports.RETURN_REASONS = RETURN_REASONS;
+exports.RETURN_REASON_LABELS = RETURN_REASON_LABELS;

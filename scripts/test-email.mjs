@@ -612,6 +612,149 @@ await test('RETRY-9  a key cannot escape mailLog', async () => {
   );
 });
 
+console.log('\nReported problems');
+
+// A report as requestReturn writes it.
+const report = (overrides = {}) => ({
+  orderId: 'ret1',
+  customerId: 'customer1',
+  customerEmail: 'cathy@example.com',
+  storeId: 'store1',
+  storeName: 'Tindahan ni Sam',
+  reason: 'wrong_size',
+  note: 'Ordered M, the tag says L.',
+  photoUrls: ['https://example.test/a.jpg', 'https://example.test/b.jpg'],
+  items: [{ index: 0, productId: 'p1', name: 'Denim Jacket', price: 850, quantity: 1, size: 'M', color: 'Blue' }],
+  refundAmount: 850,
+  refundMethod: 'gcash',
+  paymentMethod: 'cod',
+  payout: { method: 'gcash', accountName: 'Cathy Customer', accountNumber: '0917 123 4567', bankName: null },
+  status: 'requested',
+  ...overrides,
+});
+const stepped = (from, to, overrides = {}) => [report({ status: from, ...overrides }), report({ status: to, ...overrides })];
+const bodies = (message) => `${message.html}\n${message.text}`;
+
+await test('RETURN-MAIL-1  a new report alerts the store and acknowledges the customer', async (transport) => {
+  await emails._handleReturnCreated(report(), 'ret1');
+
+  assertEqual(transport.sent.length, 2, 'messages sent');
+  const [alert, ack] = transport.sent;
+  assertEqual(alert.to, 'shop@plainco.test', 'the alert goes to the store inbox');
+  assertEqual(alert.replyTo, 'cathy@example.com', 'replying answers the customer');
+  assert(alert.subject.includes('#RET1') && alert.subject.includes('Wrong size sent'), `alert subject: ${alert.subject}`);
+  assert(bodies(alert).includes('Ordered M, the tag says L.'), 'the customer\'s note is in the alert');
+  assertEqual(ack.to, 'cathy@example.com', 'the acknowledgement goes to the customer');
+  assert(ack.subject.includes('We got your report'), `ack subject: ${ack.subject}`);
+
+  // The account number stays in the app. Last four only, both ways.
+  for (const message of transport.sent) {
+    assert(!bodies(message).includes('0917 123 4567') && !bodies(message).includes('09171234567'), 'no full account number');
+    assert(bodies(message).includes('GCash ending 4567'), 'last four digits shown');
+  }
+
+  const logged = await entry('return-ret1-store');
+  assertEqual(logged.kind, 'returnAlert', 'alert kind');
+  assertEqual(logged.storeId, 'store1', 'routed to the order\'s store');
+  const ackLogged = await entry('return-ret1-requested');
+  assertEqual(ackLogged.kind, 'returnUpdate', 'ack kind');
+  assertEqual(ackLogged.returnStatus, 'requested', 'which step');
+});
+
+await test('RETURN-MAIL-2  each decision emails the customer, in its own words', async (transport) => {
+  await emails._handleReturnUpdated(...stepped('requested', 'approved', { resolution: 'refund_only' }), 'ret2a');
+  await emails._handleReturnUpdated(...stepped('requested', 'approved', { resolution: 'return_first' }), 'ret2b');
+  await emails._handleReturnUpdated(...stepped('approved', 'received', { resolution: 'return_first' }), 'ret2b');
+  await emails._handleReturnUpdated(
+    ...stepped('received', 'refunded', { resolution: 'return_first', refundReference: 'GC-778899' }), 'ret2b'
+  );
+  await emails._handleReturnUpdated(
+    ...stepped('requested', 'declined', { declineReason: 'The tag in your photo says M.' }), 'ret2c'
+  );
+
+  assertEqual(transport.sent.length, 5, 'one email per step');
+  const [refundOnly, returnFirst, received, refunded, declined] = transport.sent;
+  assert(bodies(refundOnly).includes('do not need to send anything back'), 'refund only: keep the item');
+  assert(bodies(returnFirst).includes('Send the item back'), 'return first: send it back');
+  assert(bodies(returnFirst).includes('The store pays for the shipping'), 'and who pays to ship it');
+  assert(received.subject.includes('arrived'), `received subject: ${received.subject}`);
+  assert(bodies(refunded).includes('GC-778899'), 'refunded: the reference');
+  assert(bodies(declined).includes('The tag in your photo says M.'), 'declined: the store\'s reason');
+  assert(!bodies(declined).includes('Refund to'), 'declined: no refund rows, since none is owed');
+  for (const message of transport.sent) assertEqual(message.to, 'cathy@example.com', 'to the customer');
+});
+
+await test('RETURN-MAIL-3  withdrawing, unrelated writes and a repeated trigger send nothing more', async (transport) => {
+  await emails._handleReturnUpdated(...stepped('requested', 'withdrawn'), 'ret3');
+  const [before] = stepped('requested', 'requested');
+  await emails._handleReturnUpdated(before, { ...before, note: 'edited by an admin script' }, 'ret3');
+  assertEqual(transport.sent.length, 0, 'nothing for withdrawn or a non-status write');
+
+  await emails._handleReturnUpdated(...stepped('requested', 'declined', { declineReason: 'No.' }), 'ret3');
+  await emails._handleReturnUpdated(...stepped('requested', 'declined', { declineReason: 'No.' }), 'ret3');
+  assertEqual(transport.sent.length, 1, 'a redelivered trigger sends once');
+});
+
+await test('RETURN-MAIL-4  no customer address: the store is still told', async (transport) => {
+  await emails._handleReturnCreated(report({ customerEmail: 'unknown' }), 'ret4');
+  assertEqual(transport.sent.length, 1, 'only the alert');
+  assertEqual(transport.sent[0].to, 'shop@plainco.test', 'to the store');
+  assertEqual(transport.sent[0].replyTo, undefined, 'no Reply-To to a non-address');
+});
+
+await test('RETRY-15  a failed problem update resends, and an out-of-date one does not', async (transport) => {
+  const after = report({ status: 'approved', resolution: 'refund_only' });
+  await db.doc('users/customer1/returnRequests/r15').set(after);
+  transport.failNext('550 mailbox unavailable');
+  await emails._handleReturnUpdated(report(), after, 'r15');
+  assertEqual((await entry('return-r15-approved')).status, 'failed', 'setup: it failed');
+
+  await expectReject(
+    () => emails._handleRetryMail({ auth: { uid: 'seller2' }, data: { key: 'return-r15-approved' } }),
+    'permission-denied',
+    'another store\'s manager is refused'
+  );
+  const result = await emails._handleRetryMail(asSeller('return-r15-approved'));
+  assertEqual(result.status, 'sent', 'the retry sent it');
+  assert(transport.sent[0].subject.includes('approved'), 'rebuilt from the report');
+
+  // Fails again, and meanwhile the store refunds: "approved" is now stale.
+  await db.doc('users/customer1/returnRequests/r15b').set(after);
+  transport.failNext('550 mailbox unavailable');
+  await emails._handleReturnUpdated(report(), after, 'r15b');
+  await db.doc('users/customer1/returnRequests/r15b').update({ status: 'refunded', refundReference: 'GC-1' });
+  const error = await expectReject(
+    () => emails._handleRetryMail(asSeller('return-r15b-approved')),
+    'failed-precondition',
+    'the stale update is refused'
+  );
+  assert(error.message.includes('out of date'), `refused for being stale, not for: ${error.message}`);
+});
+
+await test('RETRY-16  a failed store alert resends to the store until the store acts', async (transport) => {
+  const created = report();
+  await db.doc('users/customer1/returnRequests/r16').set(created);
+  transport.failNext('Connection timed out');
+  await emails._handleReturnCreated(created, 'r16');
+  assertEqual((await entry('return-r16-store')).status, 'failed', 'setup: the alert failed');
+
+  const result = await emails._handleRetryMail(asSeller('return-r16-store'));
+  assertEqual(result.status, 'sent', 'the retry sent it');
+  const resent = transport.sent.find((m) => m.subject.startsWith('Problem reported'));
+  assertEqual(resent.to, 'shop@plainco.test', 'to the store inbox');
+  assertEqual(resent.replyTo, 'cathy@example.com', 'replying to the customer');
+
+  await db.doc('users/customer1/returnRequests/r16b').set(created);
+  transport.failNext('Connection timed out');
+  await emails._handleReturnCreated(created, 'r16b');
+  await db.doc('users/customer1/returnRequests/r16b').update({ status: 'declined', declineReason: 'No.' });
+  await expectReject(
+    () => emails._handleRetryMail(asSeller('return-r16b-store')),
+    'failed-precondition',
+    'an alert for a report already decided is refused'
+  );
+});
+
 console.log('\nCross-package consistency');
 
 await test('DRIFT-1  the mailer formats order numbers identically to the app', async () => {

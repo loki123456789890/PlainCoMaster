@@ -39,6 +39,7 @@ const {
   CLAY,
   GOLD,
 } = require('./mailer');
+const { RETURN_REASON_LABELS, RETURN_WINDOW_DAYS } = require('./returns');
 
 // Mirrors constants/payment.js in the app package, which functions/ cannot
 // import across the ESM/CommonJS boundary. getPaymentLabel there falls back
@@ -283,7 +284,7 @@ const STATUS_EMAILS = {
     intro: () => 'It has arrived. We hope you love it.',
     closing: () => [
       'You can review each item from the order in My Orders.',
-      'If something arrived damaged, tell us within 24 hours with photos and we will sort it out.',
+      `If the wrong item or size came, or it is damaged or not as described, report it from the order in My Orders within ${RETURN_WINDOW_DAYS} days.`,
     ],
   },
   cancelled: {
@@ -367,6 +368,236 @@ function statusText(order, orderId, status) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------
+// Reported problems (returns and refunds)
+// ---------------------------------------------------------------------
+//
+// Two audiences. The store hears once, when the problem is reported, at
+// the same inbox support alerts go to, with Reply-To set to the customer.
+// The customer hears at every step the store takes, so a decision never
+// waits on them opening the app. Withdrawing sends nothing: the customer
+// did it, and already knows.
+//
+// NO ACCOUNT NUMBER GOES IN ANY EMAIL. The manager needs the customer's
+// GCash or bank number only at the moment of paying, and reads it in the
+// app; an inbox is a worse place to keep it. Both sides see the last four
+// digits, which is enough to recognise the account.
+
+const reasonLabel = (reason) => RETURN_REASON_LABELS[reason] || 'Problem with the order';
+
+// Copied from the order by requestReturn, so it carries the same
+// 'unknown' marker placeOrder writes when it found no address.
+const customerAddress = (request) =>
+  request.customerEmail && request.customerEmail !== 'unknown' ? request.customerEmail : null;
+
+function refundDestination(request) {
+  if (request.refundMethod === 'original') return `Back to ${paymentLabel(request.paymentMethod)}`;
+  const payout = request.payout || {};
+  const where = request.refundMethod === 'bank' ? payout.bankName || 'Bank account' : 'GCash';
+  const digits = String(payout.accountNumber || '').replace(/\s/g, '').slice(-4);
+  return digits ? `${where} ending ${digits}` : where;
+}
+
+// Copy per status. Each part takes the request, because "approved" reads
+// differently when the item has to go back first.
+const RETURN_EMAILS = {
+  requested: {
+    subject: (number) => `We got your report about order ${number}`,
+    heading: () => 'Report received',
+    intro: (store) => `${store} will look at your photos and decide what happens next.`,
+    closing: () => ['We will email you when they do. You can also follow it from the order in My Orders.'],
+  },
+  approved: {
+    subject: (number) => `Your report about order ${number} was approved`,
+    heading: (request) => (request.resolution === 'return_first' ? 'Return approved' : 'Refund approved'),
+    intro: (store, request) =>
+      request.resolution === 'return_first'
+        ? `${store} agreed. Send the item back and they will refund you when it arrives.`
+        : `${store} agreed and will refund you. You do not need to send anything back.`,
+    closing: (request) =>
+      request.resolution === 'return_first'
+        ? ['Message the store from the order in My Orders to arrange sending it back. The store pays for the shipping.']
+        : ['We will email you again when the refund is sent.'],
+  },
+  received: {
+    subject: (number) => `Your return for order ${number} arrived`,
+    heading: () => 'Return received',
+    intro: (store) => `${store} has the item back and will send your refund next.`,
+    closing: () => ['We will email you again when the refund is sent.'],
+  },
+  refunded: {
+    subject: (number) => `Your refund for order ${number} was sent`,
+    heading: () => 'Refund sent',
+    intro: (store) => `${store} sent your refund.`,
+    closing: () => [
+      'If it has not arrived in a few days, message the store from the order in My Orders and quote the reference above.',
+    ],
+  },
+  declined: {
+    subject: (number) => `Your report about order ${number} was not approved`,
+    heading: () => 'Report not approved',
+    intro: (store) => `${store} looked at your report and did not approve it.`,
+    closing: () => ['If you think this is a mistake, message the store from the order in My Orders.'],
+  },
+};
+
+const sendsReturnEmail = (status) => Object.prototype.hasOwnProperty.call(RETURN_EMAILS, status);
+
+const LABEL = `margin:0 0 4px 0;font:600 11px/1.4 ${SANS};letter-spacing:0.08em;text-transform:uppercase;color:${ASH};`;
+
+function orderCard(orderId, storeName) {
+  return `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${LINE};border-radius:12px;padding:16px;margin-bottom:20px;">
+  <tr><td style="font:600 11px/1.4 ${SANS};letter-spacing:0.08em;text-transform:uppercase;color:${ASH};padding-bottom:4px;">Order number</td></tr>
+  <tr><td style="font:700 22px/1.2 ${SANS};color:${CLAY};">${escapeHtml(formatOrderNumber(orderId))}</td></tr>
+  ${storeName
+    ? `<tr><td style="font:400 13px/1.5 ${SANS};color:${INK};padding-top:2px;">from ${escapeHtml(storeName)}</td></tr>`
+    : ''}
+</table>`;
+}
+
+function quoteBox(label, text) {
+  return `
+<p style="${LABEL}">${escapeHtml(label)}</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${LINE};border-radius:12px;padding:16px;margin-bottom:20px;">
+  <tr><td style="font:400 14px/1.6 ${SANS};color:${INK};white-space:pre-wrap;">${escapeHtml(text)}</td></tr>
+</table>`;
+}
+
+const paragraphs = (lines) =>
+  lines
+    .map((line) => `<p style="margin:16px 0 0 0;font:400 13px/1.6 ${SANS};color:${ASH};">${escapeHtml(line)}</p>`)
+    .join('\n');
+
+// The rows under the item list: what is owed and where it goes, plus the
+// reference once it has been paid. A declined request owes nothing, so it
+// shows none of them.
+function refundRows(request, status) {
+  if (status === 'declined') return [];
+  const rows = [
+    [status === 'refunded' ? 'Refunded' : 'Refund', peso(request.refundAmount), true],
+    ['Refund to', refundDestination(request)],
+  ];
+  if (status === 'refunded' && request.refundReference) rows.push(['Reference', request.refundReference]);
+  return rows;
+}
+
+function returnUpdateHtml(request, orderId, status) {
+  const copy = RETURN_EMAILS[status];
+  const store = request.storeName || 'The store';
+  const items = Array.isArray(request.items) ? request.items : [];
+
+  const body = `${orderCard(orderId, request.storeName)}
+${status === 'declined' && request.declineReason ? quoteBox('Their reason', request.declineReason) : ''}
+<p style="${LABEL}">You reported: ${escapeHtml(reasonLabel(request.reason))}</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${itemRows(items)}</table>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding-top:12px;">
+  ${refundRows(request, status).map(([label, value, emphasis]) => summaryRow(label, value, emphasis)).join('\n')}
+</table>
+
+${paragraphs(copy.closing(request))}`;
+
+  return shell({
+    preheader: `Order ${formatOrderNumber(orderId)} — ${copy.heading(request).toLowerCase()}.`,
+    heading: copy.heading(request),
+    intro: copy.intro(store, request),
+    body,
+  });
+}
+
+function returnUpdateText(request, orderId, status) {
+  const copy = RETURN_EMAILS[status];
+  const store = request.storeName || 'The store';
+  const items = Array.isArray(request.items) ? request.items : [];
+
+  const lines = [
+    `PlainCo — ${copy.heading(request).toLowerCase()}`,
+    '',
+    copy.intro(store, request),
+    '',
+    `Order number: ${formatOrderNumber(orderId)}`,
+    ...(request.storeName ? [`Sold by: ${request.storeName}`] : []),
+    '',
+  ];
+  if (status === 'declined' && request.declineReason) {
+    lines.push('Their reason:', request.declineReason, '');
+  }
+  lines.push(`You reported: ${reasonLabel(request.reason)}`);
+  for (const item of items) {
+    const variant = [item.size, item.color].filter(Boolean).join(' / ');
+    lines.push(`  ${item.name}${variant ? ` (${variant})` : ''} x${item.quantity}`);
+  }
+  const rows = refundRows(request, status);
+  if (rows.length > 0) {
+    lines.push('', ...rows.map(([label, value]) => `${label}: ${value}`));
+  }
+  lines.push('', ...copy.closing(request));
+  return lines.join('\n');
+}
+
+function returnAlertHtml(request, orderId) {
+  const items = Array.isArray(request.items) ? request.items : [];
+  const photos = Array.isArray(request.photoUrls) ? request.photoUrls.length : 0;
+  const customerEmail = customerAddress(request);
+
+  const body = `${orderCard(orderId, request.storeName)}
+${request.note ? quoteBox('What they said', request.note) : ''}
+<p style="${LABEL}">Items</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${itemRows(items)}</table>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding-top:12px;">
+  ${summaryRow('Refund if approved', peso(request.refundAmount), true)}
+  ${summaryRow('Refund to', refundDestination(request))}
+  ${summaryRow('Photos', `${photos} in the app`)}
+  ${summaryRow('From', customerEmail || 'No email on the account')}
+</table>
+
+${paragraphs([
+    'Open the report in the app to see the photos, then approve or decline it.',
+    customerEmail
+      ? 'Reply to this email to answer the customer directly.'
+      : 'This account has no email address, so a reply has to go through the order chat.',
+  ])}`;
+
+  return shell({
+    preheader: `${reasonLabel(request.reason)} — order ${formatOrderNumber(orderId)}.`,
+    heading: 'Problem reported',
+    intro: `A customer reported: ${reasonLabel(request.reason)}.`,
+    body,
+  });
+}
+
+function returnAlertText(request, orderId) {
+  const items = Array.isArray(request.items) ? request.items : [];
+  const photos = Array.isArray(request.photoUrls) ? request.photoUrls.length : 0;
+  const lines = [
+    'PlainCo — problem reported',
+    '',
+    `A customer reported: ${reasonLabel(request.reason)}.`,
+    '',
+    `Order number: ${formatOrderNumber(orderId)}`,
+    ...(request.storeName ? [`Sold by: ${request.storeName}`] : []),
+    '',
+  ];
+  if (request.note) lines.push('What they said:', request.note, '');
+  lines.push('Items:');
+  for (const item of items) {
+    const variant = [item.size, item.color].filter(Boolean).join(' / ');
+    lines.push(`  ${item.name}${variant ? ` (${variant})` : ''} x${item.quantity}`);
+  }
+  lines.push(
+    '',
+    `Refund if approved: ${peso(request.refundAmount)}`,
+    `Refund to: ${refundDestination(request)}`,
+    `Photos: ${photos} in the app`,
+    `From: ${customerAddress(request) || 'No email on the account'}`,
+    '',
+    'Open the report in the app to see the photos, then approve or decline it.'
+  );
+  return lines.join('\n');
+}
+
 // Exported for scripts/preview-email.mjs, which renders every template to
 // disk so they can be opened in a browser and eyeballed without deploying
 // or sending anything. index.js re-exports only the triggers, so these
@@ -377,6 +608,10 @@ exports._renderSupportHtml = supportHtml;
 exports._renderSupportText = supportText;
 exports._renderStatusHtml = statusHtml;
 exports._renderStatusText = statusText;
+exports._renderReturnUpdateHtml = returnUpdateHtml;
+exports._renderReturnUpdateText = returnUpdateText;
+exports._renderReturnAlertHtml = returnAlertHtml;
+exports._renderReturnAlertText = returnAlertText;
 
 // The handlers are named functions rather than inline closures so
 // scripts/test-email.mjs can call them with a plain object instead of
@@ -489,9 +724,65 @@ async function handleOrderUpdated(before, after, orderId) {
   await sendStatusUpdate(after, orderId, current);
 }
 
+// The store's alert about a new report. Out of date once the store has
+// acted on it, which retryMail checks before resending.
+async function sendReturnAlert(request, orderId) {
+  const customerEmail = customerAddress(request);
+  await sendMail({
+    key: `return-${orderId}-store`,
+    to: storeInbox(),
+    replyTo: customerEmail || undefined,
+    subject: `Problem reported: order ${formatOrderNumber(orderId)} — ${reasonLabel(request.reason)}`,
+    html: returnAlertHtml(request, orderId),
+    text: returnAlertText(request, orderId),
+    meta: {
+      kind: 'returnAlert', orderId, customerId: request.customerId || null,
+      storeId: request.storeId || null,
+    },
+  });
+}
+
+// The customer's email for one step. One key per report and status, the
+// same arrangement as order status updates, so each goes out at most once.
+async function sendReturnUpdate(request, orderId, status) {
+  if (!request || !sendsReturnEmail(status)) return;
+  const to = customerAddress(request);
+  if (!to) {
+    logger.warn(`return ${orderId} has no usable customerEmail, no ${status} update sent`);
+    return;
+  }
+  await sendMail({
+    key: `return-${orderId}-${status}`,
+    to,
+    subject: RETURN_EMAILS[status].subject(formatOrderNumber(orderId)),
+    html: returnUpdateHtml(request, orderId, status),
+    text: returnUpdateText(request, orderId, status),
+    // returnStatus, never `status`, for the reason orderStatus is named
+    // as it is above.
+    meta: {
+      kind: 'returnUpdate', orderId, returnStatus: status, customerId: request.customerId || null,
+      storeId: request.storeId || null,
+    },
+  });
+}
+
+async function handleReturnCreated(request, orderId) {
+  if (!request) return;
+  await sendReturnAlert(request, orderId);
+  await sendReturnUpdate(request, orderId, 'requested');
+}
+
+async function handleReturnUpdated(before, after, orderId) {
+  if (!before || !after) return;
+  if ((before.status || '') === (after.status || '')) return;
+  await sendReturnUpdate(after, orderId, after.status);
+}
+
 exports._handleOrderCreated = handleOrderCreated;
 exports._handleSupportCreated = handleSupportCreated;
 exports._handleOrderUpdated = handleOrderUpdated;
+exports._handleReturnCreated = handleReturnCreated;
+exports._handleReturnUpdated = handleReturnUpdated;
 
 exports.sendOrderConfirmation = onDocumentCreated(
   {
@@ -530,6 +821,34 @@ exports.notifySupportRequest = onDocumentCreated(
   },
   async (event) => {
     await handleSupportCreated(event.data?.data(), event.params.requestId);
+  }
+);
+
+exports.notifyReturnRequest = onDocumentCreated(
+  {
+    document: 'users/{userId}/returnRequests/{orderId}',
+    region: REGION,
+    secrets: MAIL_SECRETS,
+    retry: false,
+  },
+  async (event) => {
+    await handleReturnCreated(event.data?.data(), event.params.orderId);
+  }
+);
+
+exports.sendReturnRequestUpdate = onDocumentUpdated(
+  {
+    document: 'users/{userId}/returnRequests/{orderId}',
+    region: REGION,
+    secrets: MAIL_SECRETS,
+    retry: false,
+  },
+  async (event) => {
+    await handleReturnUpdated(
+      event.data?.before?.data(),
+      event.data?.after?.data(),
+      event.params.orderId
+    );
   }
 );
 
@@ -663,6 +982,42 @@ async function resendAction(db, key, entry) {
       throw new HttpsError('failed-precondition', 'That support request has been deleted.');
     }
     return () => handleSupportCreated(snapshot.data(), requestId);
+  }
+
+  // Both rebuilt from the report as it is NOW, and refused once it has
+  // moved on: an alert asking the store to decide on a report it already
+  // decided, or "approved" after it was refunded, would be out of date in
+  // the same way a stale order update is.
+  if (kind === 'returnAlert' || kind === 'returnUpdate') {
+    const { orderId, customerId } = entry;
+    const status = kind === 'returnAlert' ? 'requested' : entry.returnStatus;
+    if (!orderId || !customerId || !sendsReturnEmail(status)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'This entry does not record which problem report it was, so it cannot be rebuilt.'
+      );
+    }
+
+    const snapshot = await db.doc(`users/${customerId}/returnRequests/${orderId}`).get();
+    if (!snapshot.exists) {
+      throw new HttpsError('failed-precondition', 'That problem report no longer exists.');
+    }
+    const request = snapshot.data();
+    if (request.status !== status) {
+      throw new HttpsError(
+        'failed-precondition',
+        'That report has moved on since, so this email is out of date and will not be sent.'
+      );
+    }
+    if (kind === 'returnAlert') return () => sendReturnAlert(request, orderId);
+
+    if (!customerAddress(request)) {
+      throw new HttpsError(
+        'failed-precondition',
+        'That report has no email address on it, so there is nowhere to send the update.'
+      );
+    }
+    return () => sendReturnUpdate(request, orderId, status);
   }
 
   throw new HttpsError('failed-precondition', 'This kind of email cannot be resent.');

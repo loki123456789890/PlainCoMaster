@@ -34,6 +34,7 @@ const SECTIONS = [
       [{ b: 'Delivery details:' }, ' recipient name, phone number, street address, city, province, and ZIP code.'],
       [{ b: 'Location (optional):' }, ' only when you tap "Use Current Location," to fill in your address. We do not track your location in the background.'],
       [{ b: 'Shopping activity:' }, ' your cart, favorites, orders, reviews, and the messages and photos you send to a store about an order.'],
+      [{ b: 'Problem reports:' }, ' if you report a problem with a delivered order, the reason, your note, your photos, and — for a Cash on Delivery order — the GCash or bank account you want the refund sent to.'],
     ],
   },
   {
@@ -44,6 +45,7 @@ const SECTIONS = [
       ['To create and secure your account.'],
       ['To process your orders and deliver them to you.'],
       ['To email you a confirmation when you place an order, and an update when it ships, arrives, or is cancelled.'],
+      ['To let the store review a problem you report and send your refund, and to email you at each step.'],
       ['To show your order status and let you message the store about an order.'],
       ['To display your reviews on products you have purchased.'],
     ],
@@ -55,6 +57,7 @@ const SECTIONS = [
     title: 'Who can see your information',
     paragraphs: [
       ['When you place an order, the ', { b: 'store you ordered from' }, ' sees your name, delivery address, phone number, order details, and your messages about that order, so they can fulfil it. Stores cannot see your orders from other stores.'],
+      ['If you report a problem with an order, only that store sees the report, its photos, and your refund account. Emails about it show just the last four digits of the account.'],
       ['PlainCo platform administrators can access account records to manage users and resolve issues.'],
       ['Your reviews are shown to other PlainCo shoppers with your first name and last initial (for example, "Juan D.") and your profile photo, along with any photos you add to the review. Your full name is not shown.'],
     ],

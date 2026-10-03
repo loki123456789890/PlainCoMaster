@@ -92,6 +92,34 @@ const supportRequest = {
 // there is nobody to reply to rather than being handed a blank From line.
 const supportNoEmail = { ...supportRequest, userEmail: null };
 
+// A reported problem, as requestReturn writes it. COD, so the refund goes
+// to the customer's GCash — which the emails show by its last four digits
+// only. The note carries markup to prove it is escaped like everything else.
+const report = {
+  customerId: 'customer1',
+  customerEmail: 'cathy@example.com',
+  storeId: 'store1',
+  storeName: 'Tindahan ni Sam',
+  reason: 'wrong_size',
+  note: 'I ordered a Medium but the tag says <Large>.\nPhotos of the tag attached.',
+  photoUrls: ['a', 'b'],
+  items: [{ index: 0, productId: 'p1', name: "Levi's 501 <selvedge>", price: 1250, quantity: 1, size: 'M', color: 'Indigo' }],
+  refundAmount: 1250,
+  refundMethod: 'gcash',
+  paymentMethod: 'cod',
+  payout: { method: 'gcash', accountName: 'Cathy Customer', accountNumber: '0917 123 4567', bankName: null },
+  status: 'requested',
+};
+const reportPaid = { ...report, refundMethod: 'original', paymentMethod: 'gcash', payout: null, resolution: 'return_first' };
+const reportBank = {
+  ...report,
+  refundMethod: 'bank',
+  payout: { method: 'bank', accountName: 'Cathy Customer', accountNumber: '001234567890', bankName: 'BPI' },
+  resolution: 'refund_only',
+  refundReference: 'BPI-20261005-7788',
+};
+const reportDeclined = { ...report, declineReason: 'The tag in your second photo says Medium, which is the size you ordered.' };
+
 const files = [
   ['order-cod.html', emails._renderOrderHtml(codOrder, 'aBcDeF1234567890')],
   ['order-cod.txt', emails._renderOrderText(codOrder, 'aBcDeF1234567890')],
@@ -111,6 +139,17 @@ const files = [
   ['support.html', emails._renderSupportHtml(supportRequest, 'req0001abcdef')],
   ['support.txt', emails._renderSupportText(supportRequest, 'req0001abcdef')],
   ['support-no-email.html', emails._renderSupportHtml(supportNoEmail, 'req0002abcdef')],
+  // Reported problems: the store's alert, then each customer step.
+  ['return-alert.html', emails._renderReturnAlertHtml(report, 'aBcDeF1234567890')],
+  ['return-alert.txt', emails._renderReturnAlertText(report, 'aBcDeF1234567890')],
+  ['return-requested.html', emails._renderReturnUpdateHtml(report, 'aBcDeF1234567890', 'requested')],
+  ['return-approved-refund-only.html', emails._renderReturnUpdateHtml(reportBank, 'aBcDeF1234567890', 'approved')],
+  ['return-approved-return-first.html', emails._renderReturnUpdateHtml(reportPaid, 'zZyYxX9876543210', 'approved')],
+  ['return-received.html', emails._renderReturnUpdateHtml(reportPaid, 'zZyYxX9876543210', 'received')],
+  ['return-refunded.html', emails._renderReturnUpdateHtml(reportBank, 'aBcDeF1234567890', 'refunded')],
+  ['return-refunded.txt', emails._renderReturnUpdateText(reportBank, 'aBcDeF1234567890', 'refunded')],
+  ['return-declined.html', emails._renderReturnUpdateHtml(reportDeclined, 'aBcDeF1234567890', 'declined')],
+  ['return-declined.txt', emails._renderReturnUpdateText(reportDeclined, 'aBcDeF1234567890', 'declined')],
 ];
 
 for (const [name, contents] of files) {
