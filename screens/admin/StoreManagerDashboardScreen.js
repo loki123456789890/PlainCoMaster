@@ -185,6 +185,12 @@ export default function StoreManagerDashboardScreen({ navigation }) {
   const [mailProblemCount, setMailProblemCount] = useState(0);
   const [mailLoading, setMailLoading] = useState(true);
   const [mailError, setMailError] = useState(false);
+  // Reported problems waiting on the manager: to decide, or approved and
+  // still to refund. One approved as "return first" waits on the customer
+  // instead, so it isn't counted.
+  const [returnsTodo, setReturnsTodo] = useState({ toDecide: 0, toRefund: 0 });
+  const [returnsLoading, setReturnsLoading] = useState(true);
+  const [returnsError, setReturnsError] = useState(false);
 
   const [logoutVisible, setLogoutVisible] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -214,9 +220,11 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       setOrders(EMPTY_SUMMARY);
       setOpenSupportCount(0);
       setMailProblemCount(0);
+      setReturnsTodo({ toDecide: 0, toRefund: 0 });
       setOrdersLoading(false);
       setSupportLoading(false);
       setMailLoading(false);
+      setReturnsLoading(false);
       return undefined;
     }
 
@@ -281,10 +289,40 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       }
     );
 
+    // Reported problems still open, across every customer — the same
+    // collection-group shape as orders, filtered to this store. Uses the
+    // (storeId, status) collection-group index.
+    setReturnsLoading(true);
+    setReturnsError(false);
+    const unsubscribeReturns = onSnapshot(
+      query(
+        collectionGroup(db, 'returnRequests'),
+        where('storeId', '==', storeId),
+        where('status', 'in', ['requested', 'approved', 'received'])
+      ),
+      (snapshot) => {
+        let toDecide = 0;
+        let toRefund = 0;
+        snapshot.docs.forEach((d) => {
+          const { status, resolution } = d.data();
+          if (status === 'requested') toDecide += 1;
+          else if (status === 'received' || resolution !== 'return_first') toRefund += 1;
+        });
+        setReturnsTodo({ toDecide, toRefund });
+        setReturnsLoading(false);
+      },
+      (error) => {
+        console.error('Error fetching problem reports:', error);
+        setReturnsError(true);
+        setReturnsLoading(false);
+      }
+    );
+
     return () => {
       unsubscribeOrders();
       unsubscribeSupport();
       unsubscribeMail();
+      unsubscribeReturns();
     };
   }, [retryToken, storeId]);
 
@@ -361,6 +399,22 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       onPress: () => handleNavigate('AdminSupport'),
     });
   }
+  const returnsWaiting = returnsTodo.toDecide + returnsTodo.toRefund;
+  if (!returnsLoading && !returnsError && returnsWaiting > 0) {
+    todos.push({
+      key: 'returns',
+      count: returnsWaiting,
+      tone: TONES.clay,
+      title: returnsWaiting === 1 ? 'Problem report' : 'Problem reports',
+      detail: [
+        returnsTodo.toDecide ? `${returnsTodo.toDecide} to decide` : null,
+        returnsTodo.toRefund ? `${returnsTodo.toRefund} to refund` : null,
+      ]
+        .filter(Boolean)
+        .join(', '),
+      onPress: () => handleNavigate('AdminReturns'),
+    });
+  }
   if (!productsLoading && !productsError && restockItems.length > 0) {
     todos.push({
       key: 'stock',
@@ -383,12 +437,12 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       count: mailProblemCount,
       tone: TONES.danger,
       title: mailProblemCount === 1 ? "Email didn't send" : "Emails didn't send",
-      detail: 'Receipts or support alerts that never reached anyone',
+      detail: 'Receipts, updates or alerts that never reached anyone',
       onPress: () => handleNavigate('AdminMailLog', { problemsOnly: true }),
     });
   }
-  const todosLoading = ordersLoading || supportLoading || productsLoading || mailLoading;
-  const anyError = ordersError || supportError || Boolean(productsError) || mailError;
+  const todosLoading = ordersLoading || supportLoading || productsLoading || mailLoading || returnsLoading;
+  const anyError = ordersError || supportError || Boolean(productsError) || mailError || returnsError;
 
   const tileWidth = (Math.min(width, 520) - 32 - 20) / 3;
   const tiles = [
@@ -415,6 +469,13 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       dot: openSupportCount,
     },
     {
+      title: 'Returns',
+      icon: 'arrow-undo-outline',
+      screen: 'AdminReturns',
+      caption: returnsLoading ? null : returnsError ? 'Tap to retry' : `${returnsWaiting} to do`,
+      dot: returnsWaiting,
+    },
+    {
       title: 'Reviews',
       icon: 'star-outline',
       screen: 'AdminReviews',
@@ -425,12 +486,6 @@ export default function StoreManagerDashboardScreen({ navigation }) {
       icon: 'time-outline',
       screen: 'AdminActivity',
       caption: 'View log',
-    },
-    {
-      title: 'Store profile',
-      icon: 'storefront-outline',
-      screen: 'AdminStoreProfile',
-      caption: 'Logo & about',
     },
   ];
 
@@ -667,12 +722,30 @@ export default function StoreManagerDashboardScreen({ navigation }) {
           ))}
         </View>
 
-        {/* Below Manage rather than an extra tile, which would leave the
-            grid uneven. */}
+        {/* Below Manage rather than extra tiles, which would leave the
+            grid uneven. Store profile moved here when Returns took its
+            tile: it is a setting, visited rarely, like the password. */}
         <Reveal delay={440 + tiles.length * 30} style={styles.sectionHead}>
           <Text style={styles.sectionTitle}>Account</Text>
         </Reveal>
         <Reveal delay={460 + tiles.length * 30} style={styles.todos}>
+          <Pressable
+            onPress={() => handleNavigate('AdminStoreProfile')}
+            style={({ pressed }) => [styles.todo, pressed && styles.pressedCard]}
+            accessibilityRole="button"
+            accessibilityLabel="Store profile, logo and about"
+          >
+            <View style={styles.tileIcon}>
+              <Ionicons name="storefront-outline" size={19} color={INK} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.todoTitle}>Store profile</Text>
+              <Text style={styles.todoDetail} numberOfLines={1}>
+                Logo & about
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#B3AAA0" />
+          </Pressable>
           <Pressable
             onPress={() => {
               Haptics.selectionAsync();

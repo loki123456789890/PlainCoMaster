@@ -2097,6 +2097,12 @@ await test('RETURN-2  read by the customer and their order\'s store, nobody else
     getDocs(query(collectionGroup(db, 'returnRequests'), where('storeId', '==', storeId)));
   await assertSucceeds(queue(asSeller(), 'store1'));
   await assertFails(queue(asOtherSeller(), 'store1'));
+  // The dashboard's count: still open, this store only.
+  await assertSucceeds(getDocs(query(
+    collectionGroup(asSeller(), 'returnRequests'),
+    where('storeId', '==', 'store1'),
+    where('status', 'in', ['requested', 'approved', 'received'])
+  )));
   await assertFails(getDocs(collectionGroup(asSeller(), 'returnRequests')));
 });
 
@@ -2179,6 +2185,23 @@ await test('RETURN-8  the customer may withdraw before a decision, and do nothin
   await assertFails(updateDoc(returnDoc(asDeactivatedCustomer(), 'deactivatedCustomer', 'delivered2'), {
     status: 'withdrawn', withdrawnAt: serverTimestamp(),
   }));
+});
+
+await test('RETURN-10  "received" and the stock it puts back happen together, once', async () => {
+  // AdminReturnsScreen's restock: the report and the product in one
+  // transaction. The second attempt is refused on the report, so the
+  // stock increment dies with it.
+  await seedReturn({ status: 'approved', resolution: 'return_first', decidedAt: new Date() });
+  const receive = (db) => runTransaction(db, async (tx) => {
+    const product = await tx.get(doc(db, 'products/p1'));
+    await tx.get(returnDoc(db));
+    tx.update(doc(db, 'products/p1'), { stock: product.data().stock + 1 });
+    tx.update(returnDoc(db), { status: 'received', receivedAt: serverTimestamp(), restocked: true });
+  });
+  await assertSucceeds(receive(asSeller()));
+  assertEqual(await readStock('p1'), 11, 'one back in stock');
+  await assertFails(receive(asSeller()));
+  assertEqual(await readStock('p1'), 11, 'not twice');
 });
 
 await test('RETURN-9  nobody deletes a request', async () => {

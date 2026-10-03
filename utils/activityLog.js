@@ -32,6 +32,10 @@ export const ACTIONS = {
   // went, and splitting them would imply the two are different kinds of
   // event when they are the same decision revisited.
   REVIEW_MODERATED: 'review.moderated',
+  // Every step a Store Manager takes on a reported problem — approve,
+  // decline, item received, refunded. One action, like ORDER_STATUS: the
+  // summary names the step.
+  RETURN_STATUS: 'return.status',
   USER_ROLE: 'user.role',
   USER_STATUS: 'user.status',
 };

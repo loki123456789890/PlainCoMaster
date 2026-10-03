@@ -51,6 +51,7 @@ import AdminReviewsScreen from './screens/admin/AdminReviewsScreen';
 import AdminActivityScreen from './screens/admin/AdminActivityScreen';
 import AdminMailLogScreen from './screens/admin/AdminMailLogScreen';
 import AdminStoreProfileScreen from './screens/admin/AdminStoreProfileScreen';
+import AdminReturnsScreen from './screens/admin/AdminReturnsScreen';
 
 LogBox.ignoreLogs(['Text strings must be rendered within a <Text> component']);
 
@@ -87,6 +88,10 @@ const GuardedAdminReviewsScreen = withRoleGuard(AdminReviewsScreen, 'seller');
 // navigating here would be bounced by the guard, same as for Orders.
 const GuardedAdminMailLogScreen = withRoleGuard(AdminMailLogScreen, 'seller');
 const GuardedAdminStoreProfileScreen = withRoleGuard(AdminStoreProfileScreen, 'seller');
+// Reported problems are about a store's own orders, so the Store Manager's
+// alone — the Platform Admin cannot read them (see returnRequests in
+// firestore.rules).
+const GuardedAdminReturnsScreen = withRoleGuard(AdminReturnsScreen, 'seller');
 // The one screen both roles may open, and the exception that proves the
 // rule: it shows each role its OWN activity log and nothing else, because
 // it picks the collection from the signed-in role and firestore.rules
@@ -226,6 +231,7 @@ export default function App() {
                     <Stack.Screen name="AdminActivity" component={GuardedAdminActivityScreen} />
                     <Stack.Screen name="AdminMailLog" component={GuardedAdminMailLogScreen} />
                     <Stack.Screen name="AdminStoreProfile" component={GuardedAdminStoreProfileScreen} />
+                    <Stack.Screen name="AdminReturns" component={GuardedAdminReturnsScreen} />
                   </Stack.Navigator>
                 </NavigationContainer>
                 <AppAlertHost />

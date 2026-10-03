@@ -51,6 +51,14 @@ const STORE_TYPES = [
     icon: 'star-outline',
     actions: [ACTIONS.REVIEW_MODERATED],
   },
+  {
+    key: 'return',
+    label: 'Returns',
+    one: 'Return',
+    color: INK,
+    icon: 'arrow-undo-outline',
+    actions: [ACTIONS.RETURN_STATUS],
+  },
 ];
 const ACCOUNT_TYPES = [
   {
@@ -84,9 +92,9 @@ const VIEWS = {
     collectionName: STORE_ACTIVITY,
     title: 'Store Activity',
     notice:
-      "A read-only record of product, order and review actions in your store. Entries can't be edited or deleted by anyone.",
+      "A read-only record of product, order, review and return actions in your store. Entries can't be edited or deleted by anyone.",
     emptyTitle: 'No activity yet',
-    emptyText: 'Product edits, order status changes and hidden reviews will appear here.',
+    emptyText: 'Product edits, order status changes, hidden reviews and return decisions will appear here.',
     types: STORE_TYPES,
   },
   platformAdmin: {

@@ -83,7 +83,7 @@ const FAQ_CATEGORIES = [
       {
         id: 's4',
         question: 'What if my package is damaged?',
-        answer: "If you receive a damaged item, please contact us within 24 hours of delivery with photos of the damage. We'll arrange for a replacement or refund.",
+        answer: 'If something arrived damaged and the listing didn\'t mention it, open the order in My Orders and tap "Something wrong with it?" within 7 days of delivery. Add photos of the damage, and the store will decide on a refund.',
       },
     ],
   },
@@ -95,22 +95,22 @@ const FAQ_CATEGORIES = [
       {
         id: 'r1',
         question: 'What is your return policy?',
-        answer: 'We accept returns within 7 days of delivery for unused items in original packaging. Items must be in original condition with tags attached.',
+        answer: "You can ask for a refund within 7 days of delivery if the store got it wrong: the wrong item was sent, the wrong size was sent, it has damage the listing didn't mention, or it is far from its description. We don't take returns for a change of mind — most pieces here are one of a kind and sold as described, so check the photos, size and condition before you order.",
       },
       {
         id: 'r2',
-        question: 'How do I request a return?',
-        answer: "There's no automatic return request feature in the app yet. Please contact our support team within 7 days of delivery and we'll walk you through the process manually.",
+        question: 'How do I request a return or refund?',
+        answer: 'Open the order in My Orders and tap "Something wrong with it?". Choose what went wrong and which item, and add at least one photo — a size tag, the damage, whatever shows the problem. The store decides, and we email you either way. You can follow it on the order.',
       },
       {
         id: 'r3',
         question: 'When will I get my refund?',
-        answer: 'Refunds are processed within 5-10 business days after we receive and inspect the returned item. The refund will be credited to your original payment method.',
+        answer: "If you paid online, it goes back to the same GCash, Maya or card. If you paid cash on delivery, the store sends it to the GCash or bank account you give in your report. Sometimes the store asks for the item back first — they pay the shipping, and refund you when it arrives. We email you the reference number once it's sent.",
       },
       {
         id: 'r4',
         question: 'Can I exchange an item?',
-        answer: "Exchanges aren't handled automatically in the app yet. Contact our support team and we'll help arrange a size or color exchange manually.",
+        answer: "No — most pieces are one of a kind, so there's usually no other size or colour to swap for. If the wrong size or item was sent, report it for a refund. To ask about another piece, message the store from the order.",
       },
     ],
   },
