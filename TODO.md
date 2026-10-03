@@ -435,10 +435,19 @@ deployment:
 
       Checked on the live app: PayMongo's page opens for GCash, and
       backing out returns to Checkout with "Payment not completed".
-- [ ] **Before the defense:** complete one payment on the live app (not
+- [x] **Before the defense:** complete one payment on the live app (not
       just a cancel), and confirm the order shows Paid with the same
       `pay_…` reference PayMongo's dashboard shows. Also check the
       webhook delivery log in PayMongo's dashboard for a 200.
+
+      Done 2026-10-03: a GCash test payment completed and the order
+      shows Paid. PayMongo's dashboard has no delivery log to check, so
+      the webhook was checked from our side instead: `firebase
+      functions:log --only paymongoWebhook` shows PayMongo's request
+      arriving at 16:33 PHT, the time of the payment, with no
+      bad-signature warning and no error after it, which are the only
+      ways it answers a POST with anything but 200. For the status code itself,
+      Logs Explorer with `resource.labels.service_name="paymongowebhook"`.
 - [ ] **Switching to real money** means live keys (PayMongo business
       verification), both secrets set again with the live values, a
       webhook registered in live mode, and the FAQ's "test mode" line
