@@ -4,7 +4,8 @@
 // delivered to, a search bar that opens Shop, a gallery of a few listings,
 // the two category tiles with live counts, the order on its way (if any),
 // then the stores, the newest listings, a dark strip of budget finds and a
-// staggered grid of ukay-ukay finds, ending in "Browse everything". No
+// staggered grid of ukay-ukay finds, ending in "Browse everything"; a
+// slim header with a search bar slides in once the top is scrolled away. No
 // listing appears in more than one of those last three sections (the
 // gallery is a spotlight and may repeat one). The tab bar sits under it
 // all. Everything shown comes from the live catalogue; nothing here is
@@ -36,6 +37,7 @@ import ActiveOrderCard, { useActiveOrder } from '../components/home/ActiveOrderC
 import HeroGallery, { pickSlides, HERO_HEIGHT } from '../components/home/HeroGallery';
 import StoreRail from '../components/home/StoreRail';
 import UkayGrid from '../components/home/UkayGrid';
+import CompactHeader from '../components/home/CompactHeader';
 
 const RAIL_CARD_WIDTH = 146;
 const RAIL_GAP = 12;
@@ -43,7 +45,7 @@ const NEW_ARRIVALS = 6;
 const JUST_IN_MAX = 12;
 const BUDGET_MAX_PRICE = 300;
 const BUDGET_ITEMS = 10;
-const UKAY_GRID = 6;
+const UKAY_GRID = 4;
 
 const getTimeGreeting = () => {
   const hour = new Date().getHours();
@@ -262,14 +264,17 @@ export default function HomeScreen({ navigation }) {
   const ukay = products.filter((p) => p.type === 'ukay-ukay');
   const rtwCount = products.filter((p) => p.type === 'ready-to-wear').length;
 
-  // Each section below New arrivals skips what's already been shown above
-  // it, and leaves out sold-out pieces.
+  // No listing in more than one of New arrivals, Ukay finds and Budget
+  // finds, and nothing sold out below New arrivals. Ukay finds picks before
+  // Budget finds (though it sits below it): with a small catalogue, cheap
+  // ukay pieces would otherwise all land in Budget finds and leave Home with
+  // no ukay section at all.
   const shown = new Set(newArrivals.map((p) => p.id));
+  const ukayGrid = ukay.filter((p) => !shown.has(p.id) && !isSoldOut(p)).slice(0, UKAY_GRID);
+  ukayGrid.forEach((p) => shown.add(p.id));
   const budget = products
     .filter((p) => !shown.has(p.id) && !isSoldOut(p) && Number(p.price) <= BUDGET_MAX_PRICE)
     .slice(0, BUDGET_ITEMS);
-  budget.forEach((p) => shown.add(p.id));
-  const ukayGrid = ukay.filter((p) => !shown.has(p.id) && !isSoldOut(p)).slice(0, UKAY_GRID);
 
   // "Shop by store": item counts per store, and how many are ready-to-wear
   // (which colors the card). A store with nothing listed is left out, as in
@@ -287,12 +292,15 @@ export default function HomeScreen({ navigation }) {
   const browsableStores = stores.filter((st) => storeCounts[st.id] > 0);
   const ratings = useStoreRatings(browsableStores.map((st) => st.id));
 
-  // Where the bottom of the screen is in the scrolling content, for the
-  // Ukay grid's scroll-in reveal (kept on the UI thread — no re-render per
-  // scroll), and where the grid starts.
+  // The scroll offset (for the compact header) and where the bottom of the
+  // screen is in the scrolling content (for the Ukay grid's scroll-in
+  // reveal), kept on the UI thread — no re-render per scroll — and where
+  // the grid starts.
+  const scrollY = useSharedValue(0);
   const scrollBottom = useSharedValue(0);
   const gridTop = useSharedValue(-1);
   const onScroll = useAnimatedScrollHandler((e) => {
+    scrollY.value = e.contentOffset.y;
     scrollBottom.value = e.contentOffset.y + e.layoutMeasurement.height;
   });
 
@@ -559,6 +567,8 @@ export default function HomeScreen({ navigation }) {
 
         {renderSections()}
       </Animated.ScrollView>
+
+      <CompactHeader scrollY={scrollY} onSearch={() => openShop({ focusSearch: true })} />
 
       <TabBar navigation={navigation} current="Home" />
     </SafeAreaView>
