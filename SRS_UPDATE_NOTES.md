@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 31):
+- **New use case — Reset Password** (fills the gap listed in section 32):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -2852,7 +2852,176 @@ attempt. Lint unchanged at 0 errors.
 
 ---
 
-## 31. Still outstanding — SRS-side only, no code changes needed
+## 31. Returns and refunds — NEW
+
+Before this, the Help screen's return policy asked for "original
+packaging, tags attached" and told customers there was "no automatic
+return request feature in the app yet", so a problem with an order meant
+contacting support and waiting. A customer can now report a problem with
+a delivered order from the order itself. The store decides on it, and
+the refund is recorded in the app.
+
+The scope is deliberately narrow: **only problems that are the store's
+fault**. Most of the catalogue is one-of-a-kind ukay-ukay sold as
+described, so a change of mind is not a reason, and there are no
+exchanges.
+
+> **Status (3 Oct 2026):** built, tested against the emulator, and
+> deployed to production. Tested from a phone against production on all
+> three paths: approved for refund only, approved with the item sent
+> back first (and put back in stock), and declined. The emails arrived
+> at each step. The rules change only adds the new report records, so
+> the APK used for the UAT survey is unaffected. Its customers don't
+> have the Report a problem button until the APK is rebuilt.
+
+### What changed — suggested wording
+
+> A customer may report a problem with an order within 7 days of its
+> delivery, for one of four reasons: the wrong item was sent, the wrong
+> size was sent, the item has damage the listing did not mention, or the
+> item is significantly different from its description. The customer
+> chooses the reason and the items concerned, attaches one to three
+> photos, and may add a note. For a Cash on Delivery order, the customer
+> also gives the GCash or bank account the refund should be sent to; an
+> order paid online is refunded to the original payment method. One
+> report may be made per order.
+>
+> The Store Manager of the store that sold the order reviews the report
+> and either declines it, giving a reason, or approves it. On approval,
+> the Store Manager chooses whether the customer keeps the item ("refund
+> only") or sends it back first at the store's expense ("return first").
+> For a return, the Store Manager marks the item received when it
+> arrives and may put it back in stock. The Store Manager sends the
+> refund outside the app and records its reference number. The customer
+> is emailed at each step and can follow the report on the order.
+>
+> The refund amount is calculated by the system from the order's own
+> prices and cannot be changed by the customer or the Store Manager.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-R1 | A customer may report a problem with a delivered order within 7 days of delivery, from the order's details. The system refuses a report after that. An order delivered before this feature existed has no recorded delivery date and cannot be reported. |
+| FR-R2 | A report gives one of four reasons (wrong item sent, wrong size sent, damage not mentioned, not as described), at least one item from the order and how many, and one to three photos. A note is optional. |
+| FR-R3 | For a Cash on Delivery order, the report gives a GCash or bank account (name and number, and the bank's name) for the refund. An order paid online is refunded to its original payment method. |
+| FR-R4 | Only one report may be made per order. |
+| FR-R5 | The refund amount is the price of the reported items as recorded on the order. Shipping is not refunded. |
+| FR-R6 | The customer may withdraw a report until the store has decided on it. |
+| FR-R7 | The Store Manager may approve a report (refund only, or return first) or decline it with a reason the customer is shown. |
+| FR-R8 | For a return-first report, the Store Manager marks the item received when it arrives and may choose to put it back in stock. Stock is restored at most once. |
+| FR-R9 | The Store Manager records the refund as sent with a reference number. |
+| FR-R10 | The customer is emailed when the report is received and at each step the store takes. The store is emailed when a report arrives. |
+| FR-R11 | The Store Manager dashboard shows how many reports are waiting to be decided or refunded. |
+
+### Use cases
+
+**Report a Problem** (Customer)
+
+| | |
+|---|---|
+| **Precondition** | The customer is signed in, the order is theirs, it was delivered within the last 7 days, and no report exists for it. |
+| **Main flow** | 1. The customer opens the order and taps "Something wrong with it?". 2. They choose the reason and the items. 3. They add one to three photos and, optionally, a note. 4. For a Cash on Delivery order, they enter the refund account. 5. They send the report. 6. The system checks the order and the window, calculates the refund amount, saves the report, emails the store and the customer, and shows the report on the order. |
+| **Alternative flow — window closed** | The system refuses the report and says that problems can be reported up to 7 days after delivery. |
+| **Alternative flow — already reported** | The system refuses the report and says one has already been made. |
+| **Postcondition** | The report is saved with status "Under review" and appears in the store's Returns queue. |
+
+**Review a Problem Report** (Store Manager)
+
+| | |
+|---|---|
+| **Precondition** | The Store Manager is signed in, and the report is about an order from their store. |
+| **Main flow** | 1. The Store Manager opens Returns and selects a report. 2. They view the photos, note, items, amount and refund account. 3. They approve it, choosing refund only or return first, or decline it with a reason. 4. The system saves the decision and emails the customer. |
+| **Alternative flow — return first** | When the item arrives, the Store Manager marks it received and chooses whether to put it back in stock. The system emails the customer. |
+| **Alternative flow — refund sent** | After sending the refund outside the app, the Store Manager records the reference number. The system emails the customer the amount and reference. |
+| **Postcondition** | The report's status is updated and the step is recorded in the store's activity log. |
+
+### Business rules / security
+
+- A report is created only by a Cloud Function, never written directly
+  by the app. That function checks the order is the customer's, was
+  delivered, and is inside the window, and works out the amount from the
+  order. The amount and items cannot be changed by the customer or the
+  Store Manager.
+- Only the customer and the Store Manager of the store that sold the
+  order can read a report or its photos. The Platform Admin cannot.
+- A report moves one step at a time (Under review → Approved → Item
+  received → Refunded, or → Not approved, or → Withdrawn). Steps cannot
+  be skipped or undone. Declining needs a reason and marking refunded
+  needs a reference.
+- The full refund account number is shown only to the Store Manager in
+  the app. Emails show its last four digits.
+- Reports cannot be deleted.
+
+### Data model changes
+
+| Where | New field / collection | Notes |
+|---|---|---|
+| `users/{uid}/orders/{orderId}` | `deliveredAt` | When the order became Delivered. Written by the server; the 7-day window counts from it. |
+| `users/{uid}/returnRequests/{orderId}` | New collection | One report per order: reason, note, photos, items, amount, refund method and account, status, and the time of each step. |
+| Storage `returns/{uid}/{orderId}/` | New folder | The report's photos. Private to the customer and the store. |
+| `activityLogs` | action `return.status` | Each step the Store Manager takes on a report. |
+| `mailLog` | `kind: 'returnAlert'` / `'returnUpdate'` | The store's alert and the customer's emails, resendable from Email Delivery. |
+
+### Screens — module list (section 7)
+
+- **Order Details** (Customer): "Something wrong with it?" on a
+  delivered order for 7 days; afterwards, the report's status, amount,
+  where the refund goes and its reference, with Message the store and
+  Withdraw report where they apply.
+- **Report a Problem** (Customer): new screen.
+- **Returns & refunds** (Store Manager): new screen.
+- **Store Manager dashboard**: a "Problem reports" item under Needs your
+  attention and a Returns tile. Store profile moved to the Account
+  section.
+- **Store Activity**: a Returns filter.
+- **Email Delivery**: "Problem report" and "Problem update" emails.
+- **Help** (Customer): the Returns answers describe this flow, and the
+  damaged-package answer points to it.
+- **Privacy Policy**: covers the photos and refund account a report
+  collects, and who sees them.
+
+### Limitations
+
+- Refunds are not sent by the app. The Store Manager pays the customer's
+  GCash or bank account, or refunds the PayMongo payment from its
+  dashboard, and then records the reference.
+- No exchanges or replacements, and no returns for a change of mind.
+- Shipping is not refunded. Shipping is free today, so this has no
+  effect yet.
+- A disagreement with a declined report goes through the order chat.
+  There is no escalation to the Platform Admin.
+- Orders delivered before 3 Oct 2026 have no delivery date and cannot be
+  reported; their customers can still use the order chat.
+
+### Verification
+
+New returns test suite, **15** cases: the delivery date is stamped only
+when an order becomes Delivered; a report stores the order's own items
+and prices whatever the app sends; partial quantities add up; paid-online
+orders need no account; the last minute of day 7 is accepted and a
+minute later refused; one report per order; undelivered, undated and
+other customers' orders are refused; photos must be one to three and
+from this order's folder; items must be on the order; COD reports need a
+complete account; staff and deactivated accounts are refused.
+
+Rules tests 152 → **162**: no client can create a report; only the
+customer and that store's Store Manager can read one; each step needs
+its own fields and cannot be skipped; finished reports stay finished;
+the customer can only withdraw; nobody deletes; marking received and
+restoring stock happen together and only once.
+
+Email tests 28 → **34**: a new report alerts the store and acknowledges
+the customer; each step emails the customer in its own wording; no
+account number appears; withdrawing sends nothing; a failed email can be
+resent unless the report has since moved on.
+
+Lint unchanged at 0 errors. Phone test against production as described
+in the status note above.
+
+---
+
+## 32. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
