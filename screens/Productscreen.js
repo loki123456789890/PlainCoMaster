@@ -16,6 +16,12 @@
 // label, fabric, flaws): swipe through it, tap to open it full screen and
 // zoom (components/shop/PhotoViewer.js). Flaw photos are in the gallery
 // too, not tucked away, and also sit beside the flaws they show.
+//
+// Below the quantity, the page splits into two tabs rather than stacking
+// every section: Details (condition, a three-line description that opens
+// on "Read more", and a short spec list) and Reviews (a summary with the
+// spread of ratings once there are three, then the reviews themselves).
+// The rating under the name opens Reviews.
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -101,9 +107,14 @@ const CARD_LINE = '#EEE7DD';
 const PRICE = '#8C6D0C';
 const ERR = '#B42318';
 
-// How many reviews render before the "Show all" toggle appears. Three is
-// enough to read the room without turning a product page into a feed.
-const REVIEW_PREVIEW_COUNT = 3;
+// How many reviews render under the summary before "See all" appears. The
+// summary already tells the room; two reviews show what's behind it.
+const REVIEW_PREVIEW_COUNT = 2;
+// The summary (big average, spread of ratings, matched line) only earns its
+// space from three reviews on; fewer are simply listed.
+const SUMMARY_MIN_REVIEWS = 3;
+// The description shows this many lines until "Read more".
+const DESC_LINES = 3;
 
 // How long the "Added to cart" panel stays up.
 const ADDED_MS = 4000;
@@ -128,6 +139,66 @@ const parsePrice = (price) => {
   }
   return 0;
 };
+
+// "₱1,290.00": the buy button is narrow, and a bare "1290.00" reads as a code.
+const peso = (n) => `₱${n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+
+// Details | Reviews, with a white pill that slides under the chosen one.
+// Reviews carries its count once there is one.
+function ProductTabs({ value, onChange, reviewCount }) {
+  const reduceMotion = useReducedMotion();
+  const [trackWidth, setTrackWidth] = useState(0);
+  const half = trackWidth ? (trackWidth - 8) / 2 : 0;
+  const x = useSharedValue(0);
+  useEffect(() => {
+    const target = value === 'reviews' ? half : 0;
+    x.value = reduceMotion || !half ? target : withTiming(target, { duration: 400, easing: EASE_OUT_QUINT });
+  }, [value, half]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pill = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
+  const tabs = [
+    { key: 'details', label: 'Details' },
+    { key: 'reviews', label: 'Reviews', count: reviewCount },
+  ];
+  return (
+    <View style={styles.tabs} onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)} accessibilityRole="tablist">
+      {half ? <Animated.View style={[styles.tabPill, { width: half }, pill]} /> : null}
+      {tabs.map((tab) => {
+        const on = tab.key === value;
+        return (
+          <Pressable
+            key={tab.key}
+            style={styles.tab}
+            onPress={() => {
+              if (on) return;
+              Haptics.selectionAsync();
+              onChange(tab.key);
+            }}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: on }}
+            accessibilityLabel={tab.count ? `${tab.label}, ${tab.count}` : tab.label}
+          >
+            <Text style={[styles.tabText, on && { color: INK }]}>{tab.label}</Text>
+            {tab.count ? (
+              <View style={[styles.tabCount, on && { backgroundColor: CLAY }]}>
+                <Text style={[styles.tabCountText, on && { color: '#fff' }]}>{tab.count}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// One row of the Details spec list.
+function Spec({ label, children }) {
+  return (
+    <View style={styles.specRow}>
+      <Text style={styles.specLabel}>{label}</Text>
+      <View style={styles.specValue}>{children}</View>
+    </View>
+  );
+}
 
 // The landing cards' icons, small: a tag for ukay-ukay, a hanger for
 // ready-to-wear.
@@ -261,6 +332,11 @@ export default function ProductScreen({ navigation, route }) {
   const [reviewsLoading, setReviewsLoading] = useState(true);
   const [reviewsFailed, setReviewsFailed] = useState(false);
   const [showAllReviews, setShowAllReviews] = useState(false);
+  const [tab, setTab] = useState('details');
+  const [descOpen, setDescOpen] = useState(false);
+  // Only offer "Read more" when the description actually runs past the
+  // clamp; measured once from the unclamped text.
+  const [descLong, setDescLong] = useState(false);
   // While the photo flies to the cart, the badge keeps the count it had so
   // it can tick up when the photo lands rather than before it leaves.
   const [heldCount, setHeldCount] = useState(null);
@@ -325,7 +401,14 @@ export default function ProductScreen({ navigation, route }) {
   const unit = measurementUnit(product?.measurementType);
 
   const reviewSummary = summarizeReviews(reviews);
-  const visibleReviewList = showAllReviews ? reviews : reviews.slice(0, REVIEW_PREVIEW_COUNT);
+  const showSummary = reviewSummary.count >= SUMMARY_MIN_REVIEWS;
+  const visibleReviewList = showAllReviews || !showSummary ? reviews : reviews.slice(0, REVIEW_PREVIEW_COUNT);
+  // How many reviews gave each star rating, 5 down to 1, for the bars.
+  const ratingSpread = [5, 4, 3, 2, 1].map((stars) => ({
+    stars,
+    count: reviews.filter((r) => Math.round(r.rating) === stars).length,
+  }));
+  const spreadMax = Math.max(1, ...ratingSpread.map((s) => s.count));
 
   useEffect(() => {
     if (product?.id) setIsFavoriteState(isFavorite(product.id));
@@ -432,7 +515,18 @@ export default function ProductScreen({ navigation, route }) {
   const sizesShake = useSharedValue(0);
   const sizesShakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: sizesShake.value }] }));
   const sizeBlockY = useRef(0);
-  const reviewsBlockY = useRef(0);
+  const tabsBlockY = useRef(0);
+
+  // The rating line and the staff dock both land here: Reviews chosen, the
+  // tabs stopped just below the floating header.
+  const openReviews = ({ all = false } = {}) => {
+    setTab('reviews');
+    if (all) setShowAllReviews(true);
+    scrollRef.current?.scrollTo({
+      y: Math.max(0, heroHeight - 28 + tabsBlockY.current - (insets.top + 72)),
+      animated: true,
+    });
+  };
 
   const askForSize = () => {
     setNeedSize(true);
@@ -699,11 +793,6 @@ export default function ProductScreen({ navigation, route }) {
               <TypeIcon ukay={isUkay} color={isUkay ? MOSS : CLAY} />
               <Text style={[styles.chipText, isUkay && { color: MOSS }]}>{isUkay ? 'Ukay-Ukay' : 'Ready-to-Wear'}</Text>
             </View>
-            {sectionTag ? (
-              <View style={styles.sectionChip}>
-                <Text style={styles.sectionChipText}>{sectionTag}</Text>
-              </View>
-            ) : null}
             {condition ? (
               <View style={styles.conditionChip} accessibilityLabel={`Condition: ${condition.label}`}>
                 <Text style={styles.conditionChipText}>{condition.label}</Text>
@@ -722,21 +811,33 @@ export default function ProductScreen({ navigation, route }) {
                 {productName}
               </Text>
             </View>
-            <Text style={styles.bigPrice}>₱{unitPrice.toFixed(2)}</Text>
+            <Text style={styles.bigPrice}>{peso(unitPrice)}</Text>
           </Reveal>
 
-          {/* The rating sits with the price, where the decision is made.
-              No stars at all until there is a review: an empty row of
-              stars reads as a zero rating rather than as no ratings. */}
-          <Reveal delay={150} style={styles.ratingLine}>
+          {/* The rating sits with the price, where the decision is made, and
+              opens the Reviews tab. No stars at all until there is a review:
+              an empty row of stars reads as a zero rating rather than as no
+              ratings. */}
+          <Reveal delay={150}>
             {reviewSummary.count > 0 ? (
-              <>
-                <StarRating rating={reviewSummary.average} size={14} label={productName} />
+              <Pressable
+                onPress={() => openReviews()}
+                style={styles.ratingLine}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Rated ${formatAverage(reviewSummary.average)} out of 5, ${reviewCountLabel(
+                  reviewSummary.count
+                )}. Show reviews`}
+              >
+                <StarRating rating={reviewSummary.average} size={14} />
                 <Text style={styles.ratingValue}>{formatAverage(reviewSummary.average)}</Text>
-                <Text style={styles.ratingCount}>({reviewCountLabel(reviewSummary.count)})</Text>
-              </>
+                <Text style={styles.ratingCount}>·</Text>
+                <Text style={styles.ratingLink}>{reviewCountLabel(reviewSummary.count)}</Text>
+              </Pressable>
             ) : (
-              <Text style={styles.ratingCount}>{reviewsLoading ? ' ' : 'No reviews yet'}</Text>
+              <View style={styles.ratingLine}>
+                <Text style={styles.ratingCount}>{reviewsLoading ? ' ' : 'No reviews yet'}</Text>
+              </View>
             )}
           </Reveal>
 
@@ -759,22 +860,10 @@ export default function ProductScreen({ navigation, route }) {
                   <Text style={styles.storeName} numberOfLines={1}>
                     {store.name}
                   </Text>
-                  {sellerRating && sellerRating.count > 0 ? (
-                    <View style={styles.storeRating}>
-                      <Ionicons name="star" size={11} color={CLAY} />
-                      <Text style={styles.storeSmall}>
-                        {formatAverage(sellerRating.average)} ({storeReviewCountLabel(sellerRating)})
-                      </Text>
-                    </View>
-                  ) : null}
-                  {store.location ? (
-                    <View style={styles.storeRating}>
-                      <Ionicons name="location-outline" size={11} color={MUTED} />
-                      <Text style={styles.storeSmall} numberOfLines={1}>
-                        Ships from {store.location}
-                      </Text>
-                    </View>
-                  ) : null}
+                  {/* Where it ships from moved to the Details list, and the
+                      store's own rating to its store page: beside the
+                      product's rating it read as a second score for the
+                      same item. */}
                 </View>
                 {isStaff ? null : (
                   <>
@@ -907,213 +996,317 @@ export default function ProductScreen({ navigation, route }) {
             </View>
           </Reveal>
 
-          {condition || flawCheck ? (
-            <Reveal delay={380} style={styles.block}>
-              <View style={styles.blockHead}>
-                <Text style={styles.blockTitle}>Condition</Text>
-                {condition ? <Text style={[styles.blockMeta, styles.conditionMeta]}>{condition.label}</Text> : null}
-              </View>
-              {condition ? <Text style={styles.desc}>{condition.detail}</Text> : null}
-              {flawCheck === 'none' ? (
-                <View style={styles.noFlaws}>
-                  <Ionicons name="checkmark-circle-outline" size={16} color={MOSS} />
-                  <Text style={styles.noFlawsText}>
-                    <Text style={{ fontWeight: '600' }}>No flaws found. </Text>
-                    The seller checked it for stains, holes, fading and damage.
-                  </Text>
-                </View>
-              ) : flawCheck === 'found' ? (
-                <View style={styles.flawsBox}>
-                  <View style={styles.flawsHead}>
-                    <Ionicons name="information-circle-outline" size={16} color="#6B5A2E" />
-                    <Text style={styles.flawsTitle}>Flaws the seller found</Text>
-                  </View>
-                  {flawTags.length ? (
-                    <View style={styles.flawTags}>
-                      {flawTags.map((label) => (
-                        <View key={label} style={styles.flawTag}>
-                          <Text style={styles.flawTagText}>{label}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
-                  {flaws ? <Text style={styles.flawsText}>{flaws}</Text> : null}
-                  {flawPhotos.length ? (
-                    <View style={styles.flawThumbs}>
-                      {flawPhotos.map((photo, i) => (
-                        <Pressable
-                          key={`${i}-${photo.url}`}
-                          onPress={() => openViewer(flawGalleryStart + i)}
-                          style={({ pressed }) => [styles.flawThumb, pressed && { transform: [{ scale: 0.95 }] }]}
-                          accessibilityRole="imagebutton"
-                          accessibilityLabel={`${photo.label}, opens full screen`}
-                        >
-                          <ProductImage uri={photo.url} style={StyleSheet.absoluteFill} />
-                          <View style={styles.flawThumbZoom}>
-                            <Ionicons name="expand-outline" size={11} color={CREAM} />
-                          </View>
-                        </Pressable>
-                      ))}
-                    </View>
-                  ) : null}
-                </View>
-              ) : flaws ? (
-                <View style={styles.flaws}>
-                  <Ionicons name="information-circle-outline" size={16} color="#6B5A2E" />
-                  <Text style={[styles.flawsText, { flex: 1 }]}>
-                    <Text style={{ fontWeight: '600' }}>Flaws noted by the seller: </Text>
-                    {flaws}
-                  </Text>
-                </View>
-              ) : null}
+          {/* Details | Reviews. The tabs' position is kept so the rating
+              line and the staff dock can scroll straight to them. */}
+          <View onLayout={(e) => (tabsBlockY.current = e.nativeEvent.layout.y)}>
+            <Reveal delay={400}>
+              <ProductTabs value={tab} onChange={setTab} reviewCount={reviewSummary.count} />
             </Reveal>
-          ) : null}
+          </View>
 
-          {hasDescription ? (
-            <Reveal delay={400} style={styles.block}>
-              <Text style={[styles.blockTitle, { marginBottom: 10 }]}>Description</Text>
-              <Text style={styles.desc}>{product.description}</Text>
-            </Reveal>
-          ) : null}
-
-          {/* Reviews, only from people whose order containing this item
-              reached 'delivered' — enforced by firestore.rules. */}
-          <View onLayout={(e) => (reviewsBlockY.current = e.nativeEvent.layout.y)} />
-          <Reveal delay={450} style={styles.block}>
-            <Text style={[styles.blockTitle, { marginBottom: 10 }]}>Reviews</Text>
-            {reviewsLoading ? (
-              <View>
-                <SkeletonBlock style={{ width: '50%', height: 16, borderRadius: 8, marginBottom: 10 }} />
-                <SkeletonBlock style={{ width: '85%', height: 13, borderRadius: 8 }} />
-              </View>
-            ) : reviewsFailed ? (
-              <Text style={styles.reviewsError}>
-                {"Reviews couldn't be loaded right now. Everything else on this page is up to date."}
-              </Text>
-            ) : reviewSummary.count > 0 ? (
-              <>
-                <View style={styles.summary}>
-                  <View style={styles.summaryTop}>
-                    <Text style={styles.summaryAverage}>{formatAverage(reviewSummary.average)}</Text>
-                    <View style={{ flex: 1, gap: 4 }}>
-                      <StarRating rating={reviewSummary.average} size={16} label={productName} />
-                      <Text style={styles.summaryCount}>{reviewCountLabel(reviewSummary.count)} from verified buyers</Text>
+          <Reveal delay={450}>
+            {tab === 'details' ? (
+              <Animated.View
+                key="details"
+                entering={reduceMotion ? undefined : FadeIn.duration(350).easing(EASE_OUT_QUINT)}
+                style={styles.pane}
+              >
+                {condition || flawCheck ? (
+                  <View style={styles.condition}>
+                    <View style={styles.blockHead}>
+                      <Text style={styles.blockTitle}>Condition</Text>
+                      {condition ? <Text style={[styles.blockMeta, styles.conditionMeta]}>{condition.label}</Text> : null}
                     </View>
-                  </View>
-                  <View style={styles.matched}>
-                    <Ionicons name="checkmark-circle-outline" size={16} color={MOSS} />
-                    <Text style={styles.matchedText}>{matchedDescriptionSentence(reviewSummary)}</Text>
-                  </View>
-                </View>
-
-                {visibleReviewList.map((review) => (
-                  <View key={review.id} style={styles.review}>
-                    {/* The words are one accessible group; the photos sit
-                        outside it, so each stays a button a screen reader
-                        can reach. */}
-                    <View
-                      style={styles.reviewBody}
-                      accessible
-                      accessibilityLabel={`${review.rating} stars from ${review.userName}. ${
-                        review.matchedDescription
-                          ? 'Matched the description.'
-                          : `Didn't match the description${
-                              review.mismatchReasons.length
-                                ? `: ${review.mismatchReasons.map(mismatchReasonLabel).join(', ').toLowerCase()}`
-                                : ''
-                            }.`
-                      } ${review.text}${
-                        review.photoUrls.length
-                          ? ` ${review.photoUrls.length} photo${review.photoUrls.length === 1 ? '' : 's'}.`
-                          : ''
-                      }`}
-                    >
-                      <View style={styles.reviewHead}>
-                        <Avatar uri={review.userPhotoUrl} size={28} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.reviewAuthor} numberOfLines={1}>
-                            {review.userName}
-                          </Text>
-                          <StarRating rating={review.rating} size={12} />
-                        </View>
-                        <Text style={styles.reviewDate}>
-                          {formatReviewDate(review.createdAt)}
-                          {review.updatedAt ? ' · Edited' : ''}
+                    {condition ? <Text style={styles.desc}>{condition.detail}</Text> : null}
+                    {flawCheck === 'none' ? (
+                      <View style={styles.noFlaws}>
+                        <Ionicons name="checkmark-circle-outline" size={16} color={MOSS} />
+                        <Text style={styles.noFlawsText}>
+                          <Text style={{ fontWeight: '600' }}>No flaws found. </Text>
+                          The seller checked it for stains, holes, fading and damage.
                         </Text>
                       </View>
-                      {/* Shown on every review, not only the negative ones:
-                          an answer that appears only when it's bad turns its
-                          absence into a second, unlabelled signal. A mismatch
-                          is Clay, not error red: it's feedback, not a fault. */}
-                      <View style={styles.matchRow}>
-                        <View style={[styles.matchPill, !review.matchedDescription && styles.matchPillNo]}>
-                          <Ionicons
-                            name={review.matchedDescription ? 'checkmark' : 'alert-circle-outline'}
-                            size={12}
-                            color={review.matchedDescription ? MOSS : CLAY}
-                          />
-                          <Text style={[styles.matchPillText, !review.matchedDescription && { color: CLAY }]}>
-                            {review.matchedDescription ? 'Matched the description' : "Didn't match the description"}
-                          </Text>
+                    ) : flawCheck === 'found' ? (
+                      <View style={styles.flawsBox}>
+                        <View style={styles.flawsHead}>
+                          <Ionicons name="information-circle-outline" size={16} color="#6B5A2E" />
+                          <Text style={styles.flawsTitle}>Flaws the seller found</Text>
                         </View>
-                        {review.mismatchReasons.map((key) => (
-                          <View key={key} style={[styles.matchPill, styles.matchPillNo]}>
-                            <Text style={[styles.matchPillText, { color: CLAY }]}>{mismatchReasonLabel(key)}</Text>
+                        {flawTags.length ? (
+                          <View style={styles.flawTags}>
+                            {flawTags.map((label) => (
+                              <View key={label} style={styles.flawTag}>
+                                <Text style={styles.flawTagText}>{label}</Text>
+                              </View>
+                            ))}
                           </View>
-                        ))}
+                        ) : null}
+                        {flaws ? <Text style={styles.flawsText}>{flaws}</Text> : null}
+                        {flawPhotos.length ? (
+                          <View style={styles.flawThumbs}>
+                            {flawPhotos.map((photo, i) => (
+                              <Pressable
+                                key={`${i}-${photo.url}`}
+                                onPress={() => openViewer(flawGalleryStart + i)}
+                                style={({ pressed }) => [styles.flawThumb, pressed && { transform: [{ scale: 0.95 }] }]}
+                                accessibilityRole="imagebutton"
+                                accessibilityLabel={`${photo.label}, opens full screen`}
+                              >
+                                <ProductImage uri={photo.url} style={StyleSheet.absoluteFill} />
+                                <View style={styles.flawThumbZoom}>
+                                  <Ionicons name="expand-outline" size={11} color={CREAM} />
+                                </View>
+                              </Pressable>
+                            ))}
+                          </View>
+                        ) : null}
                       </View>
-                      {review.text ? <Text style={styles.reviewText}>{review.text}</Text> : null}
-                    </View>
-                    {review.photoUrls.length ? (
-                      <View style={styles.reviewPhotos}>
-                        {review.photoUrls.map((url, i) => (
-                          <Pressable
-                            key={url}
-                            onPress={() => {
-                              Haptics.selectionAsync();
-                              setReviewViewer({ photos: reviewViewerPhotos(review), index: i });
-                            }}
-                            style={({ pressed }) => pressed && { opacity: 0.85 }}
-                            accessibilityRole="imagebutton"
-                            accessibilityLabel={`Open ${review.userName}'s photo ${i + 1} of ${review.photoUrls.length}`}
-                          >
-                            <ProductImage uri={url} style={styles.reviewPhoto} />
-                          </Pressable>
-                        ))}
+                    ) : flaws ? (
+                      <View style={styles.flaws}>
+                        <Ionicons name="information-circle-outline" size={16} color="#6B5A2E" />
+                        <Text style={[styles.flawsText, { flex: 1 }]}>
+                          <Text style={{ fontWeight: '600' }}>Flaws noted by the seller: </Text>
+                          {flaws}
+                        </Text>
                       </View>
                     ) : null}
                   </View>
-                ))}
-
-                {reviews.length > REVIEW_PREVIEW_COUNT ? (
-                  <Pressable
-                    onPress={() => {
-                      Haptics.selectionAsync();
-                      setShowAllReviews((shown) => !shown);
-                    }}
-                    style={styles.showAll}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                  >
-                    <Text style={styles.linkText}>
-                      {showAllReviews ? 'Show fewer reviews' : `Show all ${reviews.length} reviews`}
-                    </Text>
-                  </Pressable>
                 ) : null}
-              </>
+
+                {hasDescription ? (
+                  <>
+                    {/* Measured unclamped, off screen, to learn whether
+                        "Read more" has anything more to read. */}
+                    {!descLong ? (
+                      <Text
+                        style={[styles.desc, styles.descProbe]}
+                        onTextLayout={(e) => {
+                          if (e.nativeEvent.lines.length > DESC_LINES) setDescLong(true);
+                        }}
+                        accessible={false}
+                        importantForAccessibility="no-hide-descendants"
+                      >
+                        {product.description}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.desc} numberOfLines={descOpen ? undefined : DESC_LINES}>
+                      {product.description}
+                    </Text>
+                    {descLong ? (
+                      <Pressable
+                        onPress={() => setDescOpen((open) => !open)}
+                        style={styles.more}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.linkText}>{descOpen ? 'Show less' : 'Read more'}</Text>
+                      </Pressable>
+                    ) : null}
+                  </>
+                ) : null}
+
+                <View style={[styles.specs, !hasDescription && !(condition || flawCheck) && { marginTop: 0 }]}>
+                  <Spec label="Type">
+                    <Text style={styles.specText}>{isUkay ? 'Ukay-Ukay' : 'Ready-to-Wear'}</Text>
+                  </Spec>
+                  {sectionTag ? (
+                    <Spec label="Category">
+                      <Text style={styles.specText}>{sectionTag}</Text>
+                    </Spec>
+                  ) : null}
+                  <Spec label={productColors.length > 1 ? 'Colors' : 'Color'}>
+                    {productColors.map((color) => (
+                      <View key={color} style={[styles.specDot, { backgroundColor: getColorHex(color) }]} />
+                    ))}
+                    <Text style={styles.specText} numberOfLines={1}>
+                      {productColors.join(', ')}
+                    </Text>
+                  </Spec>
+                  <Spec label="Sizes">
+                    <Text style={styles.specText}>{productSizes.join(', ')}</Text>
+                  </Spec>
+                  {/* No size guide link here: the one beside the sizes is
+                      where the choice is made, and the guide sets the size. */}
+                  {store?.location ? (
+                    <Spec label="Ships from">
+                      <Text style={styles.specText} numberOfLines={1}>
+                        {store.location}
+                      </Text>
+                    </Spec>
+                  ) : null}
+                </View>
+              </Animated.View>
             ) : (
-              <View style={styles.noReviews}>
-                <Text style={styles.noReviewsTitle}>No reviews for this item yet</Text>
-                {/* Secondhand pieces are often one of a kind and can never
-                    gather more than a single review, so the seller's own
-                    record of matching descriptions stands in. Its own
-                    store only. */}
-                <Text style={styles.noReviewsBody}>
-                  {sellerRating && sellerRating.count > 0
-                    ? `Secondhand pieces are often one of a kind, so most have no reviews of their own. Across ${store.name}'s ${storeReviewCountLabel(sellerRating)}, ${matchedDescriptionSentence(sellerRating).toLowerCase()}`
-                    : 'Buyers can review an item once their order has been delivered.'}
-                </Text>
-              </View>
+              /* Reviews, only from people whose order containing this item
+                 reached 'delivered' — enforced by firestore.rules. */
+              <Animated.View
+                key="reviews"
+                entering={reduceMotion ? undefined : FadeIn.duration(350).easing(EASE_OUT_QUINT)}
+                style={styles.pane}
+              >
+                {reviewsLoading ? (
+                  <View>
+                    <SkeletonBlock style={{ width: '50%', height: 16, borderRadius: 8, marginBottom: 10 }} />
+                    <SkeletonBlock style={{ width: '85%', height: 13, borderRadius: 8 }} />
+                  </View>
+                ) : reviewsFailed ? (
+                  <Text style={styles.reviewsError}>
+                    {"Reviews couldn't be loaded right now. Everything else on this page is up to date."}
+                  </Text>
+                ) : reviewSummary.count === 0 ? (
+                  <View style={styles.empty}>
+                    <View style={styles.emptyIcon}>
+                      <Ionicons name="star-outline" size={24} color="#8B8279" />
+                    </View>
+                    <Text style={styles.emptyTitle}>No reviews yet</Text>
+                    {/* Secondhand pieces are often one of a kind and can never
+                        gather more than a single review, so the seller's own
+                        record of matching descriptions stands in. Its own
+                        store only. */}
+                    <Text style={styles.emptyBody}>
+                      {sellerRating && sellerRating.count > 0
+                        ? `Secondhand pieces are often one of a kind, so most have no reviews of their own. Across ${store.name}'s ${storeReviewCountLabel(sellerRating)}, ${matchedDescriptionSentence(sellerRating).toLowerCase()}`
+                        : 'Buyers can review this item once their order is delivered.'}
+                    </Text>
+                  </View>
+                ) : (
+                  <>
+                    {showSummary ? (
+                      <>
+                        <View style={styles.summary}>
+                          <View style={styles.summaryLeft}>
+                            <Text style={styles.summaryAverage}>{formatAverage(reviewSummary.average)}</Text>
+                            <StarRating rating={reviewSummary.average} size={14} label={productName} />
+                            <Text style={styles.summaryCount}>{reviewCountLabel(reviewSummary.count)}</Text>
+                          </View>
+                          <View style={styles.spread}>
+                            {ratingSpread.map((row) => (
+                              <View
+                                key={row.stars}
+                                style={styles.spreadRow}
+                                accessible
+                                accessibilityLabel={`${row.stars} stars: ${row.count}`}
+                              >
+                                <Text style={styles.spreadStars}>{row.stars}</Text>
+                                <View style={styles.spreadTrack}>
+                                  <View style={[styles.spreadFill, { width: `${(row.count / spreadMax) * 100}%` }]} />
+                                </View>
+                                <Text style={styles.spreadCount}>{row.count}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                        <View style={styles.matched}>
+                          <Ionicons name="checkmark" size={15} color="#37412F" />
+                          <Text style={styles.matchedText}>{matchedDescriptionSentence(reviewSummary)}</Text>
+                        </View>
+                      </>
+                    ) : (
+                      <Text style={styles.reviewsHead}>
+                        {reviewSummary.count === 1
+                          ? '1 review from a verified buyer'
+                          : `${reviewSummary.count} reviews from verified buyers`}
+                      </Text>
+                    )}
+
+                    {visibleReviewList.map((review, index) => (
+                      <View
+                        key={review.id}
+                        style={[styles.review, index === visibleReviewList.length - 1 && { borderBottomWidth: 0 }]}
+                      >
+                        {/* The words are one accessible group; the photos sit
+                            outside it, so each stays a button a screen reader
+                            can reach. */}
+                        <View
+                          style={styles.reviewBody}
+                          accessible
+                          accessibilityLabel={`${review.rating} stars from ${review.userName}. ${
+                            review.matchedDescription
+                              ? 'Matched the description.'
+                              : `Didn't match the description${
+                                  review.mismatchReasons.length
+                                    ? `: ${review.mismatchReasons.map(mismatchReasonLabel).join(', ').toLowerCase()}`
+                                    : ''
+                                }.`
+                          } ${review.text}${
+                            review.photoUrls.length
+                              ? ` ${review.photoUrls.length} photo${review.photoUrls.length === 1 ? '' : 's'}.`
+                              : ''
+                          }`}
+                        >
+                          <View style={styles.reviewHead}>
+                            <Avatar uri={review.userPhotoUrl} size={36} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.reviewAuthor} numberOfLines={1}>
+                                {review.userName}
+                              </Text>
+                              <Text style={styles.reviewDate} numberOfLines={1}>
+                                Verified buyer · {formatReviewDate(review.createdAt)}
+                                {review.updatedAt ? ' · Edited' : ''}
+                              </Text>
+                            </View>
+                            <StarRating rating={review.rating} size={13} />
+                          </View>
+                          {review.text ? <Text style={styles.reviewText}>{review.text}</Text> : null}
+                          {/* Shown on every review, not only the negative ones:
+                              an answer that appears only when it's bad turns its
+                              absence into a second, unlabelled signal. A mismatch
+                              is Clay, not error red: it's feedback, not a fault. */}
+                          <View style={styles.matchLine}>
+                            <Ionicons
+                              name={review.matchedDescription ? 'checkmark' : 'alert-circle-outline'}
+                              size={13}
+                              color={review.matchedDescription ? MOSS : CLAY}
+                            />
+                            <Text style={[styles.matchLineText, !review.matchedDescription && { color: CLAY }]}>
+                              {review.matchedDescription
+                                ? 'Matched the description'
+                                : `Didn't match the description${
+                                    review.mismatchReasons.length
+                                      ? `: ${review.mismatchReasons.map(mismatchReasonLabel).join(', ').toLowerCase()}`
+                                      : ''
+                                  }`}
+                            </Text>
+                          </View>
+                        </View>
+                        {review.photoUrls.length ? (
+                          <View style={styles.reviewPhotos}>
+                            {review.photoUrls.map((url, i) => (
+                              <Pressable
+                                key={url}
+                                onPress={() => {
+                                  Haptics.selectionAsync();
+                                  setReviewViewer({ photos: reviewViewerPhotos(review), index: i });
+                                }}
+                                style={({ pressed }) => pressed && { opacity: 0.85 }}
+                                accessibilityRole="imagebutton"
+                                accessibilityLabel={`Open ${review.userName}'s photo ${i + 1} of ${review.photoUrls.length}`}
+                              >
+                                <ProductImage uri={url} style={styles.reviewPhoto} />
+                              </Pressable>
+                            ))}
+                          </View>
+                        ) : null}
+                      </View>
+                    ))}
+
+                    {showSummary && reviews.length > REVIEW_PREVIEW_COUNT ? (
+                      <Pressable
+                        onPress={() => {
+                          Haptics.selectionAsync();
+                          setShowAllReviews((shown) => !shown);
+                        }}
+                        style={({ pressed }) => [styles.allButton, pressed && { opacity: 0.85 }]}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.allButtonText}>
+                          {showAllReviews ? 'Show fewer reviews' : `See all ${reviews.length} reviews`}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </>
+                )}
+              </Animated.View>
             )}
           </Reveal>
         </View>
@@ -1207,19 +1400,13 @@ export default function ProductScreen({ navigation, route }) {
           stockLabel={stockText}
           mismatchCount={mismatchCount}
           onEdit={() => navigation.navigate('AdminEditProduct', { product })}
-          onJumpToReviews={() => {
-            // Every review, so a mismatch among the older ones isn't hidden
-            // behind "Show all"; stopped below the floating header.
-            setShowAllReviews(true);
-            scrollRef.current?.scrollTo({
-              y: Math.max(0, heroHeight - 28 + reviewsBlockY.current - (insets.top + 72)),
-              animated: true,
-            });
-          }}
+          // Every review, so a mismatch among the older ones isn't hidden
+          // behind "See all".
+          onJumpToReviews={() => openReviews({ all: true })}
         />
       ) : (
         <View style={[styles.buybar, { paddingBottom: barBottom }]}>
-          <View ref={addButtonRef} collapsable={false} style={{ flexBasis: '42%' }}>
+          <View ref={addButtonRef} collapsable={false} style={{ flexBasis: '36%' }}>
             <Pressable
               onPress={handleAddToCart}
               disabled={isOutOfStock}
@@ -1259,7 +1446,7 @@ export default function ProductScreen({ navigation, route }) {
             accessibilityState={{ disabled: isOutOfStock }}
           >
             <Text style={[styles.buttonText, { color: '#fff' }]} numberOfLines={1}>
-              {isOutOfStock ? 'Sold out' : `Buy Now · ₱${total.toFixed(2)}`}
+              {isOutOfStock ? 'Sold out' : `Buy Now · ${peso(total)}`}
             </Text>
           </Pressable>
         </View>
@@ -1358,15 +1545,14 @@ const styles = StyleSheet.create({
     borderColor: '#C9D3BE',
   },
   conditionChipText: { fontSize: 11.5, fontWeight: '600', color: '#37412F' },
-  sectionChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1, borderColor: LINE },
-  sectionChipText: { fontSize: 11.5, fontWeight: '600', color: INK },
   brand: { fontSize: 12.5, fontWeight: '600', letterSpacing: 0.3, color: MUTED, marginBottom: 2 },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginTop: 10, marginBottom: 4 },
   name: { fontSize: 24, fontWeight: '600', letterSpacing: -0.5, lineHeight: 29, color: INK },
   bigPrice: { fontSize: 24, fontWeight: '600', color: PRICE, lineHeight: 29 },
-  ratingLine: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 18 },
+  ratingLine: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, minHeight: 22 },
   ratingValue: { fontSize: 12.5, fontWeight: '600', color: INK },
   ratingCount: { fontSize: 12.5, color: MUTED },
+  ratingLink: { fontSize: 12.5, fontWeight: '600', color: CLAY },
 
   store: {
     flexDirection: 'row',
@@ -1382,7 +1568,6 @@ const styles = StyleSheet.create({
   },
   storeSmall: { fontSize: 11.5, color: MUTED },
   storeName: { fontSize: 14, fontWeight: '600', color: INK },
-  storeRating: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 1 },
   storeGo: { fontSize: 12.5, fontWeight: '600', color: CLAY },
 
   block: { paddingTop: 18 },
@@ -1441,7 +1626,52 @@ const styles = StyleSheet.create({
   qtySignOff: { color: '#CFC6BC' },
   qtyValue: { minWidth: 34, textAlign: 'center', fontSize: 15, fontWeight: '600', color: INK },
 
-  desc: { fontSize: 13.5, lineHeight: 22, color: '#453E38' },
+  tabs: { flexDirection: 'row', marginTop: 26, padding: 4, borderRadius: 16, backgroundColor: '#EFE8DD' },
+  tabPill: {
+    position: 'absolute',
+    top: 4,
+    bottom: 4,
+    left: 4,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    shadowColor: INK,
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  tab: { flex: 1, height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  tabText: { fontSize: 13.5, fontWeight: '600', color: MUTED },
+  tabCount: {
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    backgroundColor: '#E2D9CC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabCountText: { fontSize: 11, fontWeight: '600', color: MUTED },
+  pane: { paddingTop: 20 },
+
+  condition: { marginBottom: 18 },
+  desc: { fontSize: 14, lineHeight: 23, color: '#453E38' },
+  descProbe: { position: 'absolute', left: 0, right: 0, opacity: 0 },
+  more: { alignSelf: 'flex-start', paddingVertical: 4, marginTop: 2 },
+  specs: { marginTop: 18, borderTopWidth: 1, borderTopColor: LINE },
+  specRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+    minHeight: 46,
+    borderBottomWidth: 1,
+    borderBottomColor: LINE,
+  },
+  specLabel: { fontSize: 13, color: MUTED },
+  specValue: { flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  specText: { flexShrink: 1, fontSize: 13, fontWeight: '500', color: INK, textAlign: 'right' },
+  specDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1, borderColor: 'rgba(28,27,26,0.12)' },
   conditionMeta: { fontWeight: '600', color: '#37412F' },
   flaws: {
     flexDirection: 'row',
@@ -1484,37 +1714,62 @@ const styles = StyleSheet.create({
   },
 
   reviewsError: { fontSize: 13, color: MUTED, lineHeight: 19 },
-  summary: { padding: 16, borderRadius: 18, backgroundColor: '#fff', borderWidth: 1, borderColor: CARD_LINE, gap: 12, marginBottom: 4 },
-  summaryTop: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  summaryAverage: { fontSize: 34, fontWeight: '600', color: PRICE },
-  summaryCount: { fontSize: 12, color: MUTED },
-  matched: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: CARD_LINE },
-  matchedText: { flex: 1, fontSize: 12.5, color: INK, lineHeight: 18 },
-  review: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: CARD_LINE, gap: 10 },
-  reviewBody: { gap: 8 },
-  reviewHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  reviewAuthor: { fontSize: 13, fontWeight: '600', color: INK },
-  reviewDate: { fontSize: 11, color: MUTED },
-  matchPill: {
+  summary: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+  summaryLeft: { width: 96, alignItems: 'center', gap: 6 },
+  summaryAverage: { fontSize: 40, lineHeight: 44, fontWeight: '600', letterSpacing: -1, color: INK },
+  summaryCount: { fontSize: 11.5, color: MUTED },
+  spread: { flex: 1, gap: 5 },
+  spreadRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  spreadStars: { width: 8, fontSize: 11, color: MUTED, textAlign: 'right' },
+  spreadTrack: { flex: 1, height: 6, borderRadius: 3, overflow: 'hidden', backgroundColor: '#EBE3D8' },
+  spreadFill: { height: 6, borderRadius: 3, backgroundColor: CLAY },
+  spreadCount: { width: 14, fontSize: 11, color: MUTED },
+  matched: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 999,
+    gap: 8,
+    marginTop: 16,
+    marginBottom: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
     backgroundColor: '#EEF0EA',
   },
-  matchPillNo: { backgroundColor: '#FCF3EE' },
-  matchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
-  matchPillText: { fontSize: 11, fontWeight: '600', color: MOSS },
-  reviewText: { fontSize: 13.5, color: INK, lineHeight: 20 },
+  matchedText: { flex: 1, fontSize: 12.5, fontWeight: '500', color: '#37412F', lineHeight: 18 },
+  reviewsHead: { fontSize: 12.5, color: MUTED, marginBottom: 6 },
+  review: { paddingVertical: 18, borderBottomWidth: 1, borderBottomColor: LINE, gap: 10 },
+  reviewBody: { gap: 10 },
+  reviewHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  reviewAuthor: { fontSize: 13.5, fontWeight: '600', color: INK },
+  reviewDate: { fontSize: 11.5, color: MUTED },
+  reviewText: { fontSize: 13.5, color: '#453E38', lineHeight: 22 },
+  matchLine: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  matchLineText: { flex: 1, fontSize: 11.5, fontWeight: '500', color: MOSS, lineHeight: 16 },
   reviewPhotos: { flexDirection: 'row', gap: 8 },
   reviewPhoto: { width: 72, height: 72, borderRadius: 12, backgroundColor: CARD_LINE },
-  showAll: { alignSelf: 'flex-start', paddingVertical: 12 },
-  noReviews: { padding: 16, borderRadius: 18, backgroundColor: '#F3EEE6', gap: 2 },
-  noReviewsTitle: { fontSize: 13.5, fontWeight: '600', color: INK },
-  noReviewsBody: { fontSize: 12.5, color: MUTED, lineHeight: 19 },
+  allButton: {
+    height: 46,
+    marginTop: 4,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: LINE,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  allButtonText: { fontSize: 13.5, fontWeight: '600', color: INK },
+  empty: { alignItems: 'center', paddingTop: 18, paddingHorizontal: 20, paddingBottom: 8 },
+  emptyIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    marginBottom: 12,
+    backgroundColor: '#F1EBE2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTitle: { fontSize: 14.5, fontWeight: '600', color: INK, marginBottom: 4 },
+  emptyBody: { maxWidth: 280, fontSize: 12.5, lineHeight: 19, color: MUTED, textAlign: 'center' },
 
   top: {
     position: 'absolute',
