@@ -88,6 +88,48 @@ function IconButton({ icon, label, onPress, badge, dark }) {
   );
 }
 
+// Category · place · date joined, wrapping when the card is narrow. Each dot
+// travels with the part after it, and hides when that part starts a new
+// line, so no line ends or begins on a stray "·". A part that wrapped once
+// keeps a line to itself: without its dot it's a little narrower and could
+// otherwise hop back up, get its dot again, and wrap again.
+function MetaLine({ parts }) {
+  const shown = parts.filter(Boolean);
+  const [rows, setRows] = useState({});
+  const [wrappedKeys, setWrappedKeys] = useState({});
+  useEffect(() => {
+    if (shown.some((part, i) => i > 0 && rows[i] !== undefined && rows[i - 1] !== undefined && rows[i] > rows[i - 1] && !wrappedKeys[part.key])) {
+      setWrappedKeys((prev) => {
+        const nextKeys = { ...prev };
+        shown.forEach((part, i) => {
+          if (i > 0 && rows[i] > rows[i - 1]) nextKeys[part.key] = true;
+        });
+        return nextKeys;
+      });
+    }
+  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <View style={styles.meta}>
+      {shown.map((part, i) => {
+        const wrapped = i > 0 && wrappedKeys[part.key];
+        return (
+          <View
+            key={part.key}
+            style={[styles.metaPart, wrapped && styles.metaPartOwnLine]}
+            onLayout={(e) => {
+              const y = Math.round(e.nativeEvent.layout.y);
+              setRows((prev) => (prev[i] === y ? prev : { ...prev, [i]: y }));
+            }}
+          >
+            {i > 0 && !wrapped ? <Text style={styles.metaText}>·</Text> : null}
+            {part}
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 export default function StorePage({ navigation, route }) {
   const storeId = route.params.storeId;
   const { products, loading, error, retryFetchProducts } = useProducts();
@@ -227,23 +269,27 @@ export default function StorePage({ navigation, route }) {
             <Text style={styles.idName} accessibilityRole="header">
               {name}
             </Text>
-            <View style={styles.meta}>
-              {items.length ? (
-                <View style={[styles.catTag, { backgroundColor: theme.tag }]}>
-                  <Text style={styles.catTagText}>{theme.label}</Text>
-                </View>
-              ) : null}
-              {/* Where it ships from, when the store has said. */}
-              {items.length && store?.location ? <Text style={styles.metaText}>·</Text> : null}
-              {store?.location ? (
-                <View style={styles.metaPlace} accessibilityLabel={`Ships from ${store.location}`}>
-                  <Ionicons name="location-outline" size={13} color={Colors.light.icon} />
-                  <Text style={styles.metaText}>{store.location}</Text>
-                </View>
-              ) : null}
-              {(items.length || store?.location) && since ? <Text style={styles.metaText}>·</Text> : null}
-              {since ? <Text style={styles.metaText}>{since}</Text> : null}
-            </View>
+            <MetaLine
+              parts={[
+                items.length ? (
+                  <View key="cat" style={[styles.catTag, { backgroundColor: theme.tag }]}>
+                    <Text style={styles.catTagText}>{theme.label}</Text>
+                  </View>
+                ) : null,
+                // Where it ships from, when the store has said.
+                store?.location ? (
+                  <View key="place" style={styles.metaPlace} accessibilityLabel={`Ships from ${store.location}`}>
+                    <Ionicons name="location-outline" size={13} color={Colors.light.icon} />
+                    <Text style={styles.metaText}>{store.location}</Text>
+                  </View>
+                ) : null,
+                since ? (
+                  <Text key="since" style={styles.metaText}>
+                    {since}
+                  </Text>
+                ) : null,
+              ]}
+            />
             <View style={styles.stats}>
               <View style={styles.stat}>
                 <Text style={styles.statValue}>{loading ? '—' : items.length}</Text>
@@ -547,6 +593,8 @@ const styles = StyleSheet.create({
   idName: { marginTop: 10, marginBottom: 2, fontSize: 21, fontWeight: '600', letterSpacing: -0.4, lineHeight: 26, color: Colors.light.text },
   meta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   metaText: { fontSize: 12, color: Colors.light.icon },
+  metaPart: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaPartOwnLine: { width: '100%' },
   metaPlace: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   catTag: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999 },
   catTagText: { fontSize: 10, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', color: '#fff' },
