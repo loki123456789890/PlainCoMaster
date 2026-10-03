@@ -1011,7 +1011,7 @@ in with their current passwords.
 - **Log In — alternate flows "Invalid credentials", "Deactivated account"
   and "Staff account":** the message now appears in a notice above the
   form. The staff case offers a link to the Staff Portal.
-- **New use case — Reset Password** (fills the gap listed in section 32):
+- **New use case — Reset Password** (fills the gap listed in section 33):
   the user taps "Forgot password?" on Log In, enters their email and taps
   Send Reset Link. *Postcondition:* a reset email is sent if an account
   exists; the confirmation screen is identical either way, so the screen
@@ -3021,7 +3021,97 @@ in the status note above.
 
 ---
 
-## 32. Still outstanding — SRS-side only, no code changes needed
+## 32. Search matches word by word, with clothing synonyms
+
+The Shop's and a store's search matched what the customer typed as one
+phrase. "black oversized shirt" found only a product whose name had
+those three words in that order, so it missed "Black Oversized Tee", and
+a black shirt whose name doesn't say "black". Sellers describe the same
+piece differently, so the search now matches each word on its own.
+
+> **Status (3 Oct 2026):** built and checked from a phone against
+> production, on the Shop and on a store's page. It reads only fields
+> products already have, so no rules change or deploy was needed, and
+> the survey APK is unaffected.
+
+### What changed — suggested wording (replaces the search part of FR-H3, FR-B2 and FR-K4)
+
+> The customer may search the Shop, or one store's page, by typing one or
+> more words. A product is shown when every word matches the start of a
+> word in its name, brand, colors, type (Ukay-Ukay or Ready-to-Wear),
+> item category or Section, in any order. Capital letters, hyphens,
+> apostrophes and plurals are ignored, so "T-shirt", "t shirt" and
+> "tshirts" match each other.
+>
+> A short list of synonyms covers the same garment under different
+> names, for example tee and shirt, loose and oversized, pants and
+> trousers, jeans and denim. Synonyms never widen a search to a whole
+> category: "jeans" does not find skirts filed under Bottoms.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-Q1 | The Shop's and a store's search show a product only when every word typed matches the start of a word in the product's name, brand, colors, type, item category or Section. The words may be typed in any order. |
+| FR-Q2 | Search ignores capital letters, hyphens, apostrophes and a plural "s". |
+| FR-Q3 | Search treats listed synonyms for the same garment as the same word (for example tee and shirt, or loose and oversized). |
+| FR-Q4 | Search combines with the type tabs, the Section filter and a store's item category chips, as before. |
+
+### Use case updates
+
+**Browse Products** (Customer, Guest): replace the search step with:
+
+> The customer types one or more words in the search box. The system
+> shows the products that match every word, as described in FR-Q1 to
+> FR-Q3, within the selected tab and filters.
+
+### Differences from the previous version
+
+- **Before:** the whole query had to appear in the name, the brand, the
+  type words or the category name.
+- **Now:** each word is matched separately, and colors and Section are
+  searched too.
+- A word must match the **start** of a word, so "red" no longer finds
+  "embroidered", and "shirt" no longer finds "sweatshirt".
+- The Shop's search box now reads "Search by name, brand, color or
+  category".
+
+### Data model changes
+
+None. Search reads fields products already have.
+
+### Screens — module list (section 7)
+
+- **Shop** (Customer, Guest): new search matching and placeholder text.
+- **Store page** (Customer, Guest): new search matching.
+- **Manage Products** (Store Manager): unchanged. A Store Manager
+  searching their own stock still matches the typed text as one phrase.
+
+### Limitations
+
+- Results are filtered, not ranked: matching products keep the usual
+  newest-first order.
+- There is no spelling correction. "shrit" finds nothing.
+- The synonym list is fixed in the app. A new synonym needs an app
+  update.
+- A product with no colors recorded (listed before colors existed)
+  cannot be found by color.
+
+### Verification
+
+New search test suite, **10** cases (`npm run test:search`): words
+match in any order and across fields; every word must match; colors
+match from the product's colors; a word matches only the start of a
+word ("red" does not find "embroidered", "men" does not find a women's
+piece); synonyms match the same garment but "jeans" does not find a
+skirt; hyphens, spaces, plurals, capitals and apostrophes are ignored;
+type and category words still match; a product with only a name is
+still found. Lint unchanged at 0 errors. Phone test against production
+as described in the status note above.
+
+---
+
+## 33. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
 that the app didn't do) is now empty. These remain, and are all
