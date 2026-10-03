@@ -201,6 +201,19 @@ export async function pickAndUploadImage({
   folder,
   pickerOptions = PICKER_OPTIONS,
 } = {}) {
+  const picked = await pickImage({ source, pickerOptions });
+  if (!picked.success) return picked;
+  return uploadImage(picked.uri, { onProgress, mimeType: picked.mimeType, folder });
+}
+
+/**
+ * Just the picking half: asks for the permission, opens the camera or
+ * library, and checks the type. Returns { success, uri, mimeType }, or
+ * { success: false, cancelled: true }, or { success: false, error }.
+ * For callers that show the photo before uploading it (the profile
+ * photo sheet), and hand it to uploadImage once it's confirmed.
+ */
+export async function pickImage({ source = 'library', pickerOptions = PICKER_OPTIONS } = {}) {
   try {
     const permission =
       source === 'camera'
@@ -236,9 +249,9 @@ export async function pickAndUploadImage({
       return { success: false, error: 'unsupported-format' };
     }
 
-    return uploadImage(asset.uri, { onProgress, mimeType: assetType, folder });
+    return { success: true, uri: asset.uri, mimeType: assetType };
   } catch (error) {
-    console.error('Error picking product image:', error?.code, error?.message);
+    console.error('Error picking image:', error?.code, error?.message);
     return { success: false, error: error?.code || 'picker-failed' };
   }
 }

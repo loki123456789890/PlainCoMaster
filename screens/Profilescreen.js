@@ -24,6 +24,7 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
+  withSequence,
   runOnJS,
   useReducedMotion,
 } from 'react-native-reanimated';
@@ -48,13 +49,13 @@ import {
   deleteField,
 } from 'firebase/firestore';
 import { showAppAlert } from '../utils/appAlert';
-import { pickAndUploadImage, uploadErrorMessage } from '../utils/imageUpload';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import { useAdmin } from '../context/AdminContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { useCart } from '../context/CartContext';
 import LoggedOut from '../components/auth/LoggedOut';
 import ChangePasswordSheet from '../components/auth/ChangePasswordSheet';
+import ProfilePhotoSheet from '../components/auth/ProfilePhotoSheet';
 import { getPortalLabel } from '../constants/roles';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { Colors } from '../constants/theme';
@@ -64,7 +65,7 @@ import SkeletonBlock from '../components/ui/Skeleton';
 import TabBar, { goToTab } from '../components/shop/TabBar';
 import Sheet from '../components/shop/Sheet';
 import Reveal from '../components/shop/Reveal';
-import { PageHead, OfflineNotice } from '../components/shop/TabScreen';
+import { PageHead, OfflineNotice, UndoToast, useAutoClear } from '../components/shop/TabScreen';
 import { EASE_OUT_QUINT } from '../constants/motion';
 import appConfig from '../app.json';
 
@@ -443,29 +444,51 @@ export default function ProfileScreen({ navigation, route }) {
     setUserData((prev) => ({ ...prev, photoUrl: photoUrl || null }));
   };
 
-  const uploadPhoto = async (source) => {
-    setPhotoBusy(true);
-    try {
-      const result = await pickAndUploadImage({ source, folder: `avatars/${auth.currentUser.uid}` });
-      if (result.cancelled) return;
-      if (!result.success) {
-        showAppAlert('Photo not updated', uploadErrorMessage(result.error));
-        return;
-      }
-      await savePhoto(result.url);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch (error) {
-      console.error('Could not save profile photo:', error);
-      showAppAlert('Photo not updated', 'Please check your connection and try again.');
-    } finally {
-      setPhotoBusy(false);
-    }
+  // ---- the profile photo sheet, and what the avatar does after it
+  const [photoSheet, setPhotoSheet] = useState(false);
+  // { text, undo? } for the toast under the page; Undo restores a removed photo.
+  const [photoToast, setPhotoToast] = useState(null);
+  useAutoClear(photoToast, () => setPhotoToast(null), photoToast?.undo ? 5000 : 2500);
+  const reduceMotion = useReducedMotion();
+  const avatarScale = useSharedValue(1);
+  const ripple = useSharedValue(0);
+  const avatarPop = useAnimatedStyle(() => ({ transform: [{ scale: avatarScale.value }] }));
+  const rippleStyle = useAnimatedStyle(() => ({
+    opacity: ripple.value === 0 ? 0 : 1 - ripple.value,
+    transform: [{ scale: 0.85 + ripple.value * 0.55 }],
+  }));
+  // The avatar springs into its new look as the sheet slides away, with a
+  // Clay ring rippling out from it.
+  const popAvatar = () => {
+    if (reduceMotion) return;
+    setTimeout(() => {
+      avatarScale.value = withSequence(
+        withTiming(0.7, { duration: 1 }),
+        withTiming(1.1, { duration: 380, easing: EASE_OUT_QUINT }),
+        withTiming(1, { duration: 300, easing: EASE_OUT_QUINT })
+      );
+      ripple.value = 0.001;
+      ripple.value = withTiming(1, { duration: 1000, easing: EASE_OUT_QUINT }, () => {
+        ripple.value = 0;
+      });
+    }, 320);
+  };
+
+  const handlePhotoSaved = async (url) => {
+    await savePhoto(url);
+    popAvatar();
+    setPhotoToast({ text: 'Profile photo updated' });
   };
 
   const removePhoto = async () => {
+    const previous = userData.photoUrl;
+    setPhotoSheet(false);
     setPhotoBusy(true);
     try {
       await savePhoto(null);
+      popAvatar();
+      // The file stays in Storage, so Undo only has to point back at it.
+      setPhotoToast({ text: 'Profile photo removed', undo: previous });
     } catch (error) {
       console.error('Could not remove profile photo:', error);
       showAppAlert('Photo not removed', 'Please check your connection and try again.');
@@ -474,19 +497,25 @@ export default function ProfileScreen({ navigation, route }) {
     }
   };
 
+  const undoRemovePhoto = async () => {
+    const previous = photoToast?.undo;
+    setPhotoToast(null);
+    if (!previous) return;
+    try {
+      await savePhoto(previous);
+      popAvatar();
+      setPhotoToast({ text: 'Photo restored' });
+    } catch (error) {
+      console.error('Could not restore profile photo:', error);
+      showAppAlert('Photo not restored', 'Please check your connection and try again.');
+    }
+  };
+
   const handleChangePhoto = () => {
-    if (photoBusy || !isConnected) return;
+    if (photoBusy) return;
     Haptics.selectionAsync();
-    const options =
-      Platform.OS === 'web'
-        ? [{ text: 'Choose a Photo', onPress: () => uploadPhoto('library') }]
-        : [
-            { text: 'Take Photo', onPress: () => uploadPhoto('camera') },
-            { text: 'Choose from Library', onPress: () => uploadPhoto('library') },
-          ];
-    if (userData.photoUrl) options.push({ text: 'Remove Photo', style: 'destructive', onPress: removePhoto });
-    options.push({ text: 'Cancel', style: 'cancel' });
-    showAppAlert('Profile photo', undefined, options);
+    setPhotoToast(null);
+    setPhotoSheet(true);
   };
 
   const handleStartEditName = () => {
@@ -730,6 +759,19 @@ export default function ProfileScreen({ navigation, route }) {
 
       <ChangePasswordSheet visible={passwordVisible} onClose={() => setPasswordVisible(false)} />
 
+      {auth.currentUser ? (
+        <ProfilePhotoSheet
+          visible={photoSheet}
+          onClose={() => setPhotoSheet(false)}
+          photoUrl={userData.photoUrl}
+          initials={initials}
+          folder={`avatars/${auth.currentUser.uid}`}
+          isConnected={isConnected}
+          onSave={handlePhotoSaved}
+          onRemove={removePhoto}
+        />
+      ) : null}
+
       <NameSheet
         visible={editingName}
         onClose={() => setEditingName(false)}
@@ -776,18 +818,22 @@ export default function ProfileScreen({ navigation, route }) {
                 disabled={photoBusy}
                 accessibilityRole="button"
                 accessibilityLabel={userData.photoUrl ? 'Change profile photo' : 'Add a profile photo'}
+                style={({ pressed }) => pressed && { transform: [{ scale: 0.94 }] }}
               >
-                {userData.photoUrl ? (
-                  <Image source={{ uri: userData.photoUrl }} style={styles.avatar} contentFit="cover" transition={150} />
-                ) : (
-                  <View style={[styles.avatar, styles.avatarInitials]}>
-                    {initials ? (
-                      <Text style={styles.avatarText}>{initials}</Text>
-                    ) : (
-                      <Ionicons name="person" size={24} color="#fff" />
-                    )}
-                  </View>
-                )}
+                <Animated.View pointerEvents="none" style={[styles.avatarRipple, rippleStyle]} />
+                <Animated.View style={avatarPop}>
+                  {userData.photoUrl ? (
+                    <Image source={{ uri: userData.photoUrl }} style={styles.avatar} contentFit="cover" transition={150} />
+                  ) : (
+                    <View style={[styles.avatar, styles.avatarInitials]}>
+                      {initials ? (
+                        <Text style={styles.avatarText}>{initials}</Text>
+                      ) : (
+                        <Ionicons name="person" size={24} color="#fff" />
+                      )}
+                    </View>
+                  )}
+                </Animated.View>
                 {photoBusy ? (
                   <View style={[styles.avatar, styles.avatarBusy]}>
                     <ActivityIndicator color="#fff" />
@@ -926,6 +972,12 @@ export default function ProfileScreen({ navigation, route }) {
         <Text style={styles.version}>PlainCo v{appConfig.expo.version} · BSIT-4C Group 5</Text>
       </ScrollView>
 
+      <UndoToast
+        text={photoToast?.text}
+        onUndo={photoToast?.undo ? undoRemovePhoto : undefined}
+        undoLabel="Undo removing your profile photo"
+      />
+
       <TabBar navigation={navigation} current="Profile" />
     </SafeAreaView>
   );
@@ -962,6 +1014,16 @@ const styles = StyleSheet.create({
   avatarText: { fontSize: 19, fontWeight: '600', color: '#fff' },
   avatarBusy: { position: 'absolute', backgroundColor: 'rgba(28,27,26,0.5)', alignItems: 'center', justifyContent: 'center' },
   avatarSkeleton: { width: 56, height: 56, borderRadius: 18 },
+  avatarRipple: {
+    position: 'absolute',
+    top: -6,
+    left: -6,
+    right: -6,
+    bottom: -6,
+    borderRadius: 23,
+    borderWidth: 2,
+    borderColor: Colors.light.tint,
+  },
   cameraBadge: {
     position: 'absolute',
     right: -4,
