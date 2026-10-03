@@ -1,8 +1,9 @@
 // screens/HomeScreen.js
 //
-// Home, from the approved home/shop preview: a greeting, a search bar that
-// opens Shop, the two category tiles with live counts, and two sideways
-// rails — the newest listings and ukay-ukay finds. The tab bar sits under
+// Home, from the approved home/shop preview: a greeting, where orders are
+// delivered to, a search bar that opens Shop, the two category tiles with
+// live counts, the order on its way (if any), and two sideways rails — the
+// newest listings and ukay-ukay finds. The tab bar sits under
 // it all. Everything shown comes from the live catalogue; nothing here is
 // the preview's sample data.
 import React from 'react';
@@ -25,6 +26,8 @@ import SkeletonBlock from '../components/ui/Skeleton';
 import ProductCard, { isJustIn, isSoldOut, JUST_IN_DAYS } from '../components/shop/ProductCard';
 import TabBar, { goToTab } from '../components/shop/TabBar';
 import Reveal from '../components/shop/Reveal';
+import TypingSearch from '../components/home/TypingSearch';
+import ActiveOrderCard, { useActiveOrder } from '../components/home/ActiveOrderCard';
 
 const RAIL_CARD_WIDTH = 148;
 const RAIL_GAP = 12;
@@ -46,6 +49,14 @@ const initialsOf = (name) => {
   const last = words.length > 1 ? words[words.length - 1][0] : '';
   return (words[0][0] + last).toUpperCase();
 };
+
+// "Balamban, Cebu": the town and province of the saved delivery address,
+// or whichever of the two is filled in.
+const placeOf = (address) =>
+  [address?.city, address?.province]
+    .map((v) => (v || '').trim())
+    .filter(Boolean)
+    .join(', ');
 
 // The same drawn marks as Landing's cards: a price tag for ukay-ukay, a
 // hanger for ready-to-wear.
@@ -153,7 +164,8 @@ function Rail({ products, startDelay, isFavorite, onOpen, onToggleFavorite }) {
 export default function HomeScreen({ navigation }) {
   const { products, loading, error, retryFetchProducts } = useProducts();
   const { isFavorite, toggleFavorite } = useFavorites();
-  const [profile, setProfile] = React.useState({ name: '', photoUrl: null });
+  const [profile, setProfile] = React.useState({ name: '', photoUrl: null, place: '' });
+  const activeOrder = useActiveOrder();
 
   // Refetch on every focus, not just on mount — this is how we pick up a
   // freshly edited name or photo when the user comes back from Profile.
@@ -170,6 +182,7 @@ export default function HomeScreen({ navigation }) {
             setProfile({
               name: (data.name || data.fullName || data.firstName || '').trim(),
               photoUrl: data.photoUrl || null,
+              place: placeOf(data.shippingAddress),
             });
           }
         } catch (err) {
@@ -208,6 +221,7 @@ export default function HomeScreen({ navigation }) {
 
   const openShop = (params) => goToTab(navigation, 'Shop', params);
   const openProduct = (product) => navigation.navigate('Product', { product });
+  const openOrder = (order) => navigation.navigate('OrderDetails', { order });
 
   // Guests can browse, but favoriting needs an account.
   const handleToggleFavorite = (product) => {
@@ -316,18 +330,35 @@ export default function HomeScreen({ navigation }) {
             </Pressable>
           </Reveal>
 
-          {/* Not a real field: it opens Shop with the search already focused. */}
-          <Reveal delay={110}>
-            <AnimatedPressable
-              style={styles.fakeSearch}
-              onPress={() => openShop({ focusSearch: true })}
-              rippleColor={Colors.light.border}
-              accessibilityRole="search"
-              accessibilityLabel="Search clothes"
-            >
-              <Ionicons name="search" size={19} color={Colors.light.icon} />
-              <Text style={styles.fakeSearchText}>Search clothes, e.g. &quot;denim&quot;</Text>
-            </AnimatedPressable>
+          {/* Guests have nowhere saved to deliver to, so no line for them. */}
+          {auth.currentUser ? (
+            <Reveal delay={70}>
+              <Pressable
+                style={styles.deliver}
+                onPress={() => navigation.navigate('Location')}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={profile.place ? `Deliver to ${profile.place}` : 'Add a delivery address'}
+                accessibilityHint="Opens your delivery address"
+              >
+                <Ionicons name="location-outline" size={14} color={Colors.light.tint} />
+                <Text style={styles.deliverText} numberOfLines={1}>
+                  {profile.place ? (
+                    <>
+                      Deliver to <Text style={styles.deliverPlace}>{profile.place}</Text> ›
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.deliverPlace}>Add a delivery address</Text> ›
+                    </>
+                  )}
+                </Text>
+              </Pressable>
+            </Reveal>
+          ) : null}
+
+          <Reveal delay={110} style={styles.searchWrap}>
+            <TypingSearch onPress={() => openShop({ focusSearch: true })} />
           </Reveal>
 
           <View style={styles.tiles}>
@@ -346,6 +377,12 @@ export default function HomeScreen({ navigation }) {
               delay={240}
             />
           </View>
+
+          {activeOrder ? (
+            <Reveal delay={270}>
+              <ActiveOrderCard order={activeOrder} onPress={() => openOrder(activeOrder)} style={styles.order} />
+            </Reveal>
+          ) : null}
 
           <SectionHead
             title={loading ? 'New arrivals' : arrivalsTitle}
@@ -369,28 +406,20 @@ const styles = StyleSheet.create({
   scroll: { paddingTop: 16, paddingBottom: 24 },
   pad: { paddingHorizontal: 20 },
 
-  hello: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  hello: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   greeting: { fontSize: 12.5, color: Colors.light.icon },
-  name: { fontSize: 22, fontWeight: '600', letterSpacing: -0.4, color: Colors.light.text },
-  avatar: { width: 42, height: 42, borderRadius: 14, marginLeft: 12 },
+  name: { fontSize: 24, fontWeight: '600', letterSpacing: -0.5, color: Colors.light.text },
+  avatar: { width: 44, height: 44, borderRadius: 15, marginLeft: 12 },
   avatarInitials: { backgroundColor: Colors.light.secondary, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 15, fontWeight: '600', color: Colors.light.background },
+  avatarText: { fontSize: 16, fontWeight: '600', color: Colors.light.background },
 
-  fakeSearch: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: Colors.light.border,
-    paddingHorizontal: 14,
-    marginBottom: 20,
-  },
-  fakeSearchText: { fontSize: 14, color: '#8E857B' },
+  deliver: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 8, paddingVertical: 2 },
+  deliverText: { fontSize: 12, color: Colors.light.icon, flexShrink: 1 },
+  deliverPlace: { fontWeight: '500', color: Colors.light.text },
+  searchWrap: { marginTop: 14, marginBottom: 20 },
 
   tiles: { flexDirection: 'row', gap: 12, marginBottom: 26 },
+  order: { marginTop: -14, marginBottom: 26 },
   tile: {
     height: 132,
     borderRadius: 20,

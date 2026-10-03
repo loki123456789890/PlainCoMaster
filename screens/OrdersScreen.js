@@ -23,8 +23,9 @@ import { getPaymentLabel, getPaymentStatus, isPayOnDelivery } from '../constants
 import SkeletonBlock from '../components/ui/Skeleton';
 import ProductImage from '../components/ui/ProductImage';
 import { TopBar, BigEmpty, OfflineNotice } from '../components/shop/TabScreen';
-import { chatFields, hasUnread } from '../utils/orderChat';
+import { hasUnread } from '../utils/orderChat';
 import { formatOrderNumber } from '../utils/orderNumber';
+import { toOrderRow, statusKey } from '../utils/orderRow';
 import { isOrderReviewable } from '../utils/reviews';
 
 const INK = Colors.light.text;
@@ -41,10 +42,6 @@ const STATUS = {
   shipped: { label: 'Shipped', icon: 'car-outline', bg: '#E6ECF3', fg: '#2F4B6B', step: 1 },
   delivered: { label: 'Delivered', icon: 'checkmark', bg: '#EEF0EA', fg: '#37412F', step: 2 },
   cancelled: { label: 'Cancelled', icon: 'close-circle-outline', bg: '#F1EBE3', fg: '#6B635C', step: null },
-};
-const statusKey = (status = '') => {
-  const s = status.toLowerCase();
-  return s === 'pending' ? 'processing' : s;
 };
 const statusMeta = (status) =>
   STATUS[statusKey(status)] || {
@@ -73,12 +70,6 @@ const EMPTY = {
 // Card thumbnails sit on a warm tint while the photo loads, or instead of
 // one when an item has none.
 const TINTS = ['#EFE6DA', '#E6E9E1', '#F3E3DA', '#EDE7D4', '#E9E4DE', '#E4E7E6'];
-
-// "Jul 15, 2026", and "July 2026" for the month headings — spelled out
-// rather than the device locale's format, so they read the same anywhere.
-const formatOrderDate = (date) =>
-  date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-const formatMonth = (date) => (date ? date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : '');
 
 // "GCash · Paid" for a paid online order; the method alone otherwise
 // (Cash on Delivery is paid to the rider, so it carries no status here).
@@ -277,56 +268,7 @@ export default function OrdersScreen({ navigation }) {
     const unsubscribe = onSnapshot(
       q,
       (querySnapshot) => {
-        const fetchedOrders = querySnapshot.docs.map((doc) => {
-          const data = doc.data();
-          const items = data.items || [];
-          const firstItem = items[0] || {};
-          const created = data.createdAt?.toDate ? data.createdAt.toDate() : null;
-          const productIds = data.productIds || [];
-
-          // Single item shows its name; several show the first + "+N more".
-          const displayName =
-            items.length > 1 ? `${firstItem.name || 'Item'} +${items.length - 1} more` : firstItem.name || 'Order';
-
-          return {
-            id: doc.id,
-            displayName,
-            date: formatOrderDate(created),
-            month: formatMonth(created),
-            total: data.total || 0,
-            subtotal: data.subtotal || 0,
-            shipping: data.shipping || 0,
-            status: data.status || 'processing',
-            itemCount: items.length,
-            items,
-            // Carried through to OrderDetailsScreen so it can offer "Write a
-            // review" on exactly the lines firestore.rules will accept one
-            // for — the review rule tests membership of this same list. An
-            // order placed before the field existed maps to [], and its lines
-            // get no button rather than a button that fails on submit.
-            productIds,
-            // The lines "Write a review" on the card can open.
-            reviewableItems: items.filter((item) => item.productId && productIds.includes(item.productId)),
-            image: firstItem.image || firstItem.imageUrl || null,
-            // Which store is shipping it. Absent on orders from before
-            // stores existed and not yet migrated, which just show no name.
-            storeName: data.storeName || null,
-            // Passed on to a review, which must name the store that sold the
-            // item — the rules check it against this order.
-            storeId: data.storeId || null,
-            shippingAddress: data.shippingAddress || null,
-            paymentMethod: data.paymentMethod || null,
-            paymentStatus: data.paymentStatus || null,
-            // For OrderDetails' PayMongo receipt line (getPaymongoReceipt).
-            paymentRef: data.paymentRef || null,
-            paymentSandbox: data.paymentSandbox === true,
-            paymentProvider: data.paymentProvider || null,
-            // For the "New message" line here and the chat button on
-            // OrderDetails — as millis, since Timestamps don't survive
-            // navigation params.
-            ...chatFields(data),
-          };
-        });
+        const fetchedOrders = querySnapshot.docs.map((d) => toOrderRow(d.id, d.data()));
         setOrders(fetchedOrders);
         setLoading(false);
         setLoadError(false);
