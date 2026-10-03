@@ -88,6 +88,24 @@ Manager anywhere in the Admin Portal (`AdminDashboardScreen.js`,
 "history" view). If a panelist asks "show me the log of who edited this
 product and when," there is nothing to show.
 
+### A3. Optional two-step verification (MFA) — MOVED OUT OF SCOPE
+
+> **Update (3 Oct 2026):** missed by the original audit and found when the
+> SRS was re-read before the final defense. Not built; the SRS is to move
+> it out of scope rather than drop it silently. Wording in section 34 of
+> [SRS_UPDATE_NOTES.md](SRS_UPDATE_NOTES.md).
+
+**SRS (Non-functional requirements → Security → User Authentication):**
+> "Firebase Authentication supports optional MFA integration. The system
+> should allow Admins and Customers to enable two-step verification as an
+> optional security enhancement to protect their accounts."
+
+**Code:** no MFA anywhere. Login is email and password through Firebase
+Authentication, which offers MFA only after upgrading the project to
+Google Cloud Identity Platform. That upgrade, an enrolment screen, and a
+code step on both login screens were judged too much change to the login
+flow days before the defense, with survey testers using production.
+
 ---
 
 ## CATEGORY B — The app does it, the SRS never mentions it

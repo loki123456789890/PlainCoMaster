@@ -3114,8 +3114,9 @@ as described in the status note above.
 ## 33. Still outstanding — SRS-side only, no code changes needed
 
 From [SRS_AUDIT.md](SRS_AUDIT.md). Category A (things the SRS promised
-that the app didn't do) is now empty. These remain, and are all
-documentation gaps:
+that the app didn't do) is resolved, apart from optional two-step
+verification, which moves out of scope (section 34). These remain, and
+are all documentation gaps:
 
 **Category B — the app does it, the SRS doesn't mention it**
 - Password reset by email (a full flow exists; the SRS documents only
@@ -3144,3 +3145,56 @@ documentation gaps:
 Note also that the SRS's own audit report keeps the *original* findings
 alongside the resolutions, so the historical text describes the system as
 it was, not as it is.
+
+## 34. Two-step verification (MFA) — moved out of scope
+
+The SRS's Security section promises something the app does not do:
+
+> "Firebase Authentication supports optional MFA integration. The system
+> should allow Admins and Customers to enable two-step verification as an
+> optional security enhancement to protect their accounts."
+
+The original audit missed it; it was found when the SRS was re-read
+before the final defense (SRS_AUDIT.md, A3).
+
+> **Status (3 Oct 2026):** not built, and not to be built for this
+> version. The SRS changes; the app does not. Tell the adviser before the
+> defense, so the change is not a surprise.
+
+### Why it is out of scope
+
+Firebase Authentication offers MFA only once the project is upgraded to
+Google Cloud Identity Platform. SMS codes cost money per message and need
+a reCAPTCHA step the React Native SDK does not support well, so the
+workable form is authenticator-app codes (TOTP): an enrolment screen with
+a QR code, a code step on both the customer and staff log in, and a way
+back in for someone who loses their phone. That is a change to the one
+flow every user goes through, on production, while survey testers are
+using it, days before the defense.
+
+### What changed — suggested wording
+
+**Non-functional requirements → Security → User Authentication.**
+Replace the MFA paragraph with:
+
+> The system uses Firebase Authentication to manage user identities.
+> Passwords must be at least 8 characters, customers can verify their
+> email address from their profile, and any signed-in user can change
+> their password. A Store Manager or Platform Admin account that is
+> deactivated is signed out immediately, even mid-session.
+
+**Constraints, or Scope / Limitations.** Add:
+
+> Multi-factor (two-step) authentication is outside the scope of this
+> version. Firebase supports adding it through Google Cloud Identity
+> Platform, using authenticator-app codes, without changes to the app's
+> data or access rules.
+
+### If a panelist asks
+
+> MFA isn't in this version's scope. We put the security work into what
+> the phone can't be trusted with: order totals and payments are decided
+> by the server, access is enforced in the database rules rather than by
+> hiding buttons, and a deactivated account is signed out on the spot.
+> Firebase supports authenticator-app MFA through Identity Platform, so
+> it's a direct next step.
