@@ -1,8 +1,8 @@
 // screens/HomeScreen.js
 //
 // Home, from the approved home/shop preview: a greeting, where orders are
-// delivered to, a search bar that opens Shop, the two category tiles with
-// live counts, the order on its way (if any), and two sideways rails — the
+// delivered to, a search bar that opens Shop, a gallery of a few listings,
+// the two category tiles with live counts, the order on its way (if any), and two sideways rails — the
 // newest listings and ukay-ukay finds. The tab bar sits under
 // it all. Everything shown comes from the live catalogue; nothing here is
 // the preview's sample data.
@@ -16,6 +16,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { showAppAlert } from '../utils/appAlert';
 import { useProducts } from '../context/ProductContext';
 import { useFavorites } from '../context/FavoritesContext';
+import { useStores } from '../context/StoreContext';
 import { auth, db } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 import { Colors } from '../constants/theme';
@@ -28,6 +29,7 @@ import TabBar, { goToTab } from '../components/shop/TabBar';
 import Reveal from '../components/shop/Reveal';
 import TypingSearch from '../components/home/TypingSearch';
 import ActiveOrderCard, { useActiveOrder } from '../components/home/ActiveOrderCard';
+import HeroGallery, { pickSlides, HERO_HEIGHT } from '../components/home/HeroGallery';
 
 const RAIL_CARD_WIDTH = 148;
 const RAIL_GAP = 12;
@@ -64,12 +66,12 @@ function CategoryGlyph({ kind }) {
   const stroke = {
     fill: 'none',
     stroke: Colors.light.background,
-    strokeWidth: 2.2,
+    strokeWidth: 2,
     strokeLinecap: 'round',
     strokeLinejoin: 'round',
   };
   return (
-    <Svg width={34} height={34} viewBox="0 0 40 40">
+    <Svg width={26} height={26} viewBox="0 0 40 40">
       {kind === 'ukay' ? (
         <>
           <Path d="M20 5 L30 14 V33 Q30 35 28 35 H12 Q10 35 10 33 V14 Z" {...stroke} />
@@ -97,9 +99,15 @@ function CategoryTile({ kind, title, caption, onPress, delay }) {
       >
         <View style={styles.tileRing} />
         <CategoryGlyph kind={kind} />
-        <View>
-          <Text style={styles.tileTitle}>{title}</Text>
-          <Text style={styles.tileCaption}>{caption} →</Text>
+        <View style={styles.flex}>
+          {/* Shrinks a little on large text sizes rather than cutting off
+              "Ready-to-Wear". */}
+          <Text style={styles.tileTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+            {title}
+          </Text>
+          <Text style={styles.tileCaption} numberOfLines={1}>
+            {caption}
+          </Text>
         </View>
       </AnimatedPressable>
     </Reveal>
@@ -164,6 +172,7 @@ function Rail({ products, startDelay, isFavorite, onOpen, onToggleFavorite }) {
 export default function HomeScreen({ navigation }) {
   const { products, loading, error, retryFetchProducts } = useProducts();
   const { isFavorite, toggleFavorite } = useFavorites();
+  const { getStore } = useStores();
   const [profile, setProfile] = React.useState({ name: '', photoUrl: null, place: '' });
   const activeOrder = useActiveOrder();
 
@@ -210,6 +219,10 @@ export default function HomeScreen({ navigation }) {
   const arrivalsCaption = justInCount
     ? `${justInCount} new in the last ${JUST_IN_DAYS} days`
     : 'The latest from our stores';
+  const heroSlides = React.useMemo(
+    () => pickSlides(products, (p) => getStore(p.storeId)?.name || ''),
+    [products, getStore]
+  );
   const ukay = products.filter((p) => p.type === 'ukay-ukay');
   const rtwCount = products.filter((p) => p.type === 'ready-to-wear').length;
   const ukayFinds = ukay.slice(0, UKAY_FINDS);
@@ -361,7 +374,15 @@ export default function HomeScreen({ navigation }) {
             <TypingSearch onPress={() => openShop({ focusSearch: true })} />
           </Reveal>
 
-          <View style={styles.tiles}>
+          {loading ? (
+            <SkeletonBlock style={[styles.wide, styles.heroSkeleton]} />
+          ) : heroSlides.length ? (
+            <Reveal delay={160} style={styles.wide}>
+              <HeroGallery slides={heroSlides} onView={openProduct} />
+            </Reveal>
+          ) : null}
+
+          <View style={[styles.wide, styles.tiles]}>
             <CategoryTile
               kind="ukay"
               title="Ukay-Ukay"
@@ -379,7 +400,7 @@ export default function HomeScreen({ navigation }) {
           </View>
 
           {activeOrder ? (
-            <Reveal delay={270}>
+            <Reveal delay={270} style={styles.wide}>
               <ActiveOrderCard order={activeOrder} onPress={() => openOrder(activeOrder)} style={styles.order} />
             </Reveal>
           ) : null}
@@ -416,29 +437,35 @@ const styles = StyleSheet.create({
   deliver: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', marginTop: 8, paddingVertical: 2 },
   deliverText: { fontSize: 12, color: Colors.light.icon, flexShrink: 1 },
   deliverPlace: { fontWeight: '500', color: Colors.light.text },
-  searchWrap: { marginTop: 14, marginBottom: 20 },
+  searchWrap: { marginTop: 14, marginBottom: 16 },
+  // The gallery, tiles and order card sit 16 pt from the edges, a little
+  // wider than the 20 pt text column, as in the preview.
+  wide: { marginHorizontal: -4 },
+  heroSkeleton: { height: HERO_HEIGHT, borderRadius: 28 },
 
-  tiles: { flexDirection: 'row', gap: 12, marginBottom: 26 },
+  tiles: { flexDirection: 'row', gap: 10, marginTop: 12, marginBottom: 26 },
   order: { marginTop: -14, marginBottom: 26 },
   tile: {
-    height: 132,
+    height: 72,
     borderRadius: 20,
-    padding: 14,
-    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     overflow: 'hidden',
   },
   tileRing: {
     position: 'absolute',
-    right: -34,
-    top: -34,
-    width: 110,
-    height: 110,
-    borderRadius: 55,
+    right: -30,
+    top: -30,
+    width: 90,
+    height: 90,
+    borderRadius: 45,
     borderWidth: 1.5,
     borderColor: 'rgba(250,247,242,0.18)',
   },
-  tileTitle: { fontSize: 15.5, fontWeight: '600', color: Colors.light.background },
-  tileCaption: { fontSize: 11.5, color: 'rgba(250,247,242,0.85)', marginTop: 1 },
+  tileTitle: { fontSize: 13, fontWeight: '600', lineHeight: 16, color: Colors.light.background },
+  tileCaption: { fontSize: 11, color: 'rgba(250,247,242,0.85)' },
 
   sectionHead: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
   sectionTitle: { fontSize: 17, fontWeight: '600', letterSpacing: -0.2, color: Colors.light.text },
