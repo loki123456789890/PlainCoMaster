@@ -26,6 +26,7 @@ import { showAppAlert } from '../utils/appAlert';
 import useNetworkStatus from '../hooks/useNetworkStatus';
 import { Colors } from '../constants/theme';
 import { formatOrderNumber } from '../utils/orderNumber';
+import { RETURN_WINDOW_DAYS, canReportProblem, reportDeadline } from '../constants/returns';
 import Button from '../components/ui/Button';
 import Reveal from '../components/shop/Reveal';
 import Sheet from '../components/shop/Sheet';
@@ -268,7 +269,21 @@ export default function HelpScreen({ navigation, route }) {
         const recent = snapshot.docs
           // An order from before stores existed has nowhere to be routed.
           .filter((d) => typeof d.data().storeId === 'string')
-          .map((d) => ({ id: d.id, storeId: d.data().storeId, storeName: d.data().storeName || '' }));
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              storeId: data.storeId,
+              storeName: data.storeName || '',
+              // Enough to tell whether the order can be reported as a
+              // problem, and to open Report a Problem for it directly.
+              status: data.status || 'pending',
+              deliveredAt: data.deliveredAt || null,
+              items: data.items || [],
+              paymentMethod: data.paymentMethod || null,
+              paymentStatus: data.paymentStatus || null,
+            };
+          });
         // The order Help was opened from stays pickable even when it's
         // older than the five most recent.
         if (fromOrder && !recent.some((o) => o.id === fromOrder.id)) recent.unshift(fromOrder);
@@ -330,6 +345,36 @@ export default function HelpScreen({ navigation, route }) {
   };
 
   const canSend = topic && message.trim().length >= MESSAGE_MIN && !sending && isConnected;
+
+  // "Wrong item received" is usually a problem the store should refund,
+  // and Report a Problem does that properly — with photos, the amount, and
+  // a status the customer can follow. The support request still sends if
+  // they'd rather; this only points the way.
+  const chosenOrder = recentOrders.find((o) => o.id === aboutOrderId) || null;
+  const reportable = chosenOrder ? canReportProblem(chosenOrder, chosenOrder.deliveredAt) : false;
+  const goReport = () => {
+    Haptics.selectionAsync();
+    setSheetOpen(false);
+    // After the sheet has slid away, so the next screen isn't pushed
+    // underneath a closing modal.
+    setTimeout(() => {
+      if (reportable) {
+        navigation.navigate('ReportProblem', {
+          order: {
+            id: chosenOrder.id,
+            items: chosenOrder.items,
+            storeId: chosenOrder.storeId,
+            storeName: chosenOrder.storeName,
+            paymentMethod: chosenOrder.paymentMethod,
+            paymentStatus: chosenOrder.paymentStatus,
+          },
+          deadline: reportDeadline(chosenOrder.deliveredAt)?.getTime() ?? null,
+        });
+      } else {
+        navigation.navigate('Orders');
+      }
+    }, 350);
+  };
 
   const handleSend = async () => {
     if (!canSend) return;
@@ -596,6 +641,34 @@ export default function HelpScreen({ navigation, route }) {
               </>
             ) : null}
 
+            {topic === 'Wrong item received' ? (
+              <View style={styles.reportNote}>
+                <Ionicons name="arrow-undo-outline" size={18} color={Colors.light.tint} />
+                <View style={styles.flex}>
+                  <Text style={styles.reportNoteText}>
+                    {reportable
+                      ? `You can report this as a problem instead, until ${reportDeadline(chosenOrder.deliveredAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}. ${chosenOrder.storeName || 'The store'} sees your photos and can refund you, and you can follow it on the order.`
+                      : chosenOrder
+                        ? `This order can't be reported in the app — it hasn't been delivered, or it's been more than ${RETURN_WINDOW_DAYS} days. Send a request below and the store will help.`
+                        : `Wrong item or size, damage, or not as described? Report it from the order in My Orders within ${RETURN_WINDOW_DAYS} days of delivery, and the store can refund you.`}
+                  </Text>
+                  {reportable || !chosenOrder ? (
+                    <Pressable
+                      onPress={goReport}
+                      hitSlop={8}
+                      style={styles.reportNoteAction}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.reportNoteActionText}>
+                        {reportable ? `Report a problem with ${formatOrderNumber(chosenOrder.id)}` : 'Go to My Orders'}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={14} color={Colors.light.tint} />
+                    </Pressable>
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
+
             <View style={styles.labelRow}>
               <Text style={styles.label}>Message</Text>
               <Text style={styles.count}>
@@ -793,6 +866,17 @@ const styles = StyleSheet.create({
   pillText: { fontSize: 12.5, fontWeight: '500', color: Colors.light.text },
   pillTextOn: { color: Colors.light.background },
   routeHint: { fontSize: 12, color: Colors.light.icon, marginTop: -8, marginBottom: 14, marginLeft: 2 },
+  reportNote: {
+    flexDirection: 'row',
+    gap: 10,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: Colors.light.tint + '12',
+    marginBottom: 14,
+  },
+  reportNoteText: { fontSize: 12.5, lineHeight: 18, color: Colors.light.text },
+  reportNoteAction: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 8, alignSelf: 'flex-start', minHeight: 28 },
+  reportNoteActionText: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
   textarea: {
     height: 110,
     borderRadius: 14,
