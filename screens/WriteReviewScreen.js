@@ -529,7 +529,7 @@ export default function WriteReviewScreen({ navigation, route }) {
               <View style={{ flex: 1 }}>
                 <Text style={styles.nextTitle}>Want to tell the store directly?</Text>
                 <Text style={styles.nextBody}>
-                  A review is public. For an exchange or refund, message the store from this order.
+                  A review is public. For a refund, report a problem from the order; to talk it over, message the store.
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={MOSS} />

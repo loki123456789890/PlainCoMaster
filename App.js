@@ -36,6 +36,7 @@ import OrdersScreen from './screens/OrdersScreen';
 import OrderDetailsScreen from './screens/OrderDetailsScreen'; // <-- NEW IMPORT
 import OrderConfirmationScreen from './screens/OrderConfirmationScreen';
 import WriteReviewScreen from './screens/WriteReviewScreen';
+import ReportProblemScreen from './screens/ReportProblemScreen';
 import OrderChatScreen from './screens/OrderChatScreen';
 
 import AdminLoginScreen from './screens/admin/AdminLoginScreen';
@@ -204,6 +205,8 @@ export default function App() {
                         order has already been placed. */}
                     <Stack.Screen name="OrderConfirmation" component={OrderConfirmationScreen} />
                     <Stack.Screen name="WriteReview" component={WriteReviewScreen} />
+                    {/* Reporting a problem with a delivered order, from OrderDetails. */}
+                    <Stack.Screen name="ReportProblem" component={ReportProblemScreen} />
                     {/* Order chat, both sides: customer from OrderDetails, store from AdminOrders.
                         Not role-guarded — the rules decide who may read and send. */}
                     <Stack.Screen name="OrderChat" component={OrderChatScreen} />

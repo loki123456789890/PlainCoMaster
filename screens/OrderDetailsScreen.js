@@ -29,12 +29,24 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
-import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebaseConfig';
 import { Colors, Spacing, Radius } from '../constants/theme';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import Badge from '../components/ui/Badge';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/ui/EmptyState';
+import { showAppAlert } from '../utils/appAlert';
+import {
+  RETURN_STATUS,
+  canReportProblem,
+  reportDeadline,
+  reasonLabel,
+  returnRequestRef,
+  returnStatusLine,
+  maskedAccount,
+} from '../constants/returns';
 import AnimatedPressable from '../components/ui/AnimatedPressable';
 import StarRating from '../components/ui/StarRating';
 import ProductImage from '../components/ui/ProductImage';
@@ -205,6 +217,10 @@ export default function OrderDetailsScreen({ navigation, route }) {
   // the store marks the order shipped.
   const [chat, setChat] = useState(() => (order ? chatFields(order) : null));
   const [liveStatus, setLiveStatus] = useState(null);
+  // When the order became delivered, stamped by the server. The list does
+  // not pass it (a Timestamp is not a navigation param), so it comes from
+  // the same live read.
+  const [deliveredAt, setDeliveredAt] = useState(null);
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (!order?.id || !uid) return undefined;
@@ -215,6 +231,7 @@ export default function OrderDetailsScreen({ navigation, route }) {
         const data = snapshot.data();
         setChat(chatFields(data));
         if (data.status) setLiveStatus(data.status);
+        setDeliveredAt(data.deliveredAt || null);
       },
       (error) => console.error('Could not watch order for messages:', error)
     );
@@ -222,6 +239,52 @@ export default function OrderDetailsScreen({ navigation, route }) {
   const unreadFromStore = hasUnread(chat, 'customer');
 
   const status = (liveStatus || order?.status || 'pending').toLowerCase();
+
+  // A reported problem about this order, watched live so the store's
+  // decision shows up while the screen is open. Only a delivered order can
+  // have one, so nothing is opened for the rest. `undefined` until the
+  // first answer, so the "Report a problem" row doesn't flash in and then
+  // turn into a status card.
+  const [problem, setProblem] = useState(undefined);
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!order?.id || !uid || status !== 'delivered') return undefined;
+    return onSnapshot(
+      returnRequestRef(uid, order.id),
+      (snapshot) => setProblem(snapshot.exists() ? snapshot.data() : null),
+      (error) => {
+        console.error('Could not watch problem report:', error);
+        setProblem(null);
+      }
+    );
+  }, [order?.id, status]);
+
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const handleWithdraw = async () => {
+    setWithdrawing(true);
+    try {
+      // The one change the rules let a customer make to a report, and only
+      // before the store has decided.
+      await updateDoc(returnRequestRef(auth.currentUser.uid, order.id), {
+        status: 'withdrawn',
+        withdrawnAt: serverTimestamp(),
+      });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setConfirmWithdraw(false);
+    } catch (error) {
+      console.error('Could not withdraw problem report:', error);
+      setConfirmWithdraw(false);
+      showAppAlert(
+        'Not withdrawn',
+        error?.code === 'permission-denied'
+          ? 'The store has already decided on this report, so it can no longer be withdrawn.'
+          : 'Check your connection and try again.'
+      );
+    } finally {
+      setWithdrawing(false);
+    }
+  };
 
   // A quiet "arrived" pulse on the tag's headline when the order is
   // delivered. Skipped under Reduce Motion.
@@ -267,6 +330,24 @@ export default function OrderDetailsScreen({ navigation, route }) {
     Haptics.selectionAsync();
     navigation.navigate('Help', {
       order: { id: order.id, storeId: order.storeId, storeName: order.storeName || '' },
+    });
+  };
+
+  const deadline = reportDeadline(deliveredAt);
+  const canReport = problem === null && canReportProblem({ status }, deliveredAt);
+  const showsProblemBlock = Boolean(problem) || canReport;
+  const handleReportProblem = () => {
+    Haptics.selectionAsync();
+    navigation.navigate('ReportProblem', {
+      order: {
+        id: order.id,
+        items: order.items || [],
+        storeId: order.storeId,
+        storeName: order.storeName || '',
+        paymentMethod: order.paymentMethod,
+        paymentStatus: order.paymentStatus,
+      },
+      deadline: deadline ? deadline.getTime() : null,
     });
   };
 
@@ -600,19 +681,62 @@ export default function OrderDetailsScreen({ navigation, route }) {
           </Card>
         </Animated.View>
 
+        {/* A reported problem, once there is one: where it stands, live. */}
+        {problem ? (
+          <>
+            <SectionTitle>Problem report</SectionTitle>
+            <Animated.View entering={fade(110)}>
+              <ProblemCard
+                problem={problem}
+                order={order}
+                onMessage={handleOpenChat}
+                onWithdraw={() => {
+                  Haptics.selectionAsync();
+                  setConfirmWithdraw(true);
+                }}
+              />
+            </Animated.View>
+          </>
+        ) : canReport ? (
+          // Inside the 7 days and nothing reported yet. A row, not a
+          // Button: most deliveries are fine, and this should be easy to
+          // find without competing with the order itself.
+          <Animated.View entering={fade(110)}>
+            <AnimatedPressable
+              onPress={handleReportProblem}
+              accessibilityRole="button"
+              accessibilityLabel={`Something wrong with it? Report a problem until ${formatDay(deadline)}`}
+            >
+              <Card variant="flat" style={styles.help}>
+                <View style={[styles.ico, styles.icoClay]}>
+                  <Ionicons name="alert-circle-outline" size={18} color={Colors.light.tint} />
+                </View>
+                <View style={styles.rowText}>
+                  <Text style={styles.rowTitle}>Something wrong with it?</Text>
+                  <Text style={styles.rowBody}>
+                    {`Wrong item or size, damage, or not as described. Report it by ${formatDay(deadline)}.`}
+                  </Text>
+                </View>
+                <Text style={styles.helpGo}>Report</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.light.tint} />
+              </Card>
+            </AnimatedPressable>
+          </Animated.View>
+        ) : null}
+
         {/* Support */}
         <Animated.View entering={fade(120)}>
           <AnimatedPressable
             onPress={handleContactSupport}
             accessibilityRole="button"
-            accessibilityLabel="Problem with this order? Contact PlainCo support"
+            accessibilityLabel={`${status === 'delivered' ? 'Something else?' : 'Problem with this order?'} Contact PlainCo support`}
           >
-            <Card variant="flat" style={styles.help}>
+            <Card variant="flat" style={[styles.help, showsProblemBlock && styles.helpTight]}>
               <View style={[styles.ico, styles.icoClay]}>
                 <Ionicons name="help-circle-outline" size={18} color={Colors.light.tint} />
               </View>
               <View style={styles.rowText}>
-                <Text style={styles.rowTitle}>Problem with this order?</Text>
+                <Text style={styles.rowTitle}>{status === 'delivered' ? 'Something else?' : 'Problem with this order?'}</Text>
                 <Text style={styles.rowBody}>Contact PlainCo support</Text>
               </View>
               <Text style={styles.helpGo}>Help</Text>
@@ -621,7 +745,107 @@ export default function OrderDetailsScreen({ navigation, route }) {
           </AnimatedPressable>
         </Animated.View>
       </ScrollView>
+
+      <ConfirmDialog
+        visible={confirmWithdraw}
+        onClose={() => setConfirmWithdraw(false)}
+        title="Withdraw your report?"
+        confirmLabel="Withdraw"
+        cancelLabel="Keep it"
+        onConfirm={handleWithdraw}
+        loading={withdrawing}
+        icon="arrow-undo-outline"
+      >
+        <Text style={styles.dialogBody}>
+          {`${order.storeName || 'The store'} won't review it, and you can't report this order again.`}
+        </Text>
+      </ConfirmDialog>
     </SafeAreaView>
+  );
+}
+
+const PROBLEM_TONES = {
+  clay: Colors.light.tint,
+  moss: Colors.light.secondary,
+  ash: Colors.light.icon,
+};
+
+const formatDay = (date) =>
+  date ? date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+
+// Where a reported problem stands: the step as a badge, one sentence on
+// what happens next, and the money — what is owed, where it goes, and the
+// reference once it is paid. Ends without a refund (declined, withdrawn)
+// show no money at all.
+function ProblemCard({ problem, order, onMessage, onWithdraw }) {
+  const meta = RETURN_STATUS[problem.status] || RETURN_STATUS.requested;
+  const owesNothing = problem.status === 'declined' || problem.status === 'withdrawn';
+  const items = Array.isArray(problem.items) ? problem.items : [];
+  const refundTo =
+    problem.refundMethod === 'original'
+      ? `Your ${getPaymentLabel(problem.paymentMethod || order.paymentMethod)} payment`
+      : maskedAccount(problem.payout);
+  const canMessage =
+    order.storeId && (problem.status === 'declined' || (problem.status === 'approved' && problem.resolution === 'return_first'));
+
+  return (
+    <Card variant="flat" style={styles.problemCard}>
+      <View style={styles.problemHead}>
+        <View style={styles.rowText}>
+          <Text style={styles.rowTitle}>{reasonLabel(problem.reason)}</Text>
+          <Text style={styles.rowBody} numberOfLines={2}>
+            {items.map((item) => (item.quantity > 1 ? `${item.name} ×${item.quantity}` : item.name)).join(', ')}
+          </Text>
+        </View>
+        <Badge label={meta.label} color={PROBLEM_TONES[meta.tone]} />
+      </View>
+
+      <Text style={styles.problemLine}>{returnStatusLine(problem, order.storeName)}</Text>
+
+      {problem.status === 'declined' && problem.declineReason ? (
+        <View style={styles.problemQuote}>
+          <Text style={styles.problemQuoteLabel}>Their reason</Text>
+          <Text style={styles.problemQuoteText}>{problem.declineReason}</Text>
+        </View>
+      ) : null}
+
+      {owesNothing ? null : (
+        <View style={styles.problemMoney}>
+          <View style={styles.receiptLine}>
+            <Text style={styles.receiptLabel}>{problem.status === 'refunded' ? 'Refunded' : 'Refund'}</Text>
+            <Text style={styles.problemAmount}>{peso(problem.refundAmount)}</Text>
+          </View>
+          {refundTo ? (
+            <View style={styles.receiptLine}>
+              <Text style={styles.receiptLabel}>To</Text>
+              <Text style={styles.receiptValue}>{refundTo}</Text>
+            </View>
+          ) : null}
+          {problem.status === 'refunded' && problem.refundReference ? (
+            <View style={styles.receiptLine}>
+              <Text style={styles.receiptLabel}>Reference</Text>
+              <Text style={[styles.receiptValue, styles.problemRef]} selectable>{problem.refundReference}</Text>
+            </View>
+          ) : null}
+        </View>
+      )}
+
+      {canMessage || problem.status === 'requested' ? (
+        <View style={styles.problemActions}>
+          {canMessage ? (
+            <TouchableOpacity onPress={onMessage} hitSlop={8} accessibilityRole="button" style={styles.problemAction}>
+              <Ionicons name="chatbubble-outline" size={15} color={Colors.light.tint} />
+              <Text style={styles.problemActionText}>{`Message ${order.storeName || 'the store'}`}</Text>
+            </TouchableOpacity>
+          ) : null}
+          {problem.status === 'requested' ? (
+            <TouchableOpacity onPress={onWithdraw} hitSlop={8} accessibilityRole="button" style={styles.problemAction}>
+              <Text style={styles.problemWithdrawText}>Withdraw report</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      ) : null}
+    </Card>
   );
 }
 
@@ -870,7 +1094,38 @@ const styles = StyleSheet.create({
 
   // Support
   help: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, marginTop: 22 },
+  // Directly under the report row or card, which already has the gap.
+  helpTight: { marginTop: 10 },
   helpGo: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
+
+  // Problem report
+  problemCard: { padding: 14 },
+  problemHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  problemLine: { fontSize: 13, color: Colors.light.text, lineHeight: 19, marginTop: 10 },
+  problemQuote: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.light.border + '60',
+  },
+  problemQuoteLabel: { fontSize: 11, fontWeight: '600', color: Colors.light.icon, marginBottom: 2 },
+  problemQuoteText: { fontSize: 13, color: Colors.light.text, lineHeight: 19 },
+  problemMoney: { marginTop: 10, paddingTop: 6, borderTopWidth: 1, borderTopColor: Colors.light.border },
+  problemAmount: { fontSize: 14, fontWeight: '600', color: Colors.light.highlight, fontVariant: ['tabular-nums'] },
+  problemRef: { fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 12.5 },
+  problemActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.light.border,
+  },
+  problemAction: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 32 },
+  problemActionText: { fontSize: 13, fontWeight: '600', color: Colors.light.tint },
+  problemWithdrawText: { fontSize: 13, fontWeight: '600', color: Colors.light.icon },
+  dialogBody: { fontSize: 14, color: Colors.light.icon, lineHeight: 20, textAlign: 'center' },
 
   centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
   emptyActionWrap: { marginTop: Spacing.md, width: 200, alignSelf: 'center' },
