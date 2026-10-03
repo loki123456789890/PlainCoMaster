@@ -47,7 +47,7 @@ import TabBar from '../components/shop/TabBar';
 import StorePage from './StorePage';
 import Reveal from '../components/shop/Reveal';
 import { EASE_OUT_QUINT } from '../constants/motion';
-import { SECTION_FILTERS, matchesSection, categorySearchText } from '../constants/productOptions';
+import { SECTION_FILTERS, matchesSection, parseSearchQuery, matchesSearch } from '../constants/productOptions';
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -55,12 +55,6 @@ const FILTERS = [
   { key: 'ukay-ukay', label: 'Ukay-Ukay' },
 ];
 const FILTER_LABEL = { 'ready-to-wear': 'Ready-to-Wear', 'ukay-ukay': 'Ukay-Ukay' };
-
-// Words a shopper might type for a category, beyond its stored name.
-const TYPE_WORDS = {
-  'ukay-ukay': 'ukay-ukay ukay secondhand second-hand pre-loved preloved thrift',
-  'ready-to-wear': 'ready-to-wear rtw brand new',
-};
 
 // A store younger than this, with no reviews yet, is labelled "New store".
 const NEW_STORE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -268,17 +262,11 @@ function Catalogue({ navigation, route }) {
   // Category, Section and search compose (AND): none of them resets the
   // others.
   const query = searchQuery.trim().toLowerCase();
+  const parsedQuery = parseSearchQuery(query);
   const filteredProducts = products
     .filter((p) => activeFilter === 'all' || p.type === activeFilter)
     .filter((p) => matchesSection(p, activeSection))
-    .filter(
-      (p) =>
-        !query ||
-        p.name?.toLowerCase().includes(query) ||
-        p.brand?.toLowerCase().includes(query) ||
-        (TYPE_WORDS[p.type] || '').includes(query) ||
-        categorySearchText(p.category).includes(query)
-    );
+    .filter((p) => matchesSearch(p, parsedQuery));
 
   const count = filteredProducts.length;
 
@@ -444,7 +432,7 @@ function Catalogue({ navigation, route }) {
             <TextInput
               ref={searchRef}
               style={styles.searchInput}
-              placeholder="Search by name, brand or category"
+              placeholder="Search by name, brand, color or category"
               placeholderTextColor="#8E857B"
               value={searchQuery}
               onChangeText={setSearchQuery}

@@ -40,12 +40,8 @@ import ProductCard, { isSoldOut } from '../components/shop/ProductCard';
 import Reveal from '../components/shop/Reveal';
 import StoreLogo from '../components/shop/StoreLogo';
 import { EASE_OUT_QUINT } from '../constants/motion';
-import { CATEGORY_OPTIONS, categoryOption, categorySearchText } from '../constants/productOptions';
+import { CATEGORY_OPTIONS, categoryOption, parseSearchQuery, matchesSearch } from '../constants/productOptions';
 
-const TYPE_WORDS = {
-  'ukay-ukay': 'ukay-ukay ukay secondhand second-hand pre-loved preloved thrift',
-  'ready-to-wear': 'ready-to-wear rtw brand new',
-};
 const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'ready-to-wear', label: 'Ready-to-Wear' },
@@ -142,18 +138,11 @@ export default function StorePage({ navigation, route }) {
   const showCategories = categories.length > 1;
   const activeCategory = showCategories && categories.some((c) => c.key === category) ? category : 'all';
 
-  const q = search.trim().toLowerCase();
+  const parsedQuery = parseSearchQuery(search);
   const shown = items
     .filter((p) => filter === 'all' || p.type === filter)
     .filter((p) => activeCategory === 'all' || p.category === activeCategory)
-    .filter(
-      (p) =>
-        !q ||
-        p.name?.toLowerCase().includes(q) ||
-        p.brand?.toLowerCase().includes(q) ||
-        (TYPE_WORDS[p.type] || '').includes(q) ||
-        categorySearchText(p.category).includes(q)
-    );
+    .filter((p) => matchesSearch(p, parsedQuery));
   const gridTitle =
     [activeCategory !== 'all' && categoryOption(activeCategory).label, filter !== 'all' && FILTERS.find((f) => f.key === filter).label]
       .filter(Boolean)
@@ -479,7 +468,7 @@ export default function StorePage({ navigation, route }) {
             </View>
           ) : (
             <Text style={styles.none}>
-              {q
+              {parsedQuery.length
                 ? `No items in this store match "${search.trim()}".`
                 : items.length
                 ? 'No items in this category yet.'

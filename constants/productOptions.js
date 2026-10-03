@@ -70,11 +70,93 @@ export const CATEGORY_OPTIONS = [
 
 export const categoryOption = (key) => CATEGORY_OPTIONS.find((option) => option.key === key) || null;
 
-// What the Shop's and a store's search match a category on: its name, so
-// "dress" or "tops" finds the pieces filed under it. Not synonyms: a
-// search for "jeans" should find jeans, not every skirt filed as Bottoms.
-// Empty for a product with none.
-export const categorySearchText = (key) => categoryOption(key)?.label.toLowerCase() || '';
+// The Shop's and a store's search. Sellers name the same piece different
+// ways ("Black Oversized Tee", "Loose-fit shirt, black"), so a query is
+// matched word by word rather than as one phrase: every word has to find
+// a home somewhere in the product, in any order. A word matches the start
+// of a word in the product, so "over" finds "oversized" as it's typed, but
+// "red" doesn't find "embroidered".
+//
+// The product's words are its name, brand, colors, type, category and
+// section. A category matches on its own name only, so "dress" or "tops"
+// finds the pieces filed under it; "jeans" should find jeans, not every
+// skirt filed as Bottoms.
+//
+// Synonyms are for the same garment named differently, never for a wider
+// net. Keep each group to words a shopper would accept any of; written
+// without spaces or hyphens, which a query and a product are both read
+// without (so "t-shirt", "t shirt" and "tshirt" are one word).
+const SEARCH_SYNONYMS = [
+  ['shirt', 'tee', 'tshirt'],
+  ['oversized', 'oversize', 'loose', 'loosefit', 'baggy', 'relaxed', 'relaxedfit'],
+  ['pants', 'trousers', 'slacks'],
+  ['jeans', 'denim'],
+  ['hoodie', 'hoody', 'hooded'],
+  ['sweater', 'pullover', 'jumper'],
+  ['sneakers', 'trainers', 'rubbershoes'],
+  ['slippers', 'tsinelas', 'flipflops'],
+  ['sleeveless', 'sando', 'tank', 'tanktop'],
+  ['longsleeve', 'longsleeves', 'longsleeved'],
+  ['gray', 'grey'],
+];
+
+// Words a shopper might type for a type, beyond its stored name.
+const TYPE_WORDS = {
+  'ukay-ukay': 'ukay-ukay secondhand second-hand pre-loved thrift',
+  'ready-to-wear': 'ready-to-wear rtw brand new',
+};
+
+// Lowercase words, with apostrophes dropped ("Men's" is "mens") and any
+// other punctuation splitting words.
+const searchWords = (text) =>
+  String(text || '')
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+// Every word, and every two neighbors joined, so a product's "T-Shirt" or
+// "loose fit" meets a query's "tshirt" or "loose-fit".
+const productSearchWords = (product) => {
+  const words = searchWords(
+    [
+      product.name,
+      product.brand,
+      ...(Array.isArray(product.colors) ? product.colors : []),
+      TYPE_WORDS[product.type],
+      categoryOption(product.category)?.label,
+      sectionOption(product.section)?.label,
+      sectionOption(product.section)?.tag,
+    ].join(' ')
+  );
+  return [...words, ...words.slice(1).map((word, i) => words[i] + word)];
+};
+
+// What a query word may match: itself, its synonyms, and without a
+// plural "s" ("shirts" is "shirt").
+const queryAlternatives = (word) => {
+  const singular = word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : null;
+  const group = SEARCH_SYNONYMS.find((g) => g.includes(word) || (singular && g.includes(singular)));
+  return [word, ...(singular ? [singular] : []), ...(group || [])];
+};
+
+// The query split into words, each with what it may match. Built once per
+// query, not once per product.
+export const parseSearchQuery = (query) =>
+  String(query || '')
+    .split(/\s+/)
+    .map((word) => searchWords(word).join(''))
+    .filter(Boolean)
+    .map(queryAlternatives);
+
+// True for an empty query.
+export const matchesSearch = (product, parsedQuery) => {
+  if (parsedQuery.length === 0) return true;
+  const words = productSearchWords(product);
+  return parsedQuery.every((alternatives) =>
+    alternatives.some((alt) => words.some((word) => word.startsWith(alt)))
+  );
+};
 
 // How worn an ukay-ukay piece is. Ready-to-wear has no condition: the type
 // already says it's brand-new. One fixed scale rather than free text, so
