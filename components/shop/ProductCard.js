@@ -93,8 +93,23 @@ function Heart({ favorited, onToggle, name }) {
 
 // `unavailable`: a saved favorite whose product has since been removed —
 // shown faded, with a note instead of a price. `savedPrice`: the price a
-// favorite was saved at — only Favorites passes it.
-export default function ProductCard({ product, favorited, storeName, onPress, onToggleFavorite, style, unavailable, savedPrice }) {
+// favorite was saved at — only Favorites passes it. Home's sections also
+// set `nameLines` (a one-line name in its rails), `photoAspect` (the
+// taller photos in its staggered grid) and `onDark` (light text for the
+// dark Budget finds strip).
+export default function ProductCard({
+  product,
+  favorited,
+  storeName,
+  onPress,
+  onToggleFavorite,
+  style,
+  unavailable,
+  savedPrice,
+  nameLines = 2,
+  photoAspect,
+  onDark = false,
+}) {
   const [imageFailed, setImageFailed] = useState(false);
   const isUkay = product.type === 'ukay-ukay';
   const soldOut = !unavailable && isSoldOut(product);
@@ -118,7 +133,7 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
       accessibilityRole="button"
       accessibilityLabel={spoken.join(', ')}
     >
-      <View style={[styles.photo, unavailable && styles.photoGone]}>
+      <View style={[styles.photo, photoAspect && { aspectRatio: photoAspect }, unavailable && styles.photoGone]}>
         {imageFailed || !product.imageUrl ? (
           <View style={styles.fallback}>
             <Ionicons name="shirt-outline" size={34} color={Colors.light.icon} />
@@ -148,11 +163,11 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
           </View>
         ) : null}
       </View>
-      <Text style={styles.name} numberOfLines={2}>
+      <Text style={[styles.name, onDark && styles.nameOnDark]} numberOfLines={nameLines}>
         {product.name}
       </Text>
       {storeName ? (
-        <Text style={styles.store} numberOfLines={1}>
+        <Text style={[styles.store, onDark && styles.mutedOnDark]} numberOfLines={1}>
           {storeName}
         </Text>
       ) : null}
@@ -163,9 +178,9 @@ export default function ProductCard({ product, favorited, storeName, onPress, on
         </View>
       ) : (
         <View style={styles.priceRow}>
-          <Text style={[styles.price, soldOut && styles.priceSold]}>₱{Number(product.price).toLocaleString('en-PH')}</Text>
+          <Text style={[styles.price, onDark && styles.priceOnDark, soldOut && styles.priceSold]}>₱{Number(product.price).toLocaleString('en-PH')}</Text>
           {lastPiece ? (
-            <Text style={styles.lastPiece} numberOfLines={1}>
+            <Text style={[styles.lastPiece, onDark && styles.mutedOnDark]} numberOfLines={1}>
               {lastPiece}
             </Text>
           ) : null}
@@ -232,6 +247,9 @@ const styles = StyleSheet.create({
     color: Colors.light.text,
   },
   store: { marginHorizontal: 2, marginBottom: 2, fontSize: 11.5, color: Colors.light.icon },
+  nameOnDark: { color: Colors.light.background },
+  mutedOnDark: { color: '#BDB3A9' },
+  priceOnDark: { color: '#F1D98A' },
   // Same frosted canvas as the heart, so it reads as a note on the photo
   // rather than a sale sticker.
   justIn: {

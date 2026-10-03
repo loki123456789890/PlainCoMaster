@@ -1,13 +1,17 @@
 // screens/HomeScreen.js
 //
-// Home, from the approved home/shop preview: a greeting, where orders are
+// Home, from the approved home preview: a greeting, where orders are
 // delivered to, a search bar that opens Shop, a gallery of a few listings,
-// the two category tiles with live counts, the order on its way (if any), and two sideways rails — the
-// newest listings and ukay-ukay finds. The tab bar sits under
-// it all. Everything shown comes from the live catalogue; nothing here is
+// the two category tiles with live counts, the order on its way (if any),
+// then the stores, the newest listings, a dark strip of budget finds and a
+// staggered grid of ukay-ukay finds, ending in "Browse everything". No
+// listing appears in more than one of those last three sections (the
+// gallery is a spotlight and may repeat one). The tab bar sits under it
+// all. Everything shown comes from the live catalogue; nothing here is
 // the preview's sample data.
 import React from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import Animated, { useSharedValue, useAnimatedScrollHandler } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import Svg, { Path, Circle } from 'react-native-svg';
@@ -16,7 +20,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { showAppAlert } from '../utils/appAlert';
 import { useProducts } from '../context/ProductContext';
 import { useFavorites } from '../context/FavoritesContext';
-import { useStores } from '../context/StoreContext';
+import { useStores, useStoreRatings } from '../context/StoreContext';
 import { auth, db } from '../firebaseConfig';
 import { doc, getDoc } from 'firebase/firestore';
 import { Colors } from '../constants/theme';
@@ -30,12 +34,16 @@ import Reveal from '../components/shop/Reveal';
 import TypingSearch from '../components/home/TypingSearch';
 import ActiveOrderCard, { useActiveOrder } from '../components/home/ActiveOrderCard';
 import HeroGallery, { pickSlides, HERO_HEIGHT } from '../components/home/HeroGallery';
+import StoreRail from '../components/home/StoreRail';
+import UkayGrid from '../components/home/UkayGrid';
 
-const RAIL_CARD_WIDTH = 148;
+const RAIL_CARD_WIDTH = 146;
 const RAIL_GAP = 12;
 const NEW_ARRIVALS = 6;
 const JUST_IN_MAX = 12;
-const UKAY_FINDS = 10;
+const BUDGET_MAX_PRICE = 300;
+const BUDGET_ITEMS = 10;
+const UKAY_GRID = 6;
 
 const getTimeGreeting = () => {
   const hour = new Date().getHours();
@@ -114,18 +122,27 @@ function CategoryTile({ kind, title, caption, onPress, delay }) {
   );
 }
 
-function SectionHead({ title, caption, onSeeAll, delay }) {
+function SectionHead({ title, chip, caption, onSeeAll, delay, onDark }) {
   return (
-    <Reveal delay={delay} style={styles.sectionHead}>
+    <Reveal delay={delay} style={[styles.sectionHead, onDark && styles.sectionHeadInStrip]}>
       <View style={styles.flex}>
-        <Text style={styles.sectionTitle} accessibilityRole="header">
-          {title}
-        </Text>
-        <Text style={styles.sectionCaption}>{caption}</Text>
+        <View style={styles.titleRow}>
+          <Text style={[styles.sectionTitle, onDark && styles.onDarkTitle]} accessibilityRole="header">
+            {title}
+          </Text>
+          {chip ? (
+            <View style={styles.chip}>
+              <Text style={styles.chipText}>{chip}</Text>
+            </View>
+          ) : null}
+        </View>
+        <Text style={[styles.sectionCaption, onDark && styles.onDarkCaption]}>{caption}</Text>
       </View>
-      <Pressable onPress={onSeeAll} hitSlop={10} accessibilityRole="link" accessibilityLabel={`See all ${title}`}>
-        <Text style={styles.seeAll}>See all</Text>
-      </Pressable>
+      {onSeeAll ? (
+        <Pressable onPress={onSeeAll} hitSlop={10} accessibilityRole="link" accessibilityLabel={`See all ${title}`}>
+          <Text style={styles.seeAll}>See all</Text>
+        </Pressable>
+      ) : null}
     </Reveal>
   );
 }
@@ -145,7 +162,7 @@ function RailSkeleton() {
   );
 }
 
-function Rail({ products, startDelay, isFavorite, onOpen, onToggleFavorite }) {
+function Rail({ products, startDelay, isFavorite, storeNameOf, onOpen, onToggleFavorite, onDark }) {
   return (
     <ScrollView
       horizontal
@@ -160,6 +177,9 @@ function Rail({ products, startDelay, isFavorite, onOpen, onToggleFavorite }) {
             style={{ width: RAIL_CARD_WIDTH }}
             product={product}
             favorited={isFavorite(product.id)}
+            storeName={storeNameOf(product)}
+            nameLines={1}
+            onDark={onDark}
             onPress={() => onOpen(product)}
             onToggleFavorite={() => onToggleFavorite(product)}
           />
@@ -169,10 +189,26 @@ function Rail({ products, startDelay, isFavorite, onOpen, onToggleFavorite }) {
   );
 }
 
+function ArrowIcon() {
+  return (
+    <Svg width={16} height={16} viewBox="0 0 24 24">
+      <Path
+        d="M5 12h14M13 6l6 6-6 6"
+        fill="none"
+        stroke={Colors.light.text}
+        strokeWidth={2.2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 export default function HomeScreen({ navigation }) {
   const { products, loading, error, retryFetchProducts } = useProducts();
   const { isFavorite, toggleFavorite } = useFavorites();
-  const { getStore } = useStores();
+  const { stores, getStore } = useStores();
+  const storeNameOf = React.useCallback((p) => getStore(p.storeId)?.name || '', [getStore]);
   const [profile, setProfile] = React.useState({ name: '', photoUrl: null, place: '' });
   const activeOrder = useActiveOrder();
 
@@ -220,12 +256,45 @@ export default function HomeScreen({ navigation }) {
     ? `${justInCount} new in the last ${JUST_IN_DAYS} days`
     : 'The latest from our stores';
   const heroSlides = React.useMemo(
-    () => pickSlides(products, (p) => getStore(p.storeId)?.name || ''),
-    [products, getStore]
+    () => pickSlides(products, storeNameOf),
+    [products, storeNameOf]
   );
   const ukay = products.filter((p) => p.type === 'ukay-ukay');
   const rtwCount = products.filter((p) => p.type === 'ready-to-wear').length;
-  const ukayFinds = ukay.slice(0, UKAY_FINDS);
+
+  // Each section below New arrivals skips what's already been shown above
+  // it, and leaves out sold-out pieces.
+  const shown = new Set(newArrivals.map((p) => p.id));
+  const budget = products
+    .filter((p) => !shown.has(p.id) && !isSoldOut(p) && Number(p.price) <= BUDGET_MAX_PRICE)
+    .slice(0, BUDGET_ITEMS);
+  budget.forEach((p) => shown.add(p.id));
+  const ukayGrid = ukay.filter((p) => !shown.has(p.id) && !isSoldOut(p)).slice(0, UKAY_GRID);
+
+  // "Shop by store": item counts per store, and how many are ready-to-wear
+  // (which colors the card). A store with nothing listed is left out, as in
+  // Shop: a card that leads to an empty page is a dead end.
+  const { storeCounts, rtwCounts } = React.useMemo(() => {
+    const all = {};
+    const rtw = {};
+    products.forEach((p) => {
+      if (!p.storeId) return;
+      all[p.storeId] = (all[p.storeId] || 0) + 1;
+      if (p.type === 'ready-to-wear') rtw[p.storeId] = (rtw[p.storeId] || 0) + 1;
+    });
+    return { storeCounts: all, rtwCounts: rtw };
+  }, [products]);
+  const browsableStores = stores.filter((st) => storeCounts[st.id] > 0);
+  const ratings = useStoreRatings(browsableStores.map((st) => st.id));
+
+  // Where the bottom of the screen is in the scrolling content, for the
+  // Ukay grid's scroll-in reveal (kept on the UI thread — no re-render per
+  // scroll), and where the grid starts.
+  const scrollBottom = useSharedValue(0);
+  const gridTop = useSharedValue(-1);
+  const onScroll = useAnimatedScrollHandler((e) => {
+    scrollBottom.value = e.contentOffset.y + e.layoutMeasurement.height;
+  });
 
   const ukayCaption = loading || !ukay.length
     ? 'Pre-loved finds'
@@ -235,6 +304,7 @@ export default function HomeScreen({ navigation }) {
   const openShop = (params) => goToTab(navigation, 'Shop', params);
   const openProduct = (product) => navigation.navigate('Product', { product });
   const openOrder = (order) => navigation.navigate('OrderDetails', { order });
+  const openStore = (store) => navigation.push('Shop', { storeId: store.id });
 
   // Guests can browse, but favoriting needs an account.
   const handleToggleFavorite = (product) => {
@@ -248,10 +318,13 @@ export default function HomeScreen({ navigation }) {
     toggleFavorite(product);
   };
 
-  const renderRails = () => {
+  const renderSections = () => {
     if (loading) {
       return (
         <>
+          <View style={styles.pad}>
+            <SectionHead title="New arrivals" caption="The latest from our stores" delay={300} />
+          </View>
           <RailSkeleton />
           <RailSkeleton />
         </>
@@ -259,7 +332,7 @@ export default function HomeScreen({ navigation }) {
     }
     if (error) {
       return (
-        <View style={styles.message}>
+        <View style={[styles.message, styles.messageTop]}>
           <EmptyState
             icon="cloud-offline-outline"
             title="Couldn't load new arrivals"
@@ -271,7 +344,7 @@ export default function HomeScreen({ navigation }) {
     }
     if (!products.length) {
       return (
-        <View style={styles.message}>
+        <View style={[styles.message, styles.messageTop]}>
           <EmptyState
             icon="pricetags-outline"
             title="Nothing here just yet"
@@ -282,39 +355,117 @@ export default function HomeScreen({ navigation }) {
     }
     return (
       <>
+        {browsableStores.length > 0 ? (
+          <>
+            <View style={styles.pad}>
+              <SectionHead title="Shop by store" caption="Local stores on PlainCo" delay={300} />
+            </View>
+            <StoreRail
+              stores={browsableStores}
+              counts={storeCounts}
+              rtwCounts={rtwCounts}
+              ratings={ratings}
+              onOpen={openStore}
+              startDelay={340}
+            />
+          </>
+        ) : null}
+
+        <View style={styles.pad}>
+          <SectionHead
+            title={arrivalsTitle}
+            caption={arrivalsCaption}
+            onSeeAll={() => openShop({ filterType: 'all' })}
+            delay={380}
+          />
+        </View>
         <Rail
           products={newArrivals}
-          startDelay={360}
+          startDelay={420}
           isFavorite={isFavorite}
+          storeNameOf={storeNameOf}
           onOpen={openProduct}
           onToggleFavorite={handleToggleFavorite}
         />
-        {ukayFinds.length > 0 ? (
+
+        {budget.length > 0 ? (
+          <View style={styles.budget}>
+            <View style={styles.pad}>
+              <SectionHead
+                title="Budget finds"
+                chip={`₱${BUDGET_MAX_PRICE} and under`}
+                caption="Good pieces that go easy on the wallet"
+                onDark
+              />
+            </View>
+            <Rail
+              products={budget}
+              startDelay={0}
+              isFavorite={isFavorite}
+              storeNameOf={storeNameOf}
+              onOpen={openProduct}
+              onToggleFavorite={handleToggleFavorite}
+              onDark
+            />
+          </View>
+        ) : null}
+
+        {ukayGrid.length > 0 ? (
           <>
             <View style={styles.pad}>
               <SectionHead
                 title="Ukay finds"
                 caption="One of a kind. Once it's gone, it's gone."
                 onSeeAll={() => openShop({ filterType: 'ukay-ukay' })}
-                delay={420}
               />
             </View>
-            <Rail
-              products={ukayFinds}
-              startDelay={480}
-              isFavorite={isFavorite}
-              onOpen={openProduct}
-              onToggleFavorite={handleToggleFavorite}
-            />
+            <View
+              onLayout={(e) => {
+                gridTop.value = e.nativeEvent.layout.y;
+              }}
+            >
+              <UkayGrid
+                products={ukayGrid}
+                gridTop={gridTop}
+                scrollBottom={scrollBottom}
+                isFavorite={isFavorite}
+                storeNameOf={storeNameOf}
+                onOpen={openProduct}
+                onToggleFavorite={handleToggleFavorite}
+              />
+            </View>
           </>
         ) : null}
+
+        <View style={styles.pad}>
+          <AnimatedPressable
+            style={styles.more}
+            onPress={() => openShop({ filterType: 'all' })}
+            rippleColor={Colors.light.border}
+            accessibilityRole="button"
+            accessibilityLabel="Browse everything"
+          >
+            <Text style={styles.moreText}>Browse everything</Text>
+            <ArrowIcon />
+          </AnimatedPressable>
+          <Text style={styles.endNote}>You&apos;ve reached the end. New items are added often.</Text>
+        </View>
       </>
     );
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        onLayout={(e) => {
+          // Before the first scroll: the bottom of the screen is its height.
+          if (!scrollBottom.value) scrollBottom.value = e.nativeEvent.layout.height;
+        }}
+      >
         <View style={styles.pad}>
           <Reveal delay={40} style={styles.hello}>
             <View style={styles.flex}>
@@ -404,17 +555,10 @@ export default function HomeScreen({ navigation }) {
               <ActiveOrderCard order={activeOrder} onPress={() => openOrder(activeOrder)} style={styles.order} />
             </Reveal>
           ) : null}
-
-          <SectionHead
-            title={loading ? 'New arrivals' : arrivalsTitle}
-            caption={loading ? 'The latest from our stores' : arrivalsCaption}
-            onSeeAll={() => openShop({ filterType: 'all' })}
-            delay={300}
-          />
         </View>
 
-        {renderRails()}
-      </ScrollView>
+        {renderSections()}
+      </Animated.ScrollView>
 
       <TabBar navigation={navigation} current="Home" />
     </SafeAreaView>
@@ -443,8 +587,8 @@ const styles = StyleSheet.create({
   wide: { marginHorizontal: -4 },
   heroSkeleton: { height: HERO_HEIGHT, borderRadius: 28 },
 
-  tiles: { flexDirection: 'row', gap: 10, marginTop: 12, marginBottom: 26 },
-  order: { marginTop: -14, marginBottom: 26 },
+  tiles: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  order: { marginTop: 12 },
   tile: {
     height: 72,
     borderRadius: 20,
@@ -467,16 +611,39 @@ const styles = StyleSheet.create({
   tileTitle: { fontSize: 13, fontWeight: '600', lineHeight: 16, color: Colors.light.background },
   tileCaption: { fontSize: 11, color: 'rgba(250,247,242,0.85)' },
 
-  sectionHead: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
-  sectionTitle: { fontSize: 17, fontWeight: '600', letterSpacing: -0.2, color: Colors.light.text },
+  sectionHead: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 24, marginBottom: 12 },
+  sectionHeadInStrip: { marginTop: 18 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+  sectionTitle: { fontSize: 18, fontWeight: '600', letterSpacing: -0.2, color: Colors.light.text },
   sectionCaption: { fontSize: 12, color: Colors.light.icon, marginTop: 2 },
-  seeAll: { fontSize: 12.5, fontWeight: '600', color: Colors.light.tint, paddingLeft: 12, paddingTop: 4 },
+  seeAll: { fontSize: 12.5, fontWeight: '600', color: Colors.light.tint, paddingLeft: 12, paddingBottom: 2 },
+  chip: { marginLeft: 8, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999, backgroundColor: '#F1D98A' },
+  chipText: { fontSize: 11, fontWeight: '600', color: '#4A3B08' },
+  onDarkTitle: { color: Colors.light.background },
+  onDarkCaption: { color: '#BDB3A9' },
 
-  rail: { paddingHorizontal: 20, paddingBottom: 4, gap: RAIL_GAP, marginBottom: 22 },
+  rail: { paddingHorizontal: 20, paddingBottom: 4, gap: RAIL_GAP },
+  // Full-bleed ink strip, as in the preview; the price chip is Gold.
+  budget: { marginTop: 24, paddingBottom: 18, backgroundColor: '#2B2622' },
+  more: {
+    marginTop: 18,
+    height: 50,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: Colors.light.border,
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  moreText: { fontSize: 14, fontWeight: '600', color: Colors.light.text },
+  endNote: { marginTop: 22, textAlign: 'center', fontSize: 11.5, color: '#B3AAA0' },
   railSkeleton: { flexDirection: 'row', gap: RAIL_GAP, paddingHorizontal: 20, marginBottom: 26 },
   skeletonPhoto: { aspectRatio: 4 / 5, borderRadius: 18 },
   skeletonLine: { height: 12, borderRadius: 6, marginTop: 10, width: '80%' },
   skeletonLineShort: { marginTop: 6, width: '40%' },
 
   message: { alignItems: 'center', paddingHorizontal: 20, gap: 12 },
+  messageTop: { marginTop: 24 },
 });
