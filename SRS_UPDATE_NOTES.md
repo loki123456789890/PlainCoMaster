@@ -3577,6 +3577,12 @@ Activity.
 **Logout**, postcondition: "The system confirms the user is logged out
 and offers to log back in" (replaces "returns to the login screen").
 
+### Verification
+
+Confirmed on a phone (5 Oct 2026): the customer screen with the cart and
+favorites counts and Log back in with the email filled in, and the Store
+Manager screen with the store name and log-out time.
+
 ---
 
 ## 42. Limit on order attempts — Security
@@ -3646,6 +3652,15 @@ and save as a new product."
 
 Mail Log (Store Manager), reached from the dashboard.
 
+### Verification
+
+Confirmed on a phone (5 Oct 2026): Duplicate opens Add Product filled in,
+with "(Copy)" on the name, and nothing saved until the manager saves.
+The restocking card was not shown because every product is stocked at 60
+for the defense, which is the expected result; its sold-out and low-stock
+display was not exercised. The failed-email card appears only after a real
+failed send and was not exercised.
+
 ---
 
 ## 44. Order status moves one step at a time, with Undo (extends section 4a)
@@ -3666,6 +3681,11 @@ Mail Log (Store Manager), reached from the dashboard.
 |---|---|
 | FR-SO1 | A Store Manager moves an order one status forward at a time, and can undo the move for a few seconds. |
 | FR-SO2 | Cancelling an order requires confirmation. |
+
+### Verification
+
+Confirmed on a phone (5 Oct 2026): a Pending order offers only Mark as
+Processing; Undo returns it to Pending; Cancel asks for confirmation.
 
 ---
 
