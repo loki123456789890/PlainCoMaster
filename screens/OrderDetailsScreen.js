@@ -716,13 +716,16 @@ export default function OrderDetailsScreen({ navigation, route }) {
                         </AnimatedPressable>
                       ) : (
                         <View style={[styles.reviewStrip, styles.reviewStripAsk]}>
-                          <View style={styles.reviewWords}>
+                          {/* Five 44pt star targets don't fit beside the words,
+                              so the words get their own line above them. */}
+                          <Text style={styles.reviewAskLine} numberOfLines={1}>
                             <Text style={styles.reviewTitle}>How was it?</Text>
-                            <Text style={styles.reviewHint}>Tap a star to rate</Text>
-                          </View>
+                            <Text style={styles.reviewHint}>  ·  Tap a star to rate</Text>
+                          </Text>
                           <StarRating
                             rating={0}
-                            size={19}
+                            size={22}
+                            style={styles.reviewAskStars}
                             editable
                             color={Colors.light.tint}
                             label={item.name}
@@ -1183,7 +1186,9 @@ const styles = StyleSheet.create({
     backgroundColor: PAPER_TINT,
   },
   // The editable stars bring their own 44pt targets, so less padding.
-  reviewStripAsk: { paddingVertical: 0, paddingRight: 4 },
+  reviewStripAsk: { flexDirection: 'column', alignItems: 'stretch', gap: 0, paddingTop: 10, paddingBottom: 2 },
+  reviewAskLine: { textAlign: 'center' },
+  reviewAskStars: { justifyContent: 'center' },
   reviewWords: { flex: 1 },
   reviewTitle: { fontSize: 12.5, fontWeight: '500', color: Colors.light.text },
   reviewHint: { fontSize: 11, color: Colors.light.icon },
