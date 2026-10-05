@@ -3543,8 +3543,9 @@ buy.
 ### Verification
 
 Confirmed on a phone (5 Oct 2026): a Platform Admin deactivating and
-reactivating customer, Store Manager and Platform Admin accounts. Still to
-verify: Undo after each change and the matching Account Activity entries.
+reactivating customer, Store Manager and Platform Admin accounts; Undo
+after a change, with both the change and the undo shown in Account
+Activity.
 
 ---
 
