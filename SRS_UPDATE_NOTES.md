@@ -3305,10 +3305,11 @@ header.
 
 ### Verification
 
-Checked on a phone with the production catalogue: each section's
+To verify on a phone with the production catalogue: each section's
 contents, no item repeated across sections, the active-order card
 appearing for a Processing order and moving to "on its way" when the
-store marked it Shipped, gallery tap, swipe, hold and Reduce Motion.
+store marks it Shipped, and the gallery's tap, swipe, hold and Reduce
+Motion behaviour.
 
 ---
 
@@ -3489,8 +3490,9 @@ their own dashboard.
 ### Verification
 
 Automated security-rule tests STAFF-1 and STAFF-2 (cart and favorites)
-and the order test CHECKOUT-23 (staff order refused). Checked on a phone
-as a Store Manager and a Platform Admin.
+and the order test CHECKOUT-23 (staff order refused). Confirmed on a
+phone (5 Oct 2026): staff accounts cannot add to a cart or favorites, or
+buy.
 
 ---
 
@@ -3516,6 +3518,19 @@ as a Store Manager and a Platform Admin.
 >
 > **Account Activity** shows status changes (Active → Deactivated, and
 > back) and store changes as before → after.
+>
+> Only a Platform Admin can open Manage Users. A Store Manager manages
+> their own store's products, orders, reviews and support, and cannot
+> change any user account.
+
+### Business rules / security (enforced by security rules)
+
+- Only a Platform Admin may change another user's role, store or active
+  status. Store Managers have no write access to user accounts.
+- A Platform Admin cannot change their own role or deactivate their own
+  account from Manage Users. Otherwise the last active Platform Admin
+  could remove the role permanently, leaving no one able to reactivate
+  accounts or grant it again. Keep at least two active Platform Admins.
 
 ### Functional requirements
 
@@ -3527,8 +3542,9 @@ as a Store Manager and a Platform Admin.
 
 ### Verification
 
-Checked on a phone: change role, move store, deactivate, reactivate,
-Undo for each, and the matching Account Activity entries.
+Confirmed on a phone (5 Oct 2026): a Platform Admin deactivating and
+reactivating customer, Store Manager and Platform Admin accounts. Still to
+verify: Undo after each change and the matching Account Activity entries.
 
 ---
 
