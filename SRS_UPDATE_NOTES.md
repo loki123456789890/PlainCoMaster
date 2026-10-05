@@ -3305,11 +3305,13 @@ header.
 
 ### Verification
 
-To verify on a phone with the production catalogue: each section's
-contents, no item repeated across sections, the active-order card
-appearing for a Processing order and moving to "on its way" when the
-store marks it Shipped, and the gallery's tap, swipe, hold and Reduce
-Motion behaviour.
+Confirmed on a phone with the production catalogue (5 Oct 2026): the
+active-order card appearing for a Processing order and changing to "on
+its way" by itself when the Store Manager marked it Shipped, and opening
+the order; the gallery advancing by itself, tap, swipe, press-and-hold
+pause and View; no item repeated across New arrivals, Budget finds and
+Ukay finds, with Budget finds at ₱300 or less; and the slim top bar
+appearing on scroll and opening Shop. Not checked: Reduce Motion.
 
 ---
 
