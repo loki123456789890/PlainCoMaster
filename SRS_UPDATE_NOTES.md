@@ -1157,6 +1157,9 @@ browser, then run against the local emulators with test accounts:
 
 ## 14. Home and Shop redesign, and the customer tab bar
 
+> **Home was rebuilt again on 3 Oct 2026; see section 35.** The Shop and
+> tab bar parts below still stand.
+
 > **Status (23 Sep 2026):** built and tested against the local emulators;
 > reaches production with the next release (web app and APK). No
 > database, security-rule or Cloud Function changes. Everything shown is
@@ -3180,8 +3183,6 @@ are all documentation gaps:
 - "Invalid Quantity" error: quantity is a stepper with a disabled
   decrement, so zero or negative input is structurally impossible and the
   error branch the SRS describes cannot occur.
-- Order status vocabulary differs between the staff view (five statuses)
-  and the customer view (pending and processing collapsed into one).
 
 Note also that the SRS's own audit report keeps the *original* findings
 alongside the resolutions, so the historical text describes the system as
@@ -3239,3 +3240,426 @@ Replace the MFA paragraph with:
 > hiding buttons, and a deactivated account is signed out on the spot.
 > Firebase supports authenticator-app MFA through Identity Platform, so
 > it's a direct next step.
+
+---
+
+## 35. Home redesign (second pass) — replaces the Home part of section 14
+
+Section 14 describes Home as built on 23 Sep. It was rebuilt on 3 Oct
+from an approved preview. Shop and the tab bar are unchanged.
+
+> **Status (3 Oct 2026):** built and checked on a phone. Reads the same
+> live catalogue, stores and orders as before. No security-rule, stored
+> field or Cloud Function changes.
+
+### What changed — suggested wording
+
+> **Home** opens with the customer's greeting and a **"Deliver to"** line
+> showing the town and province of their saved address (or "Add a
+> delivery address", which opens Delivery Address). The search bar types
+> out example searches ("denim jackets", "ukay finds", "loafers", "plain
+> white tees") and opens Shop ready to type.
+>
+> If the customer has an order that is being prepared or is on its way, a
+> card shows it with a small tracker and opens its Order Details.
+>
+> Below that, a **photo gallery** shows three real listings one at a
+> time, each with a short note ("Just in", "One of a kind", "New at
+> <store>"), its price and a View button. It moves on every 4.5 seconds;
+> the customer can tap, swipe, tap a progress bar to jump, or press and
+> hold to pause.
+>
+> Then: compact **Ukay-Ukay** and **Ready-to-Wear** tiles with item
+> counts; **Shop by store** cards (Clay for a store that mostly sells
+> ready-to-wear, Moss for ukay-ukay); **New arrivals** (or **Just in**
+> when there are listings from the last few days); a **Budget finds**
+> strip of in-stock pieces at ₱300 and under; **Ukay finds**, four
+> in-stock ukay-ukay pieces in a staggered grid; and **Browse
+> everything**, which opens Shop. No listing appears in more than one of
+> these sections, and nothing sold out appears below New arrivals.
+>
+> Once the greeting scrolls away, a slim bar with the PlainCo icon and a
+> search bar slides in at the top.
+
+### Functional requirements (replace FR-H1 and FR-H2)
+
+| # | Requirement |
+|---|---|
+| FR-H1 | Home shows the number of ukay-ukay and ready-to-wear items listed; each tile opens Shop filtered to that category. |
+| FR-H2 | Home lists the newest listings, up to ten in-stock items priced ₱300 or less ("Budget finds") and up to four in-stock ukay-ukay items ("Ukay finds"), with no item repeated between the three. |
+| FR-H6 | Home shows the customer's most recent order that is Processing or Shipped, and updates it live when the store changes its status. |
+| FR-H7 | Home shows the town and province of the customer's saved delivery address, or a prompt to add one. |
+| FR-H8 | The photo gallery advances by itself and can be paused, moved back or forward, or jumped to a slide by the customer. With the phone's Reduce Motion setting on, it does not advance, zoom or fade by itself. |
+
+### Screens — module list (section 7)
+
+Home: no new screen. New parts: delivery line, active-order card, photo
+gallery, Shop by store cards, Budget finds, Ukay finds grid, compact
+header.
+
+### Limitations
+
+- The gallery picks from what is listed; with three or fewer listings it
+  shows the same pieces as New arrivals.
+- The active-order card looks at the ten most recent orders only.
+
+### Verification
+
+Checked on a phone with the production catalogue: each section's
+contents, no item repeated across sections, the active-order card
+appearing for a Processing order and moving to "on its way" when the
+store marked it Shipped, gallery tap, swipe, hold and Reduce Motion.
+
+---
+
+## 36. Product page — Details and Reviews tabs (extends section 17)
+
+> **Status (4 Oct 2026):** built and checked on a phone. Display only: no
+> security-rule, stored field or Cloud Function changes.
+
+### What changed — suggested wording
+
+> Below the price and options, the product page has two tabs:
+> **Details** and **Reviews (N)**.
+>
+> **Details** shows, for an ukay-ukay item, its condition and any flaws
+> first; then the description (three lines, with **Read more** for a
+> longer one); then Type, Category, Colors, Sizes and **Ships from**.
+>
+> **Reviews** shows the reviews from verified buyers. With three or more,
+> it starts with a summary: the average rating, a bar for each star level,
+> and how many buyers said the item matched its listing. It shows two
+> reviews, then **See all N reviews**. Each review is labelled "Verified
+> buyer" with its date and whether the item matched the listing.
+>
+> The rating line under the product name ("★ 4.5 · 3 reviews") opens the
+> Reviews tab. The seller card shows "Sold by" and the store's name and
+> opens the store's page.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-PD1 | The product page separates the item's details from its reviews in two tabs, and the Reviews tab shows the number of reviews. |
+| FR-PD2 | With three or more reviews, the Reviews tab shows the average rating, the number of reviews at each star level, and how many reviewers said the item matched its listing. |
+| FR-PD3 | The Reviews tab shows two reviews and offers to show all of them. |
+
+### Use case updates
+
+**View Product Details**, main flow: after "the system displays the
+product", add: "The customer may switch to the Reviews tab, or tap the
+rating, to read reviews from verified buyers."
+
+### Verification
+
+Checked on a phone: a product with no reviews (empty state), with one
+review, and with three or more (summary and See all); Read more on a
+long description; the rating line opening Reviews.
+
+---
+
+## 37. Profile photo — preview before upload (extends section 12)
+
+> **Status (4 Oct 2026):** built and checked on a phone. Same storage path,
+> size limit and formats as before; no security-rule changes.
+
+### What changed — suggested wording
+
+> Tapping the profile photo on Profile opens a sheet with **Take a
+> photo** and **Choose a photo** (and **Remove current photo** when there
+> is one). The chosen photo is shown first; nothing is uploaded until the
+> customer taps **Use this photo**, and they can choose another instead.
+> The upload shows its progress. If it fails, the sheet says why and
+> offers **Try again**. If the camera or photo library permission was
+> refused, the sheet explains how to allow it and opens the phone's
+> Settings (or offers the gallery instead of the camera).
+>
+> Removing the photo can be undone for a few seconds.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-PH1 | The customer sees the chosen photo and confirms it before it is uploaded. |
+| FR-PH2 | The upload shows its progress, and a failed upload can be retried without choosing the photo again. |
+| FR-PH3 | When camera or photo access has been refused, the app says how to allow it and opens the phone's settings. |
+| FR-PH4 | Removing the profile photo can be undone for a few seconds. |
+
+### Verification
+
+Checked on a phone: camera and library, Choose another, a completed
+upload, Remove and Undo, and the permission-refused panel.
+
+---
+
+## 38. Order Details redesign — the customer's order page
+
+> **Status (5 Oct 2026):** built and checked on a phone. Reads the same
+> order, review and problem-report data as before. One addition to Write
+> a Review (a star tapped here arrives already chosen); no security-rule,
+> stored field or Cloud Function changes.
+
+### What changed — suggested wording
+
+> **Order Details** opens with a status card whose colour and icon follow
+> the order: dark while the store is preparing it, Clay while it is on its
+> way, Moss when delivered, and grey when cancelled. The card shows the
+> order number (tap to copy), the date placed, a one-line status message
+> and a four-step tracker: Placed, Processing, Shipped, Delivered, with the
+> placed and delivered dates. A cancelled order shows a note instead of
+> the tracker.
+>
+> **Your order** is shown as one receipt: the store, with a button to
+> message it; each item with its size, colour, quantity and price; the
+> subtotal, shipping and total; and how it was paid (with the PayMongo
+> reference, and "Paid" when it was).
+>
+> On a delivered order, each item has a **"How was it?"** strip. Tapping
+> a star opens Write a Review with that rating chosen. An item already
+> reviewed shows the rating and **Edit**.
+>
+> **Need help?** changes with the order: before delivery, "Need to change
+> something?" opens the chat with the store; after delivery, "Something
+> wrong with it?" opens Report a Problem and shows the last day to report
+> and how many days are left; for a cancelled order, "Ask the seller"
+> opens the chat. "Contact PlainCo support" is always last.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-OD1 | Order Details shows the order's status, the date placed and its progress through Placed, Processing, Shipped and Delivered. |
+| FR-OD2 | The customer can copy the order number. |
+| FR-OD3 | On a delivered order, the customer can start a review by choosing a star rating on the order itself. |
+| FR-OD4 | Order Details shows the last day a problem can be reported and the days remaining. |
+
+### Use case updates
+
+**Write a Review** (section 9a), main flow step 1: "The customer opens a
+delivered order and taps a star rating next to the item (or Edit, for an
+item already reviewed)." Step 2 now starts with that rating selected.
+
+**View Order Details**: add the help options above as alternative flows
+(message the store, report a problem, contact support).
+
+### Verification
+
+Checked on a phone for Processing, Shipped, Delivered (reviewed and not
+yet reviewed) and Cancelled orders, copying the order number, and a
+star tap opening Write a Review with the rating selected.
+
+---
+
+## 39. Staff accounts cannot shop — NEW business rule
+
+Before this, a Store Manager who opened a product from their Reviews
+screen saw the customer's product page with every button working, and
+the server accepted the order, booking a sale that never happened into
+their own dashboard.
+
+> **Status (25 Sep 2026):** built and deployed. Enforced by the server and
+> the security rules, not only by hiding buttons.
+
+### What changed — suggested wording
+
+> Store Manager and Platform Admin accounts cannot place orders or add
+> items to a cart or favorites. Staff who open a product see it as a
+> shopper would, without the favorite, cart and buy buttons. A bar reads
+> "Shopper preview · Buying is off for staff". The Store Manager of the
+> store selling the item gets **Edit listing**; a manager of another
+> store sees "Not yours" and a Platform Admin sees "View only". Staff who
+> want to shop use a separate customer account.
+
+### Business rules / security (enforced by the server and security rules)
+
+- Placing an order from a Store Manager or Platform Admin account is
+  refused: "Staff accounts cannot place orders. Use a customer account to
+  shop."
+- Writes to a staff account's cart and favorites are refused. Reading
+  and deleting are still allowed, because staff accounts are promoted
+  from customer accounts and may hold old items.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-ST1 | The system refuses orders, cart additions and favorites from Store Manager and Platform Admin accounts. |
+| FR-ST2 | Staff viewing a product see it as a shopper does, without purchase actions, and the selling store's manager can open the listing to edit it. |
+
+### Verification
+
+Automated security-rule tests STAFF-1 and STAFF-2 (cart and favorites)
+and the order test CHECKOUT-23 (staff order refused). Checked on a phone
+as a Store Manager and a Platform Admin.
+
+---
+
+## 40. Manage Users — role, store and reactivation sheets with Undo (extends sections 3, 6 and 19)
+
+> **Status (25 Sep 2026):** built and deployed. Same stored fields and
+> activity logging as before.
+
+### What changed — suggested wording
+
+> In **Manage Users**, tapping a person opens a sheet with their details,
+> **Change role or store**, **See their history** (their Account Activity)
+> and **Deactivate**. Change role shows what each role can and can't do
+> and, for a Store Manager, which store; it shows the change as before →
+> after and saves only when something changed. Deactivate says what
+> happens, including when it would leave a store with no active manager.
+> Reactivating a deactivated account is confirmed with a sheet that lists
+> what comes back (sign-in, the same role and store, their data).
+>
+> After each change, a message shows what changed (before → after) for a
+> few seconds with **Undo**. Undo puts the previous value back and is
+> logged like any other change.
+>
+> **Account Activity** shows status changes (Active → Deactivated, and
+> back) and store changes as before → after.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-MU1 | A Platform Admin can change a user's role and store, deactivate them and reactivate them, each after a confirmation that states the effect. |
+| FR-MU2 | Each such change can be undone for a few seconds, and both the change and the undo are recorded in Account Activity. |
+| FR-MU3 | The system warns before deactivating the only active Store Manager of a store. |
+
+### Verification
+
+Checked on a phone: change role, move store, deactivate, reactivate,
+Undo for each, and the matching Account Activity entries.
+
+---
+
+## 41. Logged-out screens — NEW
+
+> **Status (24 Sep 2026):** built. Display only.
+
+### What changed — suggested wording
+
+> After logging out, a customer sees "Logged out safely" and "See you
+> soon, <first name>", with how many items stay saved in their cart and
+> favorites for next time. **Log back in** opens Log In with their email
+> filled in; **Back to the start** opens the landing screen.
+>
+> Staff see "You're logged out" on the Staff Portal. For a Store Manager,
+> a card says their store stays open, when they logged out, and that only
+> this device was logged out. **Sign in again** shows the sign-in form.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-LO1 | After logging out, the system confirms it and offers to log back in. A customer's saved cart and favorites counts are shown. |
+
+### Use case updates
+
+**Logout**, postcondition: "The system confirms the user is logged out
+and offers to log back in" (replaces "returns to the login screen").
+
+---
+
+## 42. Limit on order attempts — Security
+
+> **Status (25 Aug 2026):** built and deployed (placeOrder Cloud
+> Function).
+
+### What changed — suggested wording (Security section)
+
+> Each account may attempt to place at most **8 orders in 10 minutes**.
+> Further attempts are refused with "Too many order attempts. Please wait
+> a moment and try again." This stops a script using one account from
+> emptying the shop's stock with fake Cash on Delivery orders.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-SEC1 | The system limits each account to 8 order attempts in any 10-minute period. |
+
+### Verification
+
+Automated test (scripts/test-rate-limit.mjs): attempts up to the limit
+are allowed, the next one is refused, and the refusal reports the time
+left in the window.
+
+---
+
+## 43. Store Manager dashboard — restocking and failed-email cards; Duplicate product
+
+> **Status (25 Aug 2026):** built and deployed.
+
+### What changed — suggested wording
+
+> **Needs restocking.** When any product is sold out or low on stock
+> (under 10), the Store Manager dashboard shows a **Sold out** or **Low on
+> stock** card with the count, naming the first two items (or "2 sold out,
+> 3 running low"). Tapping it opens Manage Products showing only those
+> items, sold-out first.
+>
+> **Emails that didn't send.** When an order receipt or alert email
+> failed, a dashboard card says how many and opens the **Mail log**,
+> filtered to the failures. From there the Store Manager can tap **Send
+> again**. The server rebuilds the email from the order itself; the app
+> cannot choose the recipient or the text. The card is hidden when
+> nothing failed.
+>
+> **Duplicate.** From Manage Products, **Duplicate** opens Add Product
+> filled in with a copy of an existing listing (named "<name> (Copy)") to
+> edit before saving. Nothing is saved until the manager saves it.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-SM1 | The dashboard lists the store's sold-out and low-stock products, sold-out first. |
+| FR-SM2 | The dashboard reports failed emails and lets the Store Manager send each one again. |
+| FR-SM3 | A Store Manager can start a new listing from a copy of an existing one. |
+
+### Use case updates
+
+**Add Product**, alternative flow: "The Store Manager chooses Duplicate on
+an existing product; the form opens filled in with a copy, which they edit
+and save as a new product."
+
+### Screens — module list (section 7)
+
+Mail Log (Store Manager), reached from the dashboard.
+
+---
+
+## 44. Order status moves one step at a time, with Undo (extends section 4a)
+
+> **Status (24 Sep 2026):** built and deployed.
+
+### What changed — suggested wording
+
+> In Manage Orders, a Store Manager moves an order only to its next status
+> (Pending → Processing → Shipped → Delivered). Each move shows a message
+> with **Undo**, which puts the order back. Cancelling asks for
+> confirmation first and is only possible from Pending or Processing
+> (section 4a). Both the move and any undo are recorded in Store Activity.
+
+### Functional requirements
+
+| # | Requirement |
+|---|---|
+| FR-SO1 | A Store Manager moves an order one status forward at a time, and can undo the move for a few seconds. |
+| FR-SO2 | Cancelling an order requires confirmation. |
+
+---
+
+## 45. Test catalogue for the defense
+
+> **Status (4 Oct 2026):** applied to production.
+
+For the Verification or Testing section: the production catalogue holds
+**35 products** across both stores and every Section (women, men, kids,
+unisex). Every product has a size guide (inches for clothing, cm for
+footwear), and every ukay-ukay item has its condition, flaw check and
+extra photos (back, label, flaws). Three are one-of-a-kind (stock 1).
+Divisoria RTW Hub's location is set to "Divisoria, Manila"; Ukay-Ukay ni
+Aling Nena's is "Cubao, Quezon City". The catalogue is loaded by
+`scripts/seed-catalog.mjs`, signed in as each store's manager, so every
+listing passes the same security rules as one entered by hand.
